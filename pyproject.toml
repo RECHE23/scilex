@@ -1,0 +1,50 @@
+# Python distribution for SciLex. Built from the repository root so the sdist is
+# self-contained: it carries the C++ headers in include/ alongside the binding in
+# python/. The C++ library itself is header-only and needs none of this — see the
+# Makefile and CMakeLists.txt for the C++ workflows.
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "scilex"
+version = "2026.6.5"
+description = "SciLex — a generic, linear-time maximal-munch lexer built on REAL"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "René Chenard", email = "rene.chenard.1@ulaval.ca" }]
+keywords = ["lexer", "tokenizer", "maximal-munch", "scanner", "linear-time"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: C++",
+    "Topic :: Software Development :: Compilers",
+    "Topic :: Software Development :: Libraries",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Repository = "https://github.com/RECHE23/scilex"
+Issues = "https://github.com/RECHE23/scilex/issues"
+
+# The `scilex` package lives under python/; the C++ binding source under
+# python/src; the headers it compiles against under include/ (root).
+[tool.setuptools]
+package-dir = { "" = "python" }
+packages = ["scilex"]
+
+[tool.setuptools.package-data]
+scilex = ["*.so", "*.pyd"]
+
+# Build one abi3 wheel per platform (cp310 → works on CPython 3.10+).
+[tool.cibuildwheel]
+build = "cp310-*"
+build-frontend = "build"
+test-command = "python -m unittest discover -s {project}/python/tests"
+
+[tool.cibuildwheel.macos]
+environment = { MACOSX_DEPLOYMENT_TARGET = "11.0" }

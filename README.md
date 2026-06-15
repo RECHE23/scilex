@@ -70,6 +70,29 @@ make doc         # API reference (Doxygen) with embedded coverage
 
 Override the compiler with `make test CXX=g++-14`.
 
+## Python binding
+
+SciLex ships an abi3 CPython extension (use the C++ lexer from Python):
+
+```bash
+make python        # build the extension in place
+make python-test   # run the binding test suite
+```
+
+```python
+import scilex
+lx = scilex.Lexer([
+    (0, r"\s+", True),                       # (kind, pattern, skip) — skipped
+    (1, r"[0-9]+", False),                   # number
+    (2, r"[A-Za-z_][A-Za-z0-9_]*", False),   # identifier
+])
+[(t.kind, t.lexeme) for t in lx.tokenize("foo 42")]   # [(2, 'foo'), (1, '42')]
+```
+
+`scilex.get_include()` returns the header directory so a C++ project can compile
+against SciLex located through its Python install (add `real.get_include()` too,
+since SciLex's headers include REAL's).
+
 ## Example
 
 ```cpp

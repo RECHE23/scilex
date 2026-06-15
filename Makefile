@@ -13,6 +13,8 @@
 CMAKE  ?= cmake
 CTEST  ?= ctest
 BUILD  := build
+PYTHON ?= python3
+PYRUN  := PYTHONPATH=$(CURDIR)/python $(PYTHON)
 
 REAL_INCLUDE ?= $(CURDIR)/../real-v1/include
 
@@ -28,7 +30,7 @@ INCLUDES     := -Iinclude -isystem $(REAL_INCLUDE)
 FORMAT_FILES := $(shell find include tests -name '*.hpp' -o -name '*.cpp')
 
 .PHONY: all build test sanitize coverage coverage-build coverage-html \
-        lint misra doc doc-no-coverage format format-check clean help
+        lint misra doc doc-no-coverage format format-check python python-test clean help
 
 .DEFAULT_GOAL := help
 
@@ -45,6 +47,8 @@ help:
 	@echo "  make doc-no-coverage  Generate API reference without coverage report"
 	@echo "  make format     Uncrustify, in place"
 	@echo "  make format-check  Uncrustify, dry-run, exits non-zero on diff"
+	@echo "  make python     Build the Python extension in place (abi3)"
+	@echo "  make python-test  Run the Python binding test suite"
 	@echo "  make clean      Remove build artifacts"
 	@echo ""
 	@echo "  Override the compiler:   make test CXX=g++-14"
@@ -130,6 +134,15 @@ doc-no-coverage:
 
 format:
 	uncrustify -c uncrustify.cfg --replace --no-backup $(FORMAT_FILES)
+
+# Python binding: an abi3 CPython extension (Limited API) over the C++ lexer.
+# REAL's headers are located via the installed real package, or the sibling
+# checkout (see setup.py); the C++ library itself stays header-only.
+python:
+	$(PYTHON) setup.py -q build_ext --inplace
+
+python-test: python
+	$(PYRUN) -m unittest discover -s python/tests
 
 format-check:
 	uncrustify -c uncrustify.cfg --check $(FORMAT_FILES)
