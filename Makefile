@@ -25,6 +25,11 @@ CMAKE_CXX := -DCMAKE_CXX_COMPILER=$(CXX)
 endif
 
 CMAKE_REAL   := -DSCILEX_REAL_INCLUDE=$(REAL_INCLUDE)
+# FETCH=1 fetches REAL via FetchContent instead of the sibling dir (for CI /
+# reproducible builds); the fetched include overrides the path above.
+ifeq ($(FETCH),1)
+CMAKE_REAL += -DSCILEX_FETCH_DEPS=ON
+endif
 CXXSTD       := -std=c++20
 # REAL is a dependency: include it as a system header so the linters analyze
 # SciLex's own code only (REAL passes its own gates).

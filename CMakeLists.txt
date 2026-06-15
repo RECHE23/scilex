@@ -22,13 +22,37 @@ endif()
 
 option(SCILEX_SANITIZE "Build the tests with AddressSanitizer + UndefinedBehaviorSanitizer" OFF)
 option(SCILEX_COVERAGE "Build the tests with LLVM source-based coverage instrumentation" OFF)
+
+# Dependency resolution (REAL's headers), two modes:
+#  * Default (local development): a sibling checkout, used live (uncommitted
+#    cross-repo edits are visible). Override with -DSCILEX_REAL_INCLUDE=/path.
+#  * CI / reproducible builds: -DSCILEX_FETCH_DEPS=ON fetches REAL with
+#    FetchContent from a configurable repository + tag (no on-disk-layout
+#    assumption). The repository defaults to the sibling git checkout, so it
+#    works locally too; on CI point it at a remote and pin a tag, e.g.
+#      -DSCILEX_FETCH_DEPS=ON -DSCILEX_REAL_REPO=https://… -DSCILEX_REAL_TAG=v2026.6.5
+option(SCILEX_FETCH_DEPS "Fetch the dependencies with FetchContent" OFF)
+
 set(SCILEX_REAL_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../real-v1/include"
-    CACHE PATH "Path to REAL's include directory (header-only dependency)")
+    CACHE PATH "Path to REAL's include directory (when not fetching)")
+set(SCILEX_REAL_REPO "${CMAKE_CURRENT_SOURCE_DIR}/../real-v1"
+    CACHE STRING "REAL git repository (path or URL) when fetching")
+set(SCILEX_REAL_TAG "main" CACHE STRING "REAL git tag when fetching")
+
+if(SCILEX_FETCH_DEPS)
+    include(FetchContent)
+    FetchContent_Declare(real GIT_REPOSITORY "${SCILEX_REAL_REPO}" GIT_TAG "${SCILEX_REAL_TAG}")
+    FetchContent_GetProperties(real)
+    if(NOT real_POPULATED)
+        FetchContent_Populate(real) # source only (header-only): no transitive CMake
+    endif()
+    set(SCILEX_REAL_INCLUDE "${real_SOURCE_DIR}/include")
+endif()
 
 if(NOT EXISTS "${SCILEX_REAL_INCLUDE}/real/real.hpp")
     message(FATAL_ERROR
         "REAL headers not found at SCILEX_REAL_INCLUDE='${SCILEX_REAL_INCLUDE}'. "
-        "Set -DSCILEX_REAL_INCLUDE=/path/to/real/include.")
+        "Use -DSCILEX_FETCH_DEPS=ON, or set -DSCILEX_REAL_INCLUDE=/path/to/real/include.")
 endif()
 
 # Header-only library: consumers link scilex::scilex to get both include paths.
