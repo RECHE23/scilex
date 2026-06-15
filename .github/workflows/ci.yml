@@ -1,0 +1,90 @@
+name: CI
+
+# SciLex depends on REAL's headers. CI checks out REAL (public) as a sibling so
+# the Makefile's default resolution (../real-v1/include) finds it — no secret
+# needed. Coverage is a local gate (Apple-clang llvm-cov pinning); not run here.
+
+on:
+  push:
+    branches: ['**']   # all branches, but not release tags
+  pull_request:
+
+jobs:
+  # Formatting gate: the whole C++ codebase is formatted with Uncrustify 0.82.0.
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Uncrustify 0.82.0
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake build-essential
+          curl -L -o uncrustify-src.tar.gz https://github.com/uncrustify/uncrustify/releases/download/uncrustify-0.82.0/uncrustify-0.82.0.tar.gz
+          tar -xzf uncrustify-src.tar.gz
+          cd uncrustify-uncrustify-0.82.0
+          mkdir build && cd build
+          cmake .. && cmake --build . -j && sudo cmake --install .
+      - name: Check formatting
+        run: make format-check
+
+  # POSIX developer workflow: the Makefile, both compilers, plus sanitizers.
+  posix:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, cxx: g++-14 }
+          - { os: ubuntu-latest, cxx: clang++ }
+          - { os: macos-latest, cxx: clang++ }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: scilex-v1
+      - uses: actions/checkout@v6
+        with:
+          repository: RECHE23/real-regex
+          path: real-v1
+      - name: Test
+        run: make -C scilex-v1 test CXX=${{ matrix.cxx }}
+      - name: Sanitizers (ASan + UBSan)
+        run: make -C scilex-v1 sanitize CXX=${{ matrix.cxx }}
+
+  misra:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: scilex-v1
+      - uses: actions/checkout@v6
+        with:
+          repository: RECHE23/real-regex
+          path: real-v1
+      - name: Install clang-tidy
+        run: sudo apt-get update && sudo apt-get install -y clang-tidy
+      - name: MISRA C++:2023-oriented analysis
+        run: make -C scilex-v1 misra
+
+  python:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        python: ['3.10', '3.14']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: scilex-v1
+      - uses: actions/checkout@v6
+        with:
+          repository: RECHE23/real-regex
+          path: real-v1
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Build the binding and run the suite
+        working-directory: scilex-v1
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          python -m pip install -e .
+          python -m unittest discover -s python/tests
