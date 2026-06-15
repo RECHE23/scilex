@@ -9,6 +9,17 @@
 cmake_minimum_required(VERSION 3.16)
 project(scilex LANGUAGES CXX)
 
+# Use ccache as a compiler launcher when available (a no-op otherwise): the
+# coverage / sanitizer / dual-compiler gates rebuild from scratch, so caching
+# object files makes repeat runs near-instant. Override with -DUSE_CCACHE=OFF.
+option(USE_CCACHE "Use ccache as the compiler launcher when found" ON)
+if(USE_CCACHE)
+    find_program(CCACHE_PROGRAM ccache)
+    if(CCACHE_PROGRAM)
+        set(CMAKE_CXX_COMPILER_LAUNCHER "${CCACHE_PROGRAM}")
+    endif()
+endif()
+
 option(SCILEX_SANITIZE "Build the tests with AddressSanitizer + UndefinedBehaviorSanitizer" OFF)
 option(SCILEX_COVERAGE "Build the tests with LLVM source-based coverage instrumentation" OFF)
 set(SCILEX_REAL_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../real-v1/include"

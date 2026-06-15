@@ -15,6 +15,8 @@ CTEST  ?= ctest
 BUILD  := build
 PYTHON ?= python3
 PYRUN  := PYTHONPATH=$(CURDIR)/python $(PYTHON)
+# Parallelism: detected core count (override with JOBS=N).
+JOBS   ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
 REAL_INCLUDE ?= $(CURDIR)/../real-v1/include
 
@@ -30,7 +32,8 @@ INCLUDES     := -Iinclude -isystem $(REAL_INCLUDE)
 FORMAT_FILES := $(shell find include tests -name '*.hpp' -o -name '*.cpp')
 
 .PHONY: all build test sanitize coverage coverage-build coverage-html \
-        lint misra doc doc-no-coverage format format-check python python-test clean help
+        lint misra doc doc-no-coverage format format-check \
+        python python-test install uninstall clean help
 
 .DEFAULT_GOAL := help
 
@@ -49,6 +52,8 @@ help:
 	@echo "  make format-check  Uncrustify, dry-run, exits non-zero on diff"
 	@echo "  make python     Build the Python extension in place (abi3)"
 	@echo "  make python-test  Run the Python binding test suite"
+	@echo "  make install    Install the Python package (pip)"
+	@echo "  make uninstall  Uninstall the Python package (pip)"
 	@echo "  make clean      Remove build artifacts"
 	@echo ""
 	@echo "  Override the compiler:   make test CXX=g++-14"
@@ -60,14 +65,14 @@ all: build
 
 build:
 	$(CMAKE) -S . -B $(BUILD) $(CMAKE_CXX) $(CMAKE_REAL) -DCMAKE_BUILD_TYPE=Release
-	$(CMAKE) --build $(BUILD) -j
+	$(CMAKE) --build $(BUILD) --parallel $(JOBS)
 
 test: build
 	$(CTEST) --test-dir $(BUILD) --output-on-failure
 
 sanitize:
 	$(CMAKE) -S . -B $(BUILD)/sanitize $(CMAKE_CXX) $(CMAKE_REAL) -DSCILEX_SANITIZE=ON
-	$(CMAKE) --build $(BUILD)/sanitize -j
+	$(CMAKE) --build $(BUILD)/sanitize --parallel $(JOBS)
 	$(CTEST) --test-dir $(BUILD)/sanitize --output-on-failure
 
 # Coverage uses LLVM source-based instrumentation, so it pins a Clang
@@ -86,7 +91,7 @@ COV_DIR  := $(BUILD)/coverage
 
 coverage-build:
 	$(CMAKE) -S . -B $(COV_DIR) $(CMAKE_REAL) -DSCILEX_COVERAGE=ON -DCMAKE_CXX_COMPILER=$(COV_CXX)
-	$(CMAKE) --build $(COV_DIR) -j
+	$(CMAKE) --build $(COV_DIR) --parallel $(JOBS)
 	LLVM_PROFILE_FILE=$(COV_DIR)/tests.profraw $(COV_DIR)/scilex_tests_bin
 	$(PROFDATA) merge -sparse $(COV_DIR)/tests.profraw -o $(COV_DIR)/tests.profdata
 
@@ -111,7 +116,7 @@ coverage-html:
 # --- QA tools (wrappers; no compilation policy here) ----------------------
 
 lint:
-	clang-tidy $(wildcard tests/*.cpp) -- $(CXXSTD) $(INCLUDES)
+	@ls tests/*.cpp | xargs -P $(JOBS) -I{} clang-tidy {} -- $(CXXSTD) $(INCLUDES)
 
 misra:
 	mkdir -p $(BUILD)
@@ -146,6 +151,12 @@ python-test: python
 
 format-check:
 	uncrustify -c uncrustify.cfg --check $(FORMAT_FILES)
+
+install:
+	$(PYTHON) -m pip install .
+
+uninstall:
+	$(PYTHON) -m pip uninstall -y scilex
 
 clean:
 	rm -rf $(BUILD)
