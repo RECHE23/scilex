@@ -10,9 +10,20 @@
 #define SCILEX_TOKEN_HPP
 
 #include <cstddef>
+#include <limits>
 #include <string_view>
 
 namespace scilex {
+
+  /*!
+   * \brief Reserved token kind for the synthetic end-of-input token.
+   *
+   * Emitted at the end of the input when tokenizing with
+   * \ref scilex::eof_policy::append (the parser-friendly mode: there is always
+   * a current token, including a terminal one to match). SciLex reserves this
+   * value; user-defined token kinds must not use it.
+   */
+  inline constexpr int end_of_input {std::numeric_limits<int>::min()};
 
   /*!
    * \brief A location in the source text.

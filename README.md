@@ -23,6 +23,9 @@ re-implementation of pattern matching.
 - Two ways to consume tokens: `tokenize` (eager, into a vector) and `scan`
   (a lazy single-pass range that produces one token at a time — no token
   vector is allocated; the parser-friendly access pattern).
+- Optional synthetic end-of-input token (`eof_policy::append`): emits a final
+  `end_of_input` token at the real end position, so a parser always has a
+  current token to match.
 - Lexical errors as exceptions carrying the failing position (`lex_error`).
 - Linear-time / ReDoS-safe tokenization, inherited from REAL.
 

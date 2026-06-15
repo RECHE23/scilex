@@ -34,6 +34,19 @@ namespace scilex {
   class token_range;
 
   /*!
+   * \brief Whether tokenization appends a synthetic end-of-input token.
+   *
+   * \ref append yields one final token of kind \ref end_of_input at the end
+   * position once the input is exhausted — the parser-friendly mode, so a
+   * cursor always has a current token to match against.
+   */
+  enum class eof_policy
+  {
+    omit,   //!< Stop at the last real token (default).
+    append, //!< Append one \ref end_of_input token at the end position.
+  };
+
+  /*!
    * \brief A token rule: a kind, the pattern that recognizes it, and whether
    *        matches are discarded (whitespace, comments).
    */
@@ -105,16 +118,22 @@ namespace scilex {
      *
      * \param[in] source The text to tokenize (must outlive the returned tokens;
      *            each token's lexeme views into it).
+     * \param[in] policy Whether to append a terminal \ref end_of_input token.
      * \return The tokens in source order, skip-rule matches omitted.
      * \throws lex_error If some position is matched by no rule.
      */
-    [[nodiscard]] std::vector<token> tokenize(std::string_view source) const
+    [[nodiscard]] std::vector<token> tokenize(std::string_view source,
+                                              eof_policy       policy = eof_policy::omit) const
     {
       std::vector<token> out;
       position           cursor {0, 1, 1};
       token              next   {};
       while (scan_next(source, cursor, next)) {
         out.push_back(next);
+      }
+      if (policy == eof_policy::append) {
+        // The cursor now sits at the end position (past any trailing trivia).
+        out.push_back(token {end_of_input, source.substr(cursor.offset), cursor});
       }
       return out;
     }
@@ -128,13 +147,16 @@ namespace scilex {
      *
      * \param[in] source The text to scan (must outlive the iteration; each
      *            token's lexeme views into it).
+     * \param[in] policy Whether to yield a terminal \ref end_of_input token.
      * \return A \ref token_range whose iterators yield \ref token values.
      * \throws lex_error (while iterating) if some position matches no rule.
      */
-    [[nodiscard]] token_range scan(std::string_view source) const&;
+    [[nodiscard]] token_range scan(std::string_view source,
+                                   eof_policy       policy = eof_policy::omit) const&;
 
     //! \brief Deleted: the range would point into a temporary lexer.
-    token_range               scan(std::string_view) const&& = delete;
+    token_range scan(std::string_view source,
+                     eof_policy       policy = eof_policy::omit) const&& = delete;
 
   private:
 
@@ -226,11 +248,14 @@ namespace scilex {
      * \brief Constructs a begin iterator over \p source for \p owner.
      * \param[in] owner  The lexer providing the rules.
      * \param[in] source The text to scan.
+     * \param[in] policy Whether to yield a terminal \ref end_of_input token.
      */
     token_iterator(const lexer&     owner,
-                   std::string_view source)
+                   std::string_view source,
+                   eof_policy       policy)
       : owner_(&owner),
         source_(source),
+        policy_(policy),
         done_(false)
     {
       advance();
@@ -283,11 +308,13 @@ namespace scilex {
 
   private:
 
-    const lexer*     owner_   {nullptr}; //!< Rules provider (not owned).
-    std::string_view source_;            //!< Text being scanned.
-    position         cursor_  {0, 1, 1}; //!< Current scan position.
-    token            current_ {};        //!< The current token.
-    bool             done_    {true};    //!< True once exhausted (end sentinel).
+    const lexer*     owner_    {nullptr};          //!< Rules provider (not owned).
+    std::string_view source_;                      //!< Text being scanned.
+    position         cursor_   {0, 1, 1};          //!< Current scan position.
+    token            current_  {};                 //!< The current token.
+    eof_policy       policy_   {eof_policy::omit}; //!< End-of-input policy.
+    bool             eof_done_ {false};            //!< End-of-input token already yielded.
+    bool             done_     {true};             //!< True once exhausted (end sentinel).
 
     //! \brief Produces the next token, or marks the iterator exhausted.
     void advance()
@@ -295,9 +322,16 @@ namespace scilex {
       if (done_) {
         return;
       }
-      if (!owner_->scan_next(source_, cursor_, current_)) {
-        done_ = true;
+      if (owner_->scan_next(source_, cursor_, current_)) {
+        return;
       }
+      // Input exhausted: yield one end-of-input token if requested, else stop.
+      if (policy_ == eof_policy::append && !eof_done_) {
+        current_  = token {end_of_input, source_.substr(cursor_.offset), cursor_};
+        eof_done_ = true;
+        return;
+      }
+      done_ = true;
     }
   };
 
@@ -314,17 +348,20 @@ namespace scilex {
      * \brief Builds the range.
      * \param[in] owner  The lexer providing the rules.
      * \param[in] source The text to scan.
+     * \param[in] policy Whether to yield a terminal \ref end_of_input token.
      */
     token_range(const lexer&     owner,
-                std::string_view source)
+                std::string_view source,
+                eof_policy       policy)
       : owner_(&owner),
-        source_(source)
+        source_(source),
+        policy_(policy)
     {}
 
     //! \brief Begin iterator (produces the first token). \return The iterator.
     [[nodiscard]] token_iterator begin() const
     {
-      return token_iterator(*owner_, source_);
+      return token_iterator(*owner_, source_, policy_);
     }
 
     //! \brief End sentinel. \return A default-constructed iterator.
@@ -335,13 +372,15 @@ namespace scilex {
 
   private:
 
-    const lexer*     owner_ {nullptr}; //!< Rules provider (not owned).
-    std::string_view source_;          //!< Text being scanned.
+    const lexer*     owner_  {nullptr};          //!< Rules provider (not owned).
+    std::string_view source_;                    //!< Text being scanned.
+    eof_policy       policy_ {eof_policy::omit}; //!< End-of-input policy.
   };
 
-  inline token_range lexer::scan(std::string_view source) const&
+  inline token_range lexer::scan(std::string_view source,
+                                 eof_policy       policy) const&
   {
-    return token_range(*this, source);
+    return token_range(*this, source, policy);
   }
 } // namespace scilex
 
