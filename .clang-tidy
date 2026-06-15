@@ -144,7 +144,7 @@ CheckOptions:
 # Header Filter (only check our code, not dependencies)
 # ═══════════════════════════════════════════════════════════════════════════
 
-HeaderFilterRegex: '.*/(include/real|tests)/.*'
+HeaderFilterRegex: '.*/(include/scilex|tests)/.*'
 
 # Exclude system headers and third-party libraries
 SystemHeaders: false

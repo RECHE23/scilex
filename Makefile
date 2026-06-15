@@ -22,7 +22,9 @@ endif
 
 CMAKE_REAL   := -DSCILEX_REAL_INCLUDE=$(REAL_INCLUDE)
 CXXSTD       := -std=c++20
-INCLUDES     := -Iinclude -I$(REAL_INCLUDE)
+# REAL is a dependency: include it as a system header so the linters analyze
+# SciLex's own code only (REAL passes its own gates).
+INCLUDES     := -Iinclude -isystem $(REAL_INCLUDE)
 FORMAT_FILES := $(shell find include tests -name '*.hpp' -o -name '*.cpp')
 
 .PHONY: all build test sanitize coverage coverage-build coverage-html \

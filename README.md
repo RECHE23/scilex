@@ -19,14 +19,15 @@ re-implementation of pattern matching.
 - Token rules: a kind, a `real::regex`, and a `skip` flag (whitespace, comments).
 - Maximal-munch tokenization with rule-order priority on equal-length ties.
 - Source positions: byte `offset`, 1-based `line` and byte `column`.
-- Non-owning tokens: each `lexeme` views into the source (the only allocation
-  is the token vector itself).
+- Non-owning tokens: each `lexeme` views into the source.
+- Two ways to consume tokens: `tokenize` (eager, into a vector) and `scan`
+  (a lazy single-pass range that produces one token at a time — no token
+  vector is allocated; the parser-friendly access pattern).
 - Lexical errors as exceptions carrying the failing position (`lex_error`).
 - Linear-time / ReDoS-safe tokenization, inherited from REAL.
 
 **Not in v1 (and honestly excluded — no phantom features):**
 
-- Lazy / streaming token iterator (current API tokenizes to a vector).
 - Modes / context-sensitive lexing.
 - Indentation tracking (INDENT/DEDENT tokens).
 - Compile-time `static_lexer` (built on REAL's `static_regex`).
@@ -82,8 +83,15 @@ rules.push_back({NUM,   real::regex("[0-9]+")});
 rules.push_back({PLUS,  real::regex("\\+")});
 
 const scilex::lexer lexer(std::move(rules));
+
+// Eager: all tokens in a vector.
 for (const scilex::token& t : lexer.tokenize("if x + 42")) {
     // t.kind, t.lexeme, t.start.{offset,line,column}
+}
+
+// Lazy: one token at a time, nothing else materialized.
+for (const scilex::token& t : lexer.scan("if x + 42")) {
+    // ...
 }
 ```
 
