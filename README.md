@@ -74,6 +74,17 @@ make doc         # API reference (Doxygen) with embedded coverage
 
 Override the compiler with `make test CXX=g++-14`.
 
+`scilex::scilex` is the CMake target — `add_subdirectory`, `FetchContent`, or an
+installed config package. The config calls `find_dependency(real)`, so installing
+REAL's config package alongside (on the same prefix) makes the whole chain
+resolve from one `find_package`:
+
+```cmake
+# With REAL and SciLex installed under <prefix>:
+find_package(scilex CONFIG REQUIRED)   # pulls in real:: transitively
+target_link_libraries(app PRIVATE scilex::scilex)
+```
+
 ## Python binding
 
 SciLex ships an abi3 CPython extension (use the C++ lexer from Python):

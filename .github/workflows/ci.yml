@@ -49,6 +49,47 @@ jobs:
       - name: Sanitizers (ASan + UBSan)
         run: make -C scilex-v1 sanitize CXX=${{ matrix.cxx }}
 
+  # Portable build entry: Windows/MSVC and native ARM, through CMake — plus a
+  # find_package smoke proving the installed config package and its transitive
+  # REAL dependency. Mirrors posix's sibling checkout so configure resolves deps.
+  cmake:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest    # MSVC
+          - os: ubuntu-24.04-arm  # native AArch64
+          - os: ubuntu-latest     # x86-64, sanity for the CMake path
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: scilex-v1
+      - uses: actions/checkout@v6
+        with:
+          repository: RECHE23/real-regex
+          path: real-v1
+      # One bash script across all three OSes (bash ships on the Windows runner);
+      # --config/-C Release cover the multi-config MSVC generator and no-op on
+      # the single-config Linux ones.
+      - name: Configure, build, test, install and find_package smoke
+        shell: bash
+        run: |
+          set -e
+          STAGE="${{ github.workspace }}/_stage"
+          # Install REAL first so find_package(scilex) resolves real:: transitively.
+          cmake -S real-v1 -B real-v1/build -DCMAKE_BUILD_TYPE=Release
+          cmake --install real-v1/build --config Release --prefix "$STAGE"
+          # Build, test and install SciLex itself (configure uses the sibling path).
+          cmake -S scilex-v1 -B scilex-v1/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build scilex-v1/build --config Release
+          ctest --test-dir scilex-v1/build -C Release --output-on-failure
+          cmake --install scilex-v1/build --config Release --prefix "$STAGE"
+          # Downstream consumer: locate SciLex purely via find_package.
+          cmake -S scilex-v1/cmake/smoke -B scilex-v1/build-smoke -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$STAGE"
+          cmake --build scilex-v1/build-smoke --config Release
+          ctest --test-dir scilex-v1/build-smoke -C Release --output-on-failure
+
   misra:
     runs-on: ubuntu-latest
     steps:

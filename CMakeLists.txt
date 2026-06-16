@@ -7,7 +7,7 @@
 #   cmake -DSCILEX_REAL_INCLUDE=/path/to/real/include ...
 # (e.g. the path printed by `python -c "import real; print(real.get_include())"`).
 cmake_minimum_required(VERSION 3.16)
-project(scilex LANGUAGES CXX)
+project(scilex VERSION 2026.6.5 LANGUAGES CXX)
 
 # Use ccache as a compiler launcher when available (a no-op otherwise): the
 # coverage / sanitizer / dual-compiler gates rebuild from scratch, so caching
@@ -61,11 +61,39 @@ add_library(scilex::scilex ALIAS scilex)
 target_include_directories(scilex INTERFACE
     $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
     $<INSTALL_INTERFACE:include>)
-target_include_directories(scilex SYSTEM INTERFACE "${SCILEX_REAL_INCLUDE}")
+# Build tree: REAL's headers come from the resolved include path above. Install
+# tree: a downstream find_package(scilex) instead links real::real, resolved by
+# find_dependency(real) in scilexConfig.cmake — so the absolute build-tree path
+# never leaks into the exported package.
+target_include_directories(scilex SYSTEM INTERFACE $<BUILD_INTERFACE:${SCILEX_REAL_INCLUDE}>)
+target_link_libraries(scilex INTERFACE $<INSTALL_INTERFACE:real::real>)
 target_compile_features(scilex INTERFACE cxx_std_20)
 
 include(GNUInstallDirs)
 install(DIRECTORY include/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+
+# find_package(scilex CONFIG) support: export the interface target and generate a
+# config package. The config calls find_dependency(real), so a downstream
+# project gets the whole chain from a single find_package:
+#   find_package(scilex CONFIG REQUIRED)
+#   target_link_libraries(app PRIVATE scilex::scilex)
+install(TARGETS scilex EXPORT scilexTargets)
+install(EXPORT scilexTargets
+    NAMESPACE scilex::
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/scilex)
+include(CMakePackageConfigHelpers)
+configure_package_config_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/scilexConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/scilexConfig.cmake
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/scilex)
+write_basic_package_version_file(
+    ${CMAKE_CURRENT_BINARY_DIR}/scilexConfigVersion.cmake
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion)
+install(FILES
+    ${CMAKE_CURRENT_BINARY_DIR}/scilexConfig.cmake
+    ${CMAKE_CURRENT_BINARY_DIR}/scilexConfigVersion.cmake
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/scilex)
 
 if(NOT CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
     return()

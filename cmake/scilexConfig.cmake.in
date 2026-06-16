@@ -1,0 +1,10 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+# SciLex is header-only on top of REAL; a downstream consumer needs REAL's
+# config package on the prefix path too (real::real is linked transitively).
+find_dependency(real)
+
+include("${CMAKE_CURRENT_LIST_DIR}/scilexTargets.cmake")
+
+check_required_components(scilex)
