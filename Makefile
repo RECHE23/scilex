@@ -38,7 +38,7 @@ FORMAT_FILES := $(shell find include tests -name '*.hpp' -o -name '*.cpp')
 
 .PHONY: all build test sanitize coverage coverage-build coverage-html \
         lint misra doc doc-no-coverage format format-check \
-        python python-test install uninstall clean help
+        python python-test install uninstall release clean help
 
 .DEFAULT_GOAL := help
 
@@ -59,6 +59,7 @@ help:
 	@echo "  make python-test  Run the Python binding test suite"
 	@echo "  make install    Install the Python package (pip)"
 	@echo "  make uninstall  Uninstall the Python package (pip)"
+	@echo "  make release    Cut a calendar-versioned release (tag + push)"
 	@echo "  make clean      Remove build artifacts"
 	@echo ""
 	@echo "  Override the compiler:   make test CXX=g++-14"
@@ -162,6 +163,27 @@ install:
 
 uninstall:
 	$(PYTHON) -m pip uninstall -y scilex
+
+# Cuts a calendar-versioned release: computes YYYY.M.PATCH with the patch reset
+# each month (first release of a month is .0; PEP 440 drops leading zeros, so
+# 2026.6.1, never 2026.06.001), bumps both version files, commits, tags and
+# pushes from a clean main. Pushing the tag IS the release. PyPI publishing is a
+# separate, per-package opt-in (add a release.yml workflow + a PyPI Trusted
+# Publisher); without it, this just creates a versioned git tag.
+release:
+	@test "$$(git symbolic-ref --short HEAD)" = main || { echo "release from main only"; exit 1; }
+	@test -z "$$(git status --porcelain)" || { echo "working tree not clean"; exit 1; }
+	@git fetch --tags --quiet origin
+	@year=$$(date -u +%Y); month=$$(date -u +%m | sed 's/^0//'); \
+	 patch=$$(git tag -l "v$$year.$$month.*" | wc -l | tr -d ' '); \
+	 version="$$year.$$month.$$patch"; \
+	 echo "Releasing v$$version"; \
+	 sed -i.bak -E "s/^version = \".*\"/version = \"$$version\"/" pyproject.toml && rm -f pyproject.toml.bak; \
+	 sed -i.bak -E "s/^__version__ = \".*\"/__version__ = \"$$version\"/" python/scilex/__init__.py && rm -f python/scilex/__init__.py.bak; \
+	 git add pyproject.toml python/scilex/__init__.py; \
+	 git commit -m "release: v$$version"; \
+	 git tag "v$$version"; \
+	 git push origin HEAD "v$$version"
 
 clean:
 	rm -rf $(BUILD)
