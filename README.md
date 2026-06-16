@@ -26,16 +26,19 @@ re-implementation of pattern matching.
 - Optional synthetic end-of-input token (`eof_policy::append`): emits a final
   `end_of_input` token at the real end position, so a parser always has a
   current token to match.
+- Optional indentation layout (`scilex::layout`, an opt-in header): rewrites a
+  token stream with synthetic `newline` / `indent` / `dedent` tokens for
+  indentation-significant languages; throws `layout_error` on an inconsistent
+  dedent.
 - Lexical errors as exceptions carrying the failing position (`lex_error`).
 - Linear-time / ReDoS-safe tokenization, inherited from REAL.
 
 **Not in v1 (and honestly excluded — no phantom features):**
 
 - Modes / context-sensitive lexing.
-- Indentation tracking (INDENT/DEDENT tokens).
 - Compile-time `static_lexer` (built on REAL's `static_regex`).
 - Codepoint columns (columns are byte-based, matching REAL's UTF-8 model).
-- Python binding, command-line tool, JSON specification language.
+- Command-line tool, JSON specification language.
 
 These may come later, each only if it earns its place — measured, tested, and
 kept minimal.
