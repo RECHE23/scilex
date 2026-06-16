@@ -36,7 +36,7 @@ namespace scilex {
   /*!
    * \brief Whether tokenization appends a synthetic end-of-input token.
    *
-   * \ref append yields one final token of kind \ref end_of_input at the end
+   * \ref eof_policy::append yields one final token of kind \ref end_of_input at the end
    * position once the input is exhausted — the parser-friendly mode, so a
    * cursor always has a current token to match against.
    */
