@@ -43,7 +43,7 @@ re-implementation of pattern matching.
 These may come later, each only if it earns its place — measured, tested, and
 kept minimal.
 
-## Dependency on REAL
+## Dependencies
 
 SciLex is header-only and depends only on REAL's headers. By default the build
 looks for them in a sibling checkout:
@@ -87,6 +87,16 @@ resolve from one `find_package`:
 find_package(scilex CONFIG REQUIRED)   # pulls in real:: transitively
 target_link_libraries(app PRIVATE scilex::scilex)
 ```
+
+## Releasing
+
+`make release` cuts a calendar-versioned git tag — it computes `YYYY.M.PATCH`
+(the patch resets each month; the first release of a month is `.0`), bumps
+`pyproject.toml` and `python/scilex/__init__.py`, then commits, tags and pushes
+from a clean `main`. SciLex is consumed as source (sibling checkout /
+FetchContent / `get_include()`), so the tag is a versioned snapshot; there is no
+PyPI publish step (one would be added, per the ecosystem's pattern, if SciLex is
+ever published).
 
 ## Python binding
 
