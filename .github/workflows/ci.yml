@@ -1,13 +1,21 @@
 name: CI
 
 # SciLex depends on REAL's headers. CI checks out REAL (public) as a sibling so
-# the Makefile's default resolution (../real-v1/include) finds it — no secret
-# needed. Coverage is a local gate (Apple-clang llvm-cov pinning); not run here.
+# the Makefile's default resolution (../real-v1/include) finds it — no secret needed.
+#
+# Actions-minute economy (this is a private repo, so minutes are billed, and macOS
+# runners bill 10x): macOS is the maintainer's local development platform — every gate
+# runs there via `make full-local-gate` on each slice — so CI deliberately omits macOS
+# and covers the *non-local* platforms instead: Linux (clang + g++-14), Windows/MSVC
+# and ARM. Run on main only (plus PRs); workflow_dispatch is available for ad-hoc runs.
+# Doc-only pushes are skipped. Coverage is a local gate (Apple-clang llvm-cov); not here.
 
 on:
   push:
-    branches: ['**']   # all branches, but not release tags
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**']
   pull_request:
+  workflow_dispatch:
 
 jobs:
   # Formatting gate: the whole C++ codebase is formatted with Uncrustify 0.82.0.
@@ -15,16 +23,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - name: Install Uncrustify 0.82.0
+      # The pinned Uncrustify binary never changes, so cache it (keyed by version)
+      # and rebuild from source only on a cache miss — saving the ~3-minute build
+      # on every subsequent run.
+      - name: Cache Uncrustify 0.82.0
+        id: uncrustify
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/bin/uncrustify
+          key: uncrustify-0.82.0-${{ runner.os }}
+      - name: Build Uncrustify 0.82.0
+        if: steps.uncrustify.outputs.cache-hit != 'true'
         run: |
           sudo apt-get update && sudo apt-get install -y cmake build-essential
           curl -L -o uncrustify-src.tar.gz https://github.com/uncrustify/uncrustify/releases/download/uncrustify-0.82.0/uncrustify-0.82.0.tar.gz
           tar -xzf uncrustify-src.tar.gz
           cd uncrustify-uncrustify-0.82.0
           mkdir build && cd build
-          cmake .. && cmake --build . -j && sudo cmake --install .
+          cmake .. && cmake --build . -j
+          mkdir -p "$HOME/.local/bin" && cp uncrustify "$HOME/.local/bin/"
       - name: Check formatting
-        run: make format-check
+        run: |
+          export PATH="$HOME/.local/bin:$PATH"
+          make format-check
 
   # POSIX developer workflow: the Makefile, both compilers, plus sanitizers.
   posix:
@@ -34,7 +55,6 @@ jobs:
         include:
           - { os: ubuntu-latest, cxx: g++-14 }
           - { os: ubuntu-latest, cxx: clang++ }
-          - { os: macos-latest, cxx: clang++ }
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
@@ -109,7 +129,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest] # macOS dropped (local platform); the lexer binding has no platform-specific interop
         python: ['3.10', '3.14']
     runs-on: ${{ matrix.os }}
     steps:

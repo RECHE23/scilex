@@ -37,7 +37,7 @@ INCLUDES     := -Iinclude -isystem $(REAL_INCLUDE)
 FORMAT_FILES := $(shell find include tests -name '*.hpp' -o -name '*.cpp')
 
 .PHONY: all build test sanitize coverage coverage-build coverage-html \
-        lint misra doc doc-no-coverage format format-check \
+        lint misra doc doc-no-coverage format format-check full-local-gate \
         python python-test install uninstall release clean help
 
 .DEFAULT_GOAL := help
@@ -57,6 +57,7 @@ help:
 	@echo "  make format-check  Uncrustify, dry-run, exits non-zero on diff"
 	@echo "  make python     Build the Python extension in place (abi3)"
 	@echo "  make python-test  Run the Python binding test suite"
+	@echo "  make full-local-gate  Every gate in one command (the macOS gate of record)"
 	@echo "  make install    Install the Python package (pip)"
 	@echo "  make uninstall  Uninstall the Python package (pip)"
 	@echo "  make release    Cut a calendar-versioned release (tag + push)"
@@ -154,6 +155,25 @@ python:
 
 python-test: python
 	$(PYRUN) -m unittest discover -s python/tests
+
+# The complete local quality gate in one command — the canonical pre-push check
+# and, since CI no longer runs macOS (see .github/workflows/ci.yml), the macOS gate
+# of record. Runs every check this machine owns and fails on any issue, including a
+# lint warning or any coverage dimension below 100%. If an incremental coverage build
+# is ever suspect, `rm -rf $(COV_DIR)` first to force a clean re-measure.
+full-local-gate:
+	@$(MAKE) format-check
+	@$(MAKE) test
+	@$(MAKE) test CXX=g++-14 BUILD=$(BUILD)/gcc
+	@$(MAKE) sanitize
+	@$(MAKE) misra
+	@$(MAKE) doc-no-coverage
+	@$(MAKE) python-test
+	@$(MAKE) lint | tee $(BUILD)/lint.log; ! grep -qE 'warning:|error:' $(BUILD)/lint.log
+	@$(MAKE) coverage | tee $(BUILD)/coverage.log
+	@awk '/^TOTAL/{seen=1; if (gsub(/100\.00%/, "&") != 4) exit 1} END{exit seen ? 0 : 1}' $(BUILD)/coverage.log \
+	  || { echo "full-local-gate: coverage is below 100% on some dimension — see above"; exit 1; }
+	@echo "full-local-gate: ALL gates green (clang + g++-14, sanitize, MISRA, lint, doc, python, 100% coverage)"
 
 format-check:
 	uncrustify -c uncrustify.cfg --check $(FORMAT_FILES)
