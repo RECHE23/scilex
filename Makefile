@@ -171,7 +171,9 @@ full-local-gate:
 	@$(MAKE) python-test
 	@$(MAKE) lint | tee $(BUILD)/lint.log; ! grep -qE 'warning:|error:' $(BUILD)/lint.log
 	@$(MAKE) coverage | tee $(BUILD)/coverage.log
-	@awk '/^TOTAL/{seen=1; if (gsub(/100\.00%/, "&") != 4) exit 1} END{exit seen ? 0 : 1}' $(BUILD)/coverage.log \
+	# Gate on a flag, not a bare exit 1 in the rule: that exit is overridden by END's exit,
+	# so the gate silently accepted coverage below 100% 4D before this fix.
+	@awk '/^TOTAL/{seen=1; if (gsub(/100\.00%/, "&") != 4) bad=1} END{exit (seen && !bad) ? 0 : 1}' $(BUILD)/coverage.log \
 	  || { echo "full-local-gate: coverage is below 100% on some dimension — see above"; exit 1; }
 	@echo "full-local-gate: ALL gates green (clang + g++-14, sanitize, MISRA, lint, doc, python, 100% coverage)"
 
