@@ -2,8 +2,13 @@
 # self-contained: it carries the C++ headers in include/ alongside the binding in
 # python/. The C++ library itself is header-only and needs none of this — see the
 # Makefile and CMakeLists.txt for the C++ workflows.
+# `real-regex` is a BUILD dependency, not a runtime one: the abi3 extension compiles
+# against REAL's headers (located via `real.get_include()` in setup.py), but the built
+# extension is self-contained and imports nothing at run time. In an isolated build
+# (pip / `python -m build` / cibuildwheel) this makes REAL's headers available; a
+# source checkout falls back to a sibling `../real-v1/include` (see setup.py).
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=68", "real-regex>=2026.6.6"]
 build-backend = "setuptools.build_meta"
 
 [project]

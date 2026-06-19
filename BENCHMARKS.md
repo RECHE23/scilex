@@ -21,6 +21,14 @@ can make the scanner backtrack catastrophically. On an adversarial (or simply
 unlucky) pattern, `re` degrades exponentially while SciLex stays flat — and *that* is
 the difference that matters for a lexer fed untrusted or machine-generated input.
 
+### Gains and losses at a glance
+
+| input | winner | why |
+| --- | --- | --- |
+| benign token soup | `re` (~5×, see B1) | a mature C backtracking engine; SciLex runs REAL's NFA per position, through the binding, and builds rich `Token`s |
+| adversarial / ReDoS (B2) | **SciLex** (linear vs exponential) | REAL is linear-time and ReDoS-safe; `re` backtracks catastrophically |
+| untrusted / machine-generated | **SciLex** | the linear bound holds on *every* input — no pathological cliff |
+
 ## Conditions of this baseline
 
 | | |

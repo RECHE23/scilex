@@ -90,17 +90,29 @@ target_link_libraries(app PRIVATE scilex::scilex)
 
 ## Releasing
 
-`make release` cuts a calendar-versioned git tag — it computes `YYYY.M.PATCH`
-(the patch resets each month; the first release of a month is `.0`), bumps
-`pyproject.toml` and `python/scilex/__init__.py`, then commits, tags and pushes
-from a clean `main`. SciLex is consumed as source (sibling checkout /
-FetchContent / `get_include()`), so the tag is a versioned snapshot; there is no
-PyPI publish step (one would be added, per the ecosystem's pattern, if SciLex is
-ever published).
+`make release` computes the next calendar version `YYYY.M.PATCH` — the patch
+resets each month, the first release of a month is `.0` (PEP 440 drops leading
+zeros, so `2026.6.1`, never `2026.06.001`) — bumps it in `pyproject.toml` and
+`python/scilex/__init__.py`, then commits, tags and pushes from a clean `main`.
+The pushed tag drives `.github/workflows/release.yml`,
+which checks the tag matches the version, builds abi3 wheels (`cibuildwheel`,
+Linux/macOS/Windows) and the self-contained sdist, and publishes to PyPI via
+Trusted Publishing (OIDC, no stored secret). It then populates the GitHub
+`/releases` page with auto-generated notes and the built artifacts. The pushed tag
+is the single thing that triggers a publish; SciLex remains consumable as source
+too (sibling checkout / FetchContent / `get_include()`).
+
+**One-time PyPI setup.** Publishing needs a PyPI
+[Trusted Publisher](https://docs.pypi.org/trusted-publishers/) configured once for
+the project (publisher `RECHE23/scilex`, workflow `release.yml`, environment
+`pypi`) and a matching `pypi` GitHub environment — no API token is stored.
 
 ## Python binding
 
-SciLex ships an abi3 CPython extension (use the C++ lexer from Python):
+SciLex ships an abi3 CPython extension (use the C++ lexer from Python).
+`pip install scilex` installs one `cp310-abi3` wheel per platform (CPython 3.10+;
+the self-contained sdist compiles where no wheel matches, pulling REAL's headers
+from the `real-regex` build dependency). For a source checkout:
 
 ```bash
 make python        # build the extension in place
@@ -174,6 +186,15 @@ for (const scilex::token& t : lexer.scan("if x + 42")) {
     // ...
 }
 ```
+
+## Performance
+
+See [BENCHMARKS.md](BENCHMARKS.md) for a reproducible, honest baseline (`make
+bench`). The short of it: on benign input Python's `re` is faster (a mature C
+backtracking engine), but SciLex is **linear-time and ReDoS-safe by construction**
+— on a pathological pattern like `(a+)+b` it stays flat (~78 µs at 1000 chars)
+where `re` explodes exponentially (seconds, then never finishing). SciLex trades
+raw throughput on easy inputs for a guarantee that holds on every input.
 
 ## License
 
