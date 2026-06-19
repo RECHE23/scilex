@@ -1,0 +1,171 @@
+/*!
+\page scilex_design How SciLex Works — a guided tour
+
+This page is a self-contained tour of SciLex for a reader new to lexers. It
+follows text from a character stream to a sequence of typed tokens, explains how
+maximal munch and indentation layout work, and points at the file or class
+responsible for each step. It pairs with the per-file API reference generated
+from the headers.
+
+> **At a glance.** SciLex is a small, header-only C++20 **maximal-munch** lexer
+> built on [REAL](https://github.com/RECHE23/real-regex): an ordered set of
+> `(kind, regex, skip)` rules; at each position the *longest* anchored match wins,
+> rule order breaks ties. Linear-time and **ReDoS-safe by construction** (inherited
+> from REAL). Consume tokens eagerly (\ref scilex::lexer::tokenize) or lazily
+> (\ref scilex::lexer::scan); add an opt-in indentation pass (\ref scilex::layout);
+> use it from C++ or through an abi3 Python binding.
+
+\tableofcontents
+
+\section x_problem 1. The problem: maximal-munch tokenization
+
+A lexer turns a flat character stream into a sequence of **typed tokens** — a
+number, an identifier, an operator — the input a parser actually consumes. The
+classic rule for deciding where one token ends and the next begins is **maximal
+munch**: at each position, the token is the *longest* match among the rules, and
+ties are broken by rule order (so a keyword listed before the identifier rule wins
+on equal length). What makes a lexer trustworthy on untrusted or machine-generated
+input is the same property that matters for a regex engine: a *predictable*,
+linear worst case.
+
+\section x_real 2. REAL as the foundation
+
+SciLex is a deliberately **thin layer** over REAL — it does not re-implement
+pattern matching. Each \ref scilex::rule pairs a token `kind` with a `real::regex`.
+Because REAL simulates a Thompson NFA in linear time (it never backtracks), every
+rule match is linear and **ReDoS-safe**: no token rule can make the scanner explode,
+even on adversarial input. SciLex adds only the scanning loop, source-position
+tracking, and an optional layout pass on top.
+
+\section x_algorithm 3. The algorithm: longest anchored match wins
+
+*What you'll learn: how a position becomes a token.*
+
+\ref scilex::lexer::tokenize and the lazy \ref scilex::lexer::scan share a single
+routine. At the cursor, every rule is matched **anchored** at the current position;
+the rule with the **longest** match is kept, and a strict `>` comparison keeps the
+*earlier* rule on a tie — so rule order is priority order. Empty matches are ignored
+(a rule that matches nothing cannot consume input, so it can never stall the scan).
+A rule flagged `skip` (whitespace, comments) consumes its bytes but emits no token.
+
+Every emitted \ref scilex::token carries its \ref scilex::position — a 0-based byte
+`offset`, a 1-based `line`, and a 1-based byte `column` — tracked as the cursor
+advances over the consumed bytes (a `\n` bumps the line and resets the column). A
+position matched by **no** rule throws a \ref scilex::lex_error carrying that byte's
+position, so an error points at the exact spot.
+
+\note Tokens are **non-owning**: each \ref scilex::token's `lexeme` is a
+`std::string_view` into the source. Tokenization's only allocation is the token
+vector itself (and `scan` allocates not even that).
+
+\section x_layout 4. Indentation layout: NEWLINE / INDENT / DEDENT
+
+*What you'll learn: how significant indentation is reconstructed without the lexer
+knowing about it.*
+
+Some languages (Python-like, e.g. SciLang) make indentation significant.
+\ref scilex::layout is an **opt-in** pass that works purely from token *positions* —
+so the base lexer needs no change and may keep skipping whitespace. Given an
+end-of-input-terminated token stream, it walks a stack of open indentation levels
+and inserts:
+
+- a \ref scilex::newline at each logical line end;
+- a \ref scilex::indent when a line's first token starts at a deeper byte column
+  than the current level;
+- one or more \ref scilex::dedent tokens when it starts at a shallower column.
+
+A line that dedents to a column **no open block used** throws a
+\ref scilex::layout_error. Blank and comment-only lines carry no token, so they add
+no structure and are naturally ignored. The terminal \ref scilex::end_of_input is
+preserved. The indentation width is simply the byte column of the line's first
+token — v1 does not police mixed tabs and spaces (see \ref x_limits).
+
+\section x_api 5. The API: eager, lazy, and layout
+
+- **Eager** — \ref scilex::lexer::tokenize returns every token in a `std::vector`.
+- **Lazy** — \ref scilex::lexer::scan returns a \ref scilex::token_range whose
+  \ref scilex::token_iterator yields one token at a time, holding nothing but the
+  current token. This is the parser-friendly access pattern: no token vector is
+  built.
+- **End of input** — passing \ref scilex::eof_policy::append makes either path emit
+  a final \ref scilex::end_of_input token at the end position, so a parser always
+  has a current token to match against (and `layout` requires it).
+- **Layout** — \ref scilex::layout rewrites a token stream as in \ref x_layout.
+
+The **Python binding** (abi3, CPython Limited API) mirrors this surface:
+`Lexer.tokenize`, `Lexer.scan` (a lazy generator), and `Layout.apply`, each taking
+`eof=True` for the terminal token. A token is a real `Token` class with a structured
+`Position` (`offset` / `line` / `column`, also reachable as `token.position`); a
+lexical error is `scilex.error` (aliased `LexerError`) carrying a `.position`.
+`scilex.get_include()` returns the header directory, so a C++ project can compile
+against SciLex located through its Python install (add `real.get_include()` too,
+since SciLex's headers include REAL's).
+
+\section x_tour 6. A guided tour (Python)
+
+\code{.py}
+import scilex
+
+lx = scilex.Lexer([
+    (0, r"\s+", True),            # whitespace, skipped
+    (1, r"[0-9]+", False),        # number
+    (2, r"[A-Za-z_]\w*", False),  # identifier
+    (3, r"[-+*/=;]", False),      # operator
+])
+
+# Eager: a list of rich Token objects.
+[(t.kind, t.lexeme) for t in lx.tokenize("foo + 42")]   # [(2,'foo'), (3,'+'), (1,'42')]
+
+# Lazy: one Token at a time (a generator) — nothing else is held.
+for t in lx.scan("foo + 42"):
+    t.kind, t.lexeme, t.position.line, t.position.column
+
+# eof=True appends a terminal END_OF_INPUT token (a parser always has a token).
+lx.tokenize("42", eof=True)[-1].kind == scilex.END_OF_INPUT
+
+# A lexical error carries its position.
+try:
+    lx.tokenize("foo @")
+except scilex.error as e:
+    e.position            # Position(line=1, column=5, offset=4)
+
+# Indentation layout (Python-like): NEWLINE / INDENT / DEDENT from leading columns.
+src = "if x:\n    a\nb"
+lay = scilex.Lexer([(0, r"\s+", True), (1, r"\w+", False), (2, r":", False)])
+[t.kind for t in scilex.Layout().apply(lay.tokenize(src, eof=True))]
+# [1, 1, 2, NEWLINE, INDENT, 1, NEWLINE, DEDENT, 1, NEWLINE, END_OF_INPUT]
+\endcode
+
+\section x_limits 7. Known limitations (honest scope)
+
+- **Linear scan per rule.** The scanner tries every rule at every position, so
+  tokenization is \f$\Theta(n_\text{rules}\times \text{input})\f$. This is fine for
+  the small rule sets SciLex targets; a first-byte dispatch (index rules by their
+  possible leading byte) is a known, *deferred* optimization — to be added only if a
+  benchmark on a realistic 20–50-rule lexer shows it pays. See BENCHMARKS.md.
+- **No modes / context-sensitive lexing**, and **no compile-time `static_lexer`**
+  (on REAL's `static_regex`) in v1 — deferred until a concrete consumer needs them.
+- **Byte columns.** A `column` counts bytes, matching REAL's UTF-8 byte model: an
+  ASCII column equals a character column, but a multibyte codepoint spans several
+  byte columns.
+- **Layout v1** uses the byte column of a line's first token as its indentation
+  width; it does **not** police mixed tabs/spaces and has **no** implicit
+  line-continuation inside brackets.
+- **Integer kinds.** Token kinds are plain `int`s (an `enum`/`IntEnum` reads well);
+  a named-rule API is a possible future convenience, not part of the core.
+
+\section x_map 8. Architecture map
+
+- \ref scilex::token, \ref scilex::position — the token and its source location
+  (`token.hpp`).
+- \ref scilex::rule, \ref scilex::lexer — the rules and the scanning engine, with
+  \ref scilex::lexer::tokenize, \ref scilex::lexer::scan, \ref scilex::token_iterator
+  and \ref scilex::token_range (`lexer.hpp`).
+- \ref scilex::layout — the opt-in indentation pass, with the reserved kinds
+  \ref scilex::newline, \ref scilex::indent and \ref scilex::dedent (`layout.hpp`).
+- Errors carry a position: \ref scilex::lex_error, \ref scilex::layout_error.
+
+For the performance baseline (honest: `re` wins benign throughput, SciLex wins on
+linearity / ReDoS), see BENCHMARKS.md. For the regex engine underneath, see REAL's
+own "How REAL Works" guided tour.
+*/

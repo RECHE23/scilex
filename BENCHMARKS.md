@@ -9,6 +9,9 @@ Run it with **`make bench`** (or `python benchmarks/bench.py`). It is informatio
 only — it prints a table, is never invoked by `full-local-gate`, and never fails a
 build.
 
+For *why* the numbers look the way they do — the linear-scan engine and the REAL
+foundation — see the [design tour](https://github.com/RECHE23/scilex/blob/main/docs/design.dox).
+
 ## The honest headline
 
 SciLex is **not** built to beat `re` on raw throughput, and it does not. `re` is a

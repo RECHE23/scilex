@@ -187,6 +187,13 @@ for (const scilex::token& t : lexer.scan("if x + 42")) {
 }
 ```
 
+## Design
+
+A guided tour of how SciLex works — maximal munch, the REAL foundation,
+indentation layout, the C++/Python API, and the honest known limitations — lives in
+[`docs/design.dox`](https://github.com/RECHE23/scilex/blob/main/docs/design.dox),
+rendered into the API reference by `make doc`.
+
 ## Performance
 
 See [BENCHMARKS.md](BENCHMARKS.md) for a reproducible, honest baseline (`make
