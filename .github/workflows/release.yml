@@ -56,6 +56,32 @@ jobs:
           name: sdist
           path: dist/*.tar.gz
 
+  # Build the full API reference (Doxygen + embedded coverage + the guided tour) and
+  # carry it as an artifact for the GitHub Release. SciLex compiles against REAL's
+  # headers, so REAL is checked out as a sibling (mirroring ci.yml) for the coverage
+  # build that `make doc` runs.
+  docs:
+    needs: check-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: scilex-v1
+      - uses: actions/checkout@v6
+        with:
+          repository: RECHE23/real-regex
+          path: real-v1
+      - name: Install Doxygen, Graphviz, Clang and LLVM coverage tools
+        run: sudo apt-get update && sudo apt-get install -y doxygen graphviz clang llvm
+      - name: Build the API reference (Doxygen + embedded coverage + guided tour)
+        run: make -C scilex-v1 doc
+      - name: Package the HTML
+        run: tar -czf scilex-doc.tar.gz -C scilex-v1/build/doc html
+      - uses: actions/upload-artifact@v7
+        with:
+          name: docs
+          path: scilex-doc.tar.gz
+
   publish:
     needs: [wheels, sdist]
     runs-on: ubuntu-latest
@@ -68,15 +94,18 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           path: dist
+          pattern: "{wheels-*,sdist}"   # only the distributions — never the docs artifact
           merge-multiple: true
       - uses: pypa/gh-action-pypi-publish@v1.14.0
 
   # Populate the GitHub /releases page for the tag: auto-generated notes plus the
-  # built wheels + sdist attached as downloadable assets. Runs after publish, so a
-  # Release only appears for a version that actually shipped to PyPI (which stays
-  # the source of truth). Applies to future tags; existing tags are not back-filled.
+  # built wheels + sdist + the API-reference tarball (scilex-doc.tar.gz) attached as
+  # downloadable assets. Runs after publish, so a Release only appears for a version
+  # that actually shipped to PyPI (which stays the source of truth). Applies to future
+  # tags; existing tags are not back-filled. The unfiltered download grabs every
+  # artifact (wheels, sdist, docs), so `dist/*` attaches them all.
   github-release:
-    needs: publish
+    needs: [publish, docs]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
@@ -87,7 +116,7 @@ jobs:
         with:
           path: dist
           merge-multiple: true
-      - name: Create the GitHub Release (auto notes + wheel/sdist assets)
+      - name: Create the GitHub Release (auto notes + wheels, sdist, docs assets)
         run: gh release create "${GITHUB_REF_NAME}" --generate-notes --verify-tag dist/*
         env:
           GH_TOKEN: ${{ github.token }}

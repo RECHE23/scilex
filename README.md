@@ -96,11 +96,21 @@ zeros, so `2026.6.1`, never `2026.06.001`) — bumps it in `pyproject.toml` and
 `python/scilex/__init__.py`, then commits, tags and pushes from a clean `main`.
 The pushed tag drives `.github/workflows/release.yml`,
 which checks the tag matches the version, builds abi3 wheels (`cibuildwheel`,
-Linux/macOS/Windows) and the self-contained sdist, and publishes to PyPI via
-Trusted Publishing (OIDC, no stored secret). It then populates the GitHub
-`/releases` page with auto-generated notes and the built artifacts. The pushed tag
-is the single thing that triggers a publish; SciLex remains consumable as source
-too (sibling checkout / FetchContent / `get_include()`).
+Linux/macOS/Windows) and the self-contained sdist, builds the full **API reference**
+(Doxygen + the embedded coverage report + the guided tour), and publishes the
+distributions to PyPI via Trusted Publishing (OIDC, no stored secret). It then
+populates the GitHub `/releases` page with auto-generated notes, the wheels/sdist,
+and the API-reference tarball (`scilex-doc.tar.gz`). The pushed tag is the single
+thing that triggers a publish; SciLex remains consumable as source too (sibling
+checkout / FetchContent / `get_include()`).
+
+A separate `.github/workflows/docs.yml` workflow also deploys the API reference to
+**GitHub Pages** on each push to `main` (enable Pages once with "GitHub Actions" as
+the source).
+
+> **Note.** The first release, `v2026.6.0`, predates this docs step — it shipped
+> wheels + sdist only. The API-reference artifact and the Pages deployment were added
+> immediately after and apply to subsequent releases.
 
 **One-time PyPI setup.** Publishing needs a PyPI
 [Trusted Publisher](https://docs.pypi.org/trusted-publishers/) configured once for
