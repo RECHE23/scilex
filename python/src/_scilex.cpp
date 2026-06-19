@@ -5,7 +5,8 @@
 //   _scilex.tokenize(handle, text, eof) -> list  # eager [(kind, lexeme, offset, line, column), …]
 //   _scilex.scan_start(handle, text, eof) -> capsule  # a lazy scan cursor
 //   _scilex.scan_next(cursor) -> tuple | None    # the next token, or None at the end
-//   _scilex.error                             # raised on a bad pattern or unlexable input
+//   _scilex.layout(tokens) -> list           # insert NEWLINE/INDENT/DEDENT from indentation
+//   _scilex.error                             # raised on a bad pattern, unlexable input, or bad indent
 //
 // A compiled lexer (held in a PyCapsule) owns its REAL regexes, so the rules are
 // compiled once and reused. Tokenization runs on UTF-8 bytes — SciLex's model —
@@ -19,6 +20,7 @@
 #include <Python.h>
 
 #include <scilex/scilex.hpp>
+#include <scilex/layout.hpp> // opt-in: not pulled in by scilex.hpp
 
 #include <cstddef>
 #include <exception>
@@ -36,7 +38,7 @@ constexpr const char* SCAN_CAPSULE_NAME = "scilex.scan";
 
 // Raises scilex.error carrying the byte position of the offending input, as the
 // instance attributes .offset/.line/.column (the wrapper turns them into .position).
-void set_lex_error(const char* message, scilex::position where)
+void set_positioned_error(const char* message, scilex::position where)
 {
     PyObject* exc = PyObject_CallFunction(error_type, "s", message);
     if (exc == nullptr) {
@@ -62,7 +64,10 @@ void set_lex_error(const char* message, scilex::position where)
 // decoded from UTF-8 bytes back to str). Returns a new reference, or null on error.
 PyObject* token_tuple(const scilex::token& token)
 {
-    return Py_BuildValue("(is#nnn)", token.kind, token.lexeme.data(),
+    // A synthetic token (newline/indent/dedent) carries a default, null-data view;
+    // "s#" maps a null pointer to None, so use "" to keep an empty lexeme an empty str.
+    const char* data = token.lexeme.data() != nullptr ? token.lexeme.data() : "";
+    return Py_BuildValue("(is#nnn)", token.kind, data,
                          static_cast<Py_ssize_t>(token.lexeme.size()),
                          static_cast<Py_ssize_t>(token.start.offset),
                          static_cast<Py_ssize_t>(token.start.line),
@@ -187,7 +192,7 @@ PyObject* scilex_tokenize(PyObject* /*self*/, PyObject* args)
         }
     }
     catch (const scilex::lex_error& error) {
-        set_lex_error(error.what(), error.where());
+        set_positioned_error(error.what(), error.where());
         result = nullptr;
     }
     catch (const std::exception& error) {
@@ -235,7 +240,7 @@ PyObject* scilex_scan_start(PyObject* /*self*/, PyObject* args)
         Py_DECREF(utf8);
         Py_XDECREF(state->lexer_capsule);
         delete state;
-        set_lex_error(error.what(), error.where());
+        set_positioned_error(error.what(), error.where());
         return nullptr;
     }
     catch (const std::exception& error) {
@@ -277,7 +282,7 @@ PyObject* scilex_scan_next(PyObject* /*self*/, PyObject* args)
         }
         catch (const scilex::lex_error& error) {
             state->it = state->end; // stop: the cursor is now exhausted
-            set_lex_error(error.what(), error.where());
+            set_positioned_error(error.what(), error.where());
             return nullptr;
         }
         catch (const std::exception& error) {
@@ -291,6 +296,76 @@ PyObject* scilex_scan_next(PyObject* /*self*/, PyObject* args)
     }
     state->needs_advance = true;
     return token_tuple(*state->it);
+}
+
+// _scilex.layout(tokens) -> list. Rewrites an end_of_input-terminated sequence of
+// (kind, lexeme, offset, line, column) tuples with synthetic newline/indent/dedent
+// tokens inserted from each line's indentation; returns the same tuple shape.
+PyObject* scilex_layout(PyObject* /*self*/, PyObject* args)
+{
+    PyObject* seq = nullptr;
+    if (PyArg_ParseTuple(args, "O", &seq) == 0) {
+        return nullptr;
+    }
+    const Py_ssize_t count = PySequence_Size(seq);
+    if (count < 0) {
+        return nullptr; // not a sequence (error already set)
+    }
+    PyObject* result = nullptr;
+    try {
+        // Own every lexeme's bytes (reserved so addresses stay stable as the token
+        // views below point into them); rebuild the scilex::token sequence.
+        std::vector<std::string>   lexemes;
+        std::vector<scilex::token> input;
+        lexemes.reserve(static_cast<std::size_t>(count));
+        input.reserve(static_cast<std::size_t>(count));
+        for (Py_ssize_t i = 0; i < count; ++i) {
+            PyObject* item = PySequence_GetItem(seq, i); // new ref
+            if (item == nullptr) {
+                return nullptr;
+            }
+            int         kind   = 0;
+            const char* lexeme = nullptr;
+            Py_ssize_t  length = 0;
+            Py_ssize_t  offset = 0;
+            Py_ssize_t  line   = 0;
+            Py_ssize_t  column = 0;
+            const int   parsed = PyArg_ParseTuple(item, "is#nnn", &kind, &lexeme, &length,
+                                                   &offset, &line, &column);
+            if (parsed != 0) {
+                lexemes.emplace_back(lexeme != nullptr ? lexeme : "", static_cast<std::size_t>(length));
+            }
+            Py_DECREF(item);
+            if (parsed == 0) {
+                return nullptr; // not a (kind, lexeme, offset, line, column) tuple
+            }
+            const scilex::position where {static_cast<std::size_t>(offset),
+                                          static_cast<std::size_t>(line),
+                                          static_cast<std::size_t>(column)};
+            input.push_back(scilex::token {kind, std::string_view(lexemes.back()), where});
+        }
+        const std::vector<scilex::token> out {scilex::layout(input)};
+        result = PyList_New(static_cast<Py_ssize_t>(out.size()));
+        if (result != nullptr) {
+            for (std::size_t i = 0; i < out.size(); ++i) {
+                PyObject* tuple {token_tuple(out[i])};
+                if (tuple == nullptr) {
+                    Py_CLEAR(result);
+                    break;
+                }
+                PyList_SetItem(result, static_cast<Py_ssize_t>(i), tuple); // steals ref
+            }
+        }
+    }
+    catch (const scilex::layout_error& error) {
+        set_positioned_error(error.what(), error.where());
+        result = nullptr;
+    }
+    catch (const std::exception& error) {
+        PyErr_SetString(error_type, error.what());
+        result = nullptr;
+    }
+    return result;
 }
 
 PyMethodDef module_methods[] = {
@@ -334,6 +409,16 @@ PyMethodDef module_methods[] = {
      "    tuple | None: (kind, lexeme, offset, line, column), or None when exhausted.\n\n"
      "Raises:\n"
      "    error: If some position is matched by no rule (after earlier tokens are yielded)."},
+    {"layout", scilex_layout, METH_VARARGS,
+     "layout(tokens)\n"
+     "Insert NEWLINE/INDENT/DEDENT tokens from indentation.\n\n"
+     "Args:\n"
+     "    tokens (sequence): An end_of_input-terminated sequence of\n"
+     "        (kind, lexeme, offset, line, column) tuples.\n\n"
+     "Returns:\n"
+     "    list: The layout-aware tuples (still end_of_input-terminated).\n\n"
+     "Raises:\n"
+     "    error: On a dedent to an indentation no open block used (with .offset/.line/.column)."},
     {nullptr, nullptr, 0, nullptr},
 };
 

@@ -38,7 +38,7 @@ FORMAT_FILES := $(shell find include tests -name '*.hpp' -o -name '*.cpp')
 
 .PHONY: all build test sanitize coverage coverage-build coverage-html \
         lint misra doc doc-no-coverage format format-check full-local-gate \
-        python python-test install uninstall release clean help
+        python python-test bench install uninstall release clean help
 
 .DEFAULT_GOAL := help
 
@@ -57,6 +57,7 @@ help:
 	@echo "  make format-check  Uncrustify, dry-run, exits non-zero on diff"
 	@echo "  make python     Build the Python extension in place (abi3)"
 	@echo "  make python-test  Run the Python binding test suite"
+	@echo "  make bench      Wall-time micro-benchmarks vs Python re (informational)"
 	@echo "  make full-local-gate  Every gate in one command (the macOS gate of record)"
 	@echo "  make install    Install the Python package (pip)"
 	@echo "  make uninstall  Uninstall the Python package (pip)"
@@ -155,6 +156,10 @@ python:
 
 python-test: python
 	$(PYRUN) -m unittest discover -s python/tests
+
+# Wall-time micro-benchmarks vs Python's re (informational; never gated). See BENCHMARKS.md.
+bench: python
+	$(PYRUN) benchmarks/bench.py
 
 # The complete local quality gate in one command — the canonical pre-push check
 # and, since CI no longer runs macOS (see .github/workflows/ci.yml), the macOS gate

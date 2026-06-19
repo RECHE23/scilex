@@ -114,7 +114,33 @@ lx = scilex.Lexer([
     (1, r"[0-9]+", False),                   # number
     (2, r"[A-Za-z_][A-Za-z0-9_]*", False),   # identifier
 ])
-[(t.kind, t.lexeme) for t in lx.tokenize("foo 42")]   # [(2, 'foo'), (1, '42')]
+
+# Eager: a list of rich Token objects (kind, lexeme, structured position).
+[(t.kind, t.lexeme) for t in lx.tokenize("foo 42")]      # [(2, 'foo'), (1, '42')]
+
+# Lazy: a generator yielding one Token at a time — nothing else is held.
+for tok in lx.scan("foo 42"):
+    tok.kind, tok.lexeme, tok.position.line, tok.position.column
+
+# A lexical error carries the failing position.
+try:
+    lx.tokenize("foo @")
+except scilex.error as e:
+    e.position                                            # Position(line=1, column=5, offset=4)
+
+# eof=True appends a terminal END_OF_INPUT token (a parser always has a token).
+lx.tokenize("42", eof=True)[-1].kind == scilex.END_OF_INPUT
+```
+
+For indentation-significant languages, `Layout` rewrites an `eof=True` token
+stream with `NEWLINE` / `INDENT` / `DEDENT` tokens read from each line's leading
+column:
+
+```python
+lx = scilex.Lexer([(0, r"\s+", True), (1, r"\w+", False), (2, r":", False)])
+laid = scilex.Layout().apply(lx.tokenize("if x:\n    a\nb", eof=True))
+[t.kind for t in laid]
+# [1, 1, 2, NEWLINE, INDENT, 1, NEWLINE, DEDENT, 1, NEWLINE, END_OF_INPUT]
 ```
 
 `scilex.get_include()` returns the header directory so a C++ project can compile

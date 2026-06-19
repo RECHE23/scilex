@@ -183,5 +183,89 @@ class PositionedErrorTests(unittest.TestCase):
             sample_lexer().tokenize("@")
 
 
+def layout_lexer():
+    # Indentation-significant sample: words, a colon, '#' line comments; all
+    # whitespace skipped, so layout reconstructs structure from token positions.
+    return scilex.Lexer([
+        (0, r"\s+", True),       # whitespace (incl. newlines), skipped
+        (3, r"#[^\n]*", True),   # line comment, skipped
+        (2, r":", False),        # colon
+        (1, r"\w+", False),      # word
+    ])
+
+
+def layout_kinds(text):
+    laid = scilex.Layout().apply(layout_lexer().tokenize(text, eof=True))
+    return [t.kind for t in laid]
+
+
+class LayoutKindTests(unittest.TestCase):
+    def test_reserved_kinds_are_int_min_plus_offsets(self):
+        self.assertEqual(scilex.NEWLINE, -(2 ** 31) + 1)
+        self.assertEqual(scilex.INDENT, -(2 ** 31) + 2)
+        self.assertEqual(scilex.DEDENT, -(2 ** 31) + 3)
+
+    def test_layout_exposes_the_kinds(self):
+        self.assertEqual(scilex.Layout.newline_kind, scilex.NEWLINE)
+        self.assertEqual(scilex.Layout.indent_kind, scilex.INDENT)
+        self.assertEqual(scilex.Layout.dedent_kind, scilex.DEDENT)
+
+
+class LayoutTests(unittest.TestCase):
+    def test_basic_indent_and_dedent(self):
+        # if x:
+        #     a
+        #     b
+        # c
+        nl, ind, ded, eof = scilex.NEWLINE, scilex.INDENT, scilex.DEDENT, scilex.END_OF_INPUT
+        self.assertEqual(
+            layout_kinds("if x:\n    a\n    b\nc"),
+            [1, 1, 2, nl, ind, 1, nl, 1, nl, ded, 1, nl, eof],
+        )
+
+    def test_trailing_block_is_closed_at_eof(self):
+        # A block still open at end-of-file is closed by a DEDENT before the terminal token.
+        nl, ind, ded, eof = scilex.NEWLINE, scilex.INDENT, scilex.DEDENT, scilex.END_OF_INPUT
+        self.assertEqual(layout_kinds("a\n    b"), [1, nl, ind, 1, nl, ded, eof])
+
+    def test_comment_only_lines_add_no_structure(self):
+        # The middle line has only a (skipped) comment: no token, so no NEWLINE for it.
+        nl, eof = scilex.NEWLINE, scilex.END_OF_INPUT
+        self.assertEqual(layout_kinds("a\n# just a comment\nb"), [1, nl, 1, nl, eof])
+
+    def test_nested_indentation(self):
+        nl, ind, ded, eof = scilex.NEWLINE, scilex.INDENT, scilex.DEDENT, scilex.END_OF_INPUT
+        self.assertEqual(
+            layout_kinds("a\n  b\n    c\nd"),
+            [1, nl, ind, 1, nl, ind, 1, nl, ded, ded, 1, nl, eof],
+        )
+
+    def test_original_tokens_are_preserved(self):
+        laid = scilex.Layout().apply(layout_lexer().tokenize("if x:\n    a", eof=True))
+        words = [(t.lexeme, t.line, t.column) for t in laid if t.kind == 1]
+        self.assertEqual(words, [("if", 1, 1), ("x", 1, 4), ("a", 2, 5)])
+
+    def test_synthetic_tokens_have_empty_lexeme(self):
+        laid = scilex.Layout().apply(layout_lexer().tokenize("a\n    b", eof=True))
+        synthetic = {scilex.NEWLINE, scilex.INDENT, scilex.DEDENT}
+        self.assertTrue(all(t.lexeme == "" for t in laid if t.kind in synthetic))
+
+    def test_empty_input_yields_only_eof(self):
+        laid = scilex.Layout().apply(layout_lexer().tokenize("", eof=True))
+        self.assertEqual([t.kind for t in laid], [scilex.END_OF_INPUT])
+
+    def test_inconsistent_dedent_raises_with_position(self):
+        # 'b' dedents to column 3, which matches neither the outer (0) nor inner (4) level.
+        with self.assertRaises(scilex.error) as caught:
+            scilex.Layout().apply(layout_lexer().tokenize("if x:\n    a\n  b", eof=True))
+        self.assertEqual(caught.exception.position.line, 3)
+        self.assertEqual(caught.exception.position.column, 3)
+
+    def test_module_level_layout(self):
+        nl, eof = scilex.NEWLINE, scilex.END_OF_INPUT
+        laid = scilex.layout(layout_lexer().tokenize("a\nb", eof=True))
+        self.assertEqual([t.kind for t in laid], [1, nl, 1, nl, eof])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -24,6 +24,10 @@ Two access patterns: :meth:`Lexer.tokenize` returns the whole token list, while
 parser-friendly pattern — no list is built). Pass ``eof=True`` to either to get a
 final token of kind :data:`END_OF_INPUT` at the end position.
 
+For indentation-significant languages (Python-like), :class:`Layout` turns an
+``eof=True`` token stream into a layout-aware one, inserting :data:`NEWLINE` /
+:data:`INDENT` / :data:`DEDENT` tokens from each line's leading column.
+
 Earlier rules win ties; the longest match wins overall (maximal munch). Positions
 are byte-based (SciLex's UTF-8 model): ``offset`` is a 0-based byte index,
 ``line``/``column`` are 1-based (a column counts bytes). A position matched by no
@@ -35,14 +39,15 @@ import os
 from scilex._scilex import (
     compile as _compile,
     error,
+    layout as _layout,
     scan_next as _scan_next,
     scan_start as _scan_start,
     tokenize as _tokenize,
 )
 
 __all__ = [
-    "Lexer", "Token", "Position", "tokenize", "scan", "error", "LexerError",
-    "END_OF_INPUT", "get_include", "get_config",
+    "Lexer", "Token", "Position", "Layout", "tokenize", "scan", "layout", "error",
+    "LexerError", "END_OF_INPUT", "NEWLINE", "INDENT", "DEDENT", "get_include", "get_config",
 ]
 
 __version__ = "2026.6.5"
@@ -50,6 +55,15 @@ __version__ = "2026.6.5"
 #: Reserved kind of SciLex's synthetic end-of-input token
 #: (``std::numeric_limits<int>::min()``); user kinds must avoid it.
 END_OF_INPUT = -2147483648
+
+#: Reserved kind: end of a logical line, inserted by :class:`Layout` (INT_MIN + 1).
+NEWLINE = -2147483647
+
+#: Reserved kind: indentation increased — the start of a deeper block (INT_MIN + 2).
+INDENT = -2147483646
+
+#: Reserved kind: indentation decreased — the end of a block (INT_MIN + 3).
+DEDENT = -2147483645
 
 #: Alias of :class:`error`, the exception raised on an invalid pattern or
 #: unlexable input. Lexing errors carry a :class:`Position` in ``.position``.
@@ -220,6 +234,48 @@ class Lexer:
         return _iterate()
 
 
+class Layout:
+    """Inserts NEWLINE / INDENT / DEDENT tokens from a token stream's indentation.
+
+    Indentation-significant languages (Python-like, e.g. SciLang) read structure
+    from leading whitespace. Working purely from token positions, :meth:`apply`
+    rewrites a flat token stream into a layout-aware one: a :data:`NEWLINE` at each
+    logical line end, and :data:`INDENT` / :data:`DEDENT` where the leading (byte)
+    column of a line's first token changes. Blank and comment-only lines carry no
+    token, so they add no structure.
+
+    The reserved kinds are exposed as :attr:`newline_kind`, :attr:`indent_kind` and
+    :attr:`dedent_kind`.
+    """
+
+    newline_kind = NEWLINE
+    indent_kind = INDENT
+    dedent_kind = DEDENT
+
+    def apply(self, tokens):
+        """Rewrite ``tokens`` with NEWLINE/INDENT/DEDENT inserted.
+
+        Args:
+            tokens (iterable[Token]): An **end-of-input-terminated** token stream —
+                tokenize with ``eof=True`` (the terminal :data:`END_OF_INPUT` is
+                preserved). Only each token's ``kind`` and position are read.
+
+        Returns:
+            list[Token]: The layout-aware tokens (still END_OF_INPUT-terminated).
+
+        Raises:
+            error: On a line that dedents to an indentation no open block used
+                (carrying ``.position``).
+        """
+        fields = [(t.kind, t.lexeme, t.offset, t.line, t.column) for t in tokens]
+        try:
+            raw = _layout(fields)
+        except error as exc:
+            _attach_position(exc)
+            raise
+        return [_token(item) for item in raw]
+
+
 def tokenize(rules, text, eof=False):
     """Compile ``rules`` and tokenize ``text`` eagerly in one call.
 
@@ -246,6 +302,18 @@ def scan(rules, text, eof=False):
         Token: The next token in source order.
     """
     return Lexer(rules).scan(text, eof=eof)
+
+
+def layout(tokens):
+    """Insert NEWLINE/INDENT/DEDENT into ``tokens`` (see :meth:`Layout.apply`).
+
+    Args:
+        tokens (iterable[Token]): An end-of-input-terminated token stream.
+
+    Returns:
+        list[Token]: The layout-aware tokens.
+    """
+    return Layout().apply(tokens)
 
 
 def get_include():
