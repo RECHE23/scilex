@@ -267,5 +267,57 @@ class LayoutTests(unittest.TestCase):
         self.assertEqual([t.kind for t in laid], [1, nl, 1, nl, eof])
 
 
+class ErrorContextTests(unittest.TestCase):
+    def test_lexing_error_carries_context(self):
+        with self.assertRaises(scilex.error) as caught:
+            sample_lexer().tokenize("foo @ bar")
+        exc = caught.exception
+        self.assertEqual(exc.context, "foo ‹@› bar")  # byte fenced in ‹ ›
+        self.assertIn("line 1, column 5", str(exc))
+        self.assertIn("‹@›", str(exc))
+
+    def test_context_at_start_of_input(self):
+        with self.assertRaises(scilex.error) as caught:
+            sample_lexer().tokenize("@x")
+        self.assertEqual(caught.exception.context, "‹@›x")  # empty left window
+
+    def test_context_clamps_the_window(self):
+        with self.assertRaises(scilex.error) as caught:
+            sample_lexer().tokenize("abcdefghijklmnop@")
+        # ~8 bytes of left context are kept before the marked byte, then nothing right
+        self.assertEqual(caught.exception.context, "ijklmnop‹@›")
+
+    def test_context_survives_a_multibyte_boundary(self):
+        # The error sits on 'é' (a 2-byte UTF-8 lead): byte-slicing the window must not
+        # crash — a split codepoint decodes to the replacement character.
+        lexer = scilex.Lexer([(0, r"\s+", True), (1, r"[a-z]+", False)])
+        with self.assertRaises(scilex.error) as caught:
+            lexer.tokenize("café")
+        exc = caught.exception
+        self.assertEqual(exc.position.offset, 3)   # the 'é' lead byte
+        self.assertTrue(exc.context.startswith("caf"))
+        self.assertIsInstance(exc.context, str)    # built without raising
+
+    def test_context_in_eof_mode(self):
+        with self.assertRaises(scilex.error) as caught:
+            sample_lexer().tokenize("foo @", eof=True)
+        self.assertIn("‹@›", caught.exception.context)
+
+    def test_scan_error_carries_context(self):
+        gen = sample_lexer().scan("foo @")
+        self.assertEqual(next(gen).lexeme, "foo")   # valid token first
+        with self.assertRaises(scilex.error) as caught:
+            next(gen)
+        self.assertIn("‹@›", caught.exception.context)
+
+    def test_layout_error_has_position_but_no_context(self):
+        # Layout.apply receives tokens, not the source, so a layout error carries a
+        # position but no context snippet (the documented limitation).
+        with self.assertRaises(scilex.error) as caught:
+            scilex.Layout().apply(layout_lexer().tokenize("if x:\n    a\n  b", eof=True))
+        self.assertEqual(caught.exception.position.line, 3)
+        self.assertIsNone(getattr(caught.exception, "context", None))
+
+
 if __name__ == "__main__":
     unittest.main()

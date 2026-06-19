@@ -141,11 +141,32 @@ def _token(fields):
     return Token(kind, lexeme, Position(offset, line, column))
 
 
-def _attach_position(exc):
-    """Give a lexing :class:`error` a structured ``.position`` from its byte fields."""
+def _attach_position(exc, source=None):
+    """Enrich a lexing :class:`error` with a structured ``.position`` and, when the
+    source is known, a ``.context`` snippet around the offending byte.
+
+    Always sets ``.position`` (from the byte fields the C++ layer attaches). When
+    ``source`` is given (the tokenize/scan paths have it), also sets ``.context`` — a
+    few bytes either side of the offending byte, that byte fenced in ``‹ ›`` — and
+    rewrites the message to include the position and that snippet. Layout errors have
+    no source here, so they keep ``.position`` only. Positions are **byte** offsets
+    (SciLex's UTF-8 model), so the snippet is sliced from the encoded bytes and decoded
+    with ``errors="replace"``: a window edge splitting a codepoint shows ``�``, never
+    raises.
+    """
     offset = getattr(exc, "offset", None)
-    if offset is not None:
-        exc.position = Position(offset, exc.line, exc.column)
+    if offset is None:
+        return
+    exc.position = Position(offset, exc.line, exc.column)
+    if source is None:
+        return
+    data = source.encode("utf-8")
+    window = 8
+    before = data[max(0, offset - window):offset].decode("utf-8", "replace")
+    here = data[offset:offset + 1].decode("utf-8", "replace")
+    after = data[offset + 1:offset + 1 + window].decode("utf-8", "replace")
+    exc.context = f"{before}‹{here}›{after}"
+    exc.args = (f"no rule matches at line {exc.line}, column {exc.column}: {exc.context}",)
 
 
 class Lexer:
@@ -190,7 +211,7 @@ class Lexer:
         try:
             raw = _tokenize(self._handle, text, bool(eof))
         except error as exc:
-            _attach_position(exc)
+            _attach_position(exc, text)
             raise
         return [_token(fields) for fields in raw]
 
@@ -219,13 +240,13 @@ class Lexer:
             try:
                 cursor = _scan_start(handle, text, flag)
             except error as exc:
-                _attach_position(exc)
+                _attach_position(exc, text)
                 raise
             while True:
                 try:
                     fields = _scan_next(cursor)
                 except error as exc:
-                    _attach_position(exc)
+                    _attach_position(exc, text)
                     raise
                 if fields is None:
                     return
@@ -264,8 +285,9 @@ class Layout:
             list[Token]: The layout-aware tokens (still END_OF_INPUT-terminated).
 
         Raises:
-            error: On a line that dedents to an indentation no open block used
-                (carrying ``.position``).
+            error: On a line that dedents to an indentation no open block used,
+                carrying ``.position`` (but no ``.context`` snippet: ``apply`` receives
+                tokens, not the source text, so there is nothing to slice).
         """
         fields = [(t.kind, t.lexeme, t.offset, t.line, t.column) for t in tokens]
         try:

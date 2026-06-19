@@ -144,11 +144,13 @@ lx = scilex.Lexer([
 for tok in lx.scan("foo 42"):
     tok.kind, tok.lexeme, tok.position.line, tok.position.column
 
-# A lexical error carries the failing position.
+# A lexical error carries the failing position and a source-context snippet.
 try:
     lx.tokenize("foo @")
 except scilex.error as e:
     e.position                                            # Position(line=1, column=5, offset=4)
+    e.context                                             # 'foo ‹@›'  (the offending byte, fenced)
+    str(e)                                                # 'no rule matches at line 1, column 5: foo ‹@›'
 
 # eof=True appends a terminal END_OF_INPUT token (a parser always has a token).
 lx.tokenize("42", eof=True)[-1].kind == scilex.END_OF_INPUT
