@@ -79,38 +79,46 @@ backtracking engine explores `O(2ⁿ)` partitions; REAL (and therefore SciLex) i
 grows **linearly** and is still ~78 µs at `n = 1000`, where `re` would not finish in any
 practical time. This is the case SciLex exists for.
 
-### B3. Rule-count scaling — the first-byte-dispatch question
+### B3. Rule-count scaling — the first-byte dispatch
 
 A *realistic* lexer (a small-language rule set: whitespace, line comments, numbers,
 strings, an identifier rule, operators, plus N literal keyword rules before the
-identifier) over ~11 KB of representative source (3240 tokens). The scanner tries
-**every** rule at **every** position, so the cost is `Θ(n_rules × input)`; this measures
-how steeply that grows, to decide whether a **first-byte dispatch** (index rules by their
-possible leading byte, try only the matching bucket) is worth implementing.
+identifier) over ~11 KB of representative source (3240 tokens), swept over the rule count.
+A naive scanner tries **every** rule at **every** position — cost `Θ(n_rules × input)`. This
+section measured how steeply that grew and then how much a **first-byte dispatch** (index
+rules by their possible leading byte; try only the current byte's bucket plus the rules
+without a fixed leading byte) prunes it.
 
-| rules | tokenize | µs / token |
-| ---: | ---: | ---: |
-| 6  | ~7.5 ms  | 2.3 |
-| 14 | ~12.3 ms | 3.8 |
-| 22 | ~16.9 ms | 5.2 |
-| 30 | ~21.5 ms | 6.6 |
-| 38 | ~26.2 ms | 8.1 |
-| 46 | ~30.7 ms | 9.5 |
+| rules | before (all-rules scan) | after (first-byte dispatch) | speedup |
+| ---: | ---: | ---: | ---: |
+| 6  | ~7.5 ms  | ~5.7 ms | 1.3× |
+| 14 | ~12.2 ms | ~5.8 ms | 2.1× |
+| 22 | ~16.8 ms | ~5.9 ms | 2.8× |
+| 30 | ~21.4 ms | ~5.9 ms | 3.6× |
+| 38 | ~26.1 ms | ~6.0 ms | 4.4× |
+| 46 | ~30.7 ms | ~6.1 ms | **5.1×** |
 
-**Reading.** Time grows **linearly with the rule count** — ~**578 µs per added rule** over
-the corpus, **4.1× slower at 46 rules than at 6**. So at realistic sizes the scan is
-dominated by *trying rules that cannot match the current byte*. A static look at the
-46-rule lexer confirms the opportunity: averaged over the input, only **~1.8 of 46** rules
-have a leading byte that *could* match a given position — a first-byte dispatch would try
-~1.8 rules instead of 46, i.e. **~25× fewer match attempts**. Subtracting the rule-count-
-independent floor (Token construction, the cursor loop, the few matching rules), the
-attempt-reduction projects to roughly a **3–7× wall-time speedup on 20–50-rule lexers**.
+**The motivating data (before).** With the all-rules scan, time grew **linearly with the
+rule count** — ~**578 µs per added rule**, **4.1× slower at 46 rules than at 6**. So at
+realistic sizes the scan was dominated by *trying rules that cannot match the current byte*.
+A static look at the 46-rule lexer confirmed it: averaged over the input, only **~1.8 of 46**
+rules have a leading byte that could match a position — so a dispatch should try ~1.8 instead
+of 46, i.e. **~25× fewer match attempts**.
 
-**Verdict (data-first).** The dispatch is **justified** for realistic lexers: the
-per-position all-rules scan is the clear, measured bottleneck, and pruning by leading byte
-removes most of it without changing semantics. It stays **deferred until implemented under
-the same gate** (100 % 4D, behaviour-preserving) — but the data, not the principle, now
-backs it. Aho-Corasick / a fuller prefilter remain out of scope (no data demands them).
+**The result (after).** The first-byte dispatch (`lexer.hpp`: a 256-bucket index built once
+at construction; only the current byte's bucket + the general rules are tried) makes
+tokenization **essentially rule-count-independent**: the per-rule slope collapsed from
+~578 µs to **~10 µs** (58× flatter), 46-vs-6 rules from 4.1× to **1.1×**, and the 46-rule
+lexer is **~5.1× faster**. Behaviour is unchanged — a rule is bucketed only when its pattern
+provably begins with one fixed literal; any class, escape, anchor, alternation, optional
+lead, or compile flag sends it to the general list (tried everywhere), so the dispatch can
+only ever try *more* rules than needed, never fewer. The 43 Python tests and the C++ suite
+(incl. dedicated dispatch tests) pass unchanged; 100 % 4D on `lexer.hpp`.
+
+**Verdict.** Implemented (data-backed, measured ~5× on a realistic 46-rule lexer).
+Aho-Corasick / a fuller prefilter remain out of scope (no data demands them); bucketing
+*class* leads (not just literals) is a possible further step if a future workload shows the
+remaining ~6 ms floor matters.
 
 ## Methodology & reproduction
 

@@ -17,7 +17,9 @@
 #ifndef SCILEX_LEXER_HPP
 #define SCILEX_LEXER_HPP
 
+#include <array>
 #include <iterator>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -107,7 +109,9 @@ namespace scilex {
      */
     explicit lexer(std::vector<rule> rules)
       : rules_(std::move(rules))
-    {}
+    {
+      build_dispatch();
+    }
 
     /*!
      * \brief Tokenizes \p source into the sequence of non-skipped tokens.
@@ -185,14 +189,26 @@ namespace scilex {
         std::size_t            best_len {0};
         const rule*            best     {nullptr};
 
-        // Longest anchored match across all rules; strict '>' keeps the earlier
-        // rule on a tie, so rule order is the priority order.
-        for (const rule& candidate : rules_) {
-          const auto matched {candidate.pattern.match(rest)};
-          if (matched && matched.end() > best_len) {
-            best_len = matched.end();
-            best     = &candidate;
-          }
+        // First-byte dispatch: only rules whose pattern can begin with the byte at
+        // the cursor (its bucket) plus the general rules (those without a single
+        // fixed leading literal) can match here — every other rule provably cannot,
+        // so it is skipped. Longest match wins; on a tie the earlier rule in rules_
+        // wins (address order, as every pointer is into rules_), so priority order
+        // is preserved no matter which list is scanned first.
+        const auto consider = [&](const rule* candidate) {
+                                const auto matched {candidate->pattern.match(rest)};
+                                if (matched && matched.end() > 0
+                                    && (best == nullptr || matched.end() > best_len
+                                        || (matched.end() == best_len && candidate < best))) {
+                                  best_len = matched.end();
+                                  best     = candidate;
+                                }
+                              };
+        for (const rule* candidate : first_byte_index_[static_cast<unsigned char>(source[cursor.offset])]) {
+          consider(candidate);
+        }
+        for (const rule* candidate : general_rules_) {
+          consider(candidate);
         }
 
         if (best == nullptr) {
@@ -221,7 +237,66 @@ namespace scilex {
       return false;
     }
 
-    std::vector<rule> rules_; //!< The ordered token rules.
+    /*!
+     * \brief The single fixed leading byte a rule's pattern must begin with, or
+     *        `std::nullopt` when it is not a lone literal.
+     *
+     * Returns a byte only when the pattern provably matches **only** strings that
+     * begin with it: no compile flag (e.g. `icase` would fold a literal to another
+     * byte), a plain leading literal (not a metacharacter, so not a class / escape /
+     * anchor / group), that literal not made optional or variably repeated by a
+     * following `?` / `*` / `{`, and no top-level `|` (which would admit other first
+     * bytes). Anything else — including any doubt — yields `std::nullopt`, so the
+     * rule joins \ref general_rules_ and is tried at every position; the dispatch can
+     * therefore only ever try *more* rules than necessary, never fewer.
+     *
+     * \param[in] r The rule to classify.
+     */
+    [[nodiscard]] static std::optional<unsigned char> leading_byte(const rule& r)
+    {
+      if (r.pattern.compile_flags() != real::flags::none) {
+        return std::nullopt; // a flag (e.g. icase) can make a literal match other bytes
+      }
+      const std::string_view pattern {r.pattern.pattern()};
+      if (pattern.empty()) {
+        return std::nullopt; // matches the empty string — never narrows the position
+      }
+      const char first {pattern.front()};
+      if (std::string_view {R"(\.[](){}*+?|^$)"}.find(first) != std::string_view::npos) {
+        return std::nullopt; // a metacharacter — not a plain leading literal
+      }
+      if (pattern.size() > 1 && std::string_view {"?*{"}.find(pattern[1]) != std::string_view::npos) {
+        return std::nullopt; // the leading literal is optional or variably repeated
+      }
+      if (pattern.find('|') != std::string_view::npos) {
+        return std::nullopt; // a top-level alternation admits other first bytes
+      }
+      return static_cast<unsigned char>(first);
+    }
+
+    /*!
+     * \brief Builds the first-byte dispatch index from \ref rules_ (once, at
+     *        construction): each rule joins the bucket of its \ref leading_byte, or
+     *        \ref general_rules_ when it has none. Buckets and the general list keep
+     *        rules_ order, so the address-order tie-break in \ref scan_next is the
+     *        rule priority order.
+     */
+    void build_dispatch()
+    {
+      for (const rule& candidate : rules_) {
+        const std::optional<unsigned char> byte {leading_byte(candidate)};
+        if (byte) {
+          first_byte_index_[*byte].push_back(&candidate);
+        }
+        else {
+          general_rules_.push_back(&candidate);
+        }
+      }
+    }
+
+    std::vector<rule>                         rules_;            //!< The ordered token rules.
+    std::array<std::vector<const rule*>, 256> first_byte_index_; //!< Rules by required leading byte.
+    std::vector<const rule*>                  general_rules_;    //!< Rules with no fixed leading byte.
   };
 
   /*!
