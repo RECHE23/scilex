@@ -72,10 +72,89 @@ def redos_linearity():
     print(f"    n=1000: scilex {t_big * 1e6:.2f} us (still linear); re.match would never finish")
 
 
+# A realistic source corpus and a growing keyword set, for the rule-count study that
+# decides whether a first-byte dispatch in the lexer is worth implementing (tranche 3).
+_SNIPPET = (
+    "func compute(x, y) {\n"
+    "    let total = 0;\n"
+    "    for (i = 0; i < x + y; i = i + 1) {\n"
+    '        total = total + i * 2 - 1; // accumulate\n'
+    '        let name = "value_" + i;\n'
+    "    }\n"
+    "    return total;\n"
+    "}\n"
+)
+_KEYWORDS = ["func", "let", "for", "return", "if", "else", "while", "break", "continue",
+             "true", "false", "null", "int", "float", "string", "bool", "struct", "enum",
+             "import", "export", "const", "static", "public", "private", "class", "new",
+             "delete", "try", "catch", "throw", "switch", "case", "default", "do", "goto",
+             "sizeof", "typedef", "union", "volatile", "register"]
+
+
+def _realistic_lexer(n_keywords):
+    """A realistic lexer: core rules + n_keywords literal keyword rules placed before
+    the identifier rule (so a keyword wins the equal-length tie)."""
+    rules = [
+        (0, r"\s+", True),       # whitespace
+        (1, r"//[^\n]*", True),  # line comment
+        (2, r"[0-9]+", False),   # number
+        (3, r'"[^"]*"', False),  # string
+    ]
+    rules += [(100 + i, kw, False) for i, kw in enumerate(_KEYWORDS[:n_keywords])]
+    rules += [
+        (4, r"[A-Za-z_]\w*", False),    # identifier
+        (5, r"[-+*/=<>;(){},]", False),  # operators / punctuation
+    ]
+    return scilex.Lexer(rules), len(rules)
+
+
+def _first_byte_sets(n_keywords):
+    """The possible leading bytes of each rule — what a first-byte dispatch indexes on."""
+    import string
+    ws = set(" \t\n\r\f\v")
+    digits = set(string.digits)
+    letters = set(string.ascii_letters + "_")
+    ops = set("-+*/=<>;(){},")
+    sets = [ws, {"/"}, digits, {'"'}]
+    sets += [{kw[0]} for kw in _KEYWORDS[:n_keywords]]
+    sets += [letters, ops]
+    return sets
+
+
+def realistic_lexer_dispatch_study():
+    """Data for the first-byte-dispatch question (tranche 3): how tokenization scales
+    with rule count on a realistic lexer, and how much a dispatch would prune. Pure
+    measurement — no lexer change."""
+    source = _SNIPPET * 60  # ~15 KB of realistic source
+    tokens = _realistic_lexer(40)[0].tokenize(source)
+    print(f"  realistic lexer — rule-count scaling (~{len(source) // 1024} KB, "
+          f"{len(tokens)} tokens; whitespace/comments skipped):")
+    print(f"    {'rules':>6} {'tokenize':>11} {'us/token':>10}")
+    points = []
+    for n_kw in (0, 8, 16, 24, 32, 40):
+        lexer, n_rules = _realistic_lexer(n_kw)
+        t = best_time(lambda lx=lexer: lx.tokenize(source), iterations=20, repeats=3)
+        points.append((n_rules, t))
+        print(f"    {n_rules:>6} {t * 1e3:8.2f} ms {t / len(tokens) * 1e6:8.3f}")
+    (r0, t0), (r1, t1) = points[0], points[-1]
+    slope = (t1 - t0) / (r1 - r0)  # added time per extra rule, whole corpus
+    print(f"    => ~{slope * 1e6:.1f} us per added rule over the corpus "
+          f"({(t1 / t0):.1f}x slower at {r1} rules vs {r0})")
+    # First-byte dispatch projection (static): avg rules whose leading byte can match a
+    # position, vs total rules — the match-attempt reduction a dispatch would buy.
+    sets = _first_byte_sets(40)
+    total = len(sets)
+    tried = sum(sum(1 for s in sets if ch in s) for ch in source) / len(source)
+    print(f"    first-byte dispatch projection ({total}-rule lexer): avg rules whose "
+          f"leading byte matches a position = {tried:.1f}/{total} -> ~{total / tried:.1f}x "
+          f"fewer match attempts")
+
+
 def main():
     print("SciLex benchmarks (best-of-5 wall time, minimum reported; see BENCHMARKS.md):")
     benign_tokenization()
     redos_linearity()
+    realistic_lexer_dispatch_study()
 
 
 if __name__ == "__main__":

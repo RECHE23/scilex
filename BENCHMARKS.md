@@ -79,6 +79,39 @@ backtracking engine explores `O(2ⁿ)` partitions; REAL (and therefore SciLex) i
 grows **linearly** and is still ~78 µs at `n = 1000`, where `re` would not finish in any
 practical time. This is the case SciLex exists for.
 
+### B3. Rule-count scaling — the first-byte-dispatch question
+
+A *realistic* lexer (a small-language rule set: whitespace, line comments, numbers,
+strings, an identifier rule, operators, plus N literal keyword rules before the
+identifier) over ~11 KB of representative source (3240 tokens). The scanner tries
+**every** rule at **every** position, so the cost is `Θ(n_rules × input)`; this measures
+how steeply that grows, to decide whether a **first-byte dispatch** (index rules by their
+possible leading byte, try only the matching bucket) is worth implementing.
+
+| rules | tokenize | µs / token |
+| ---: | ---: | ---: |
+| 6  | ~7.5 ms  | 2.3 |
+| 14 | ~12.3 ms | 3.8 |
+| 22 | ~16.9 ms | 5.2 |
+| 30 | ~21.5 ms | 6.6 |
+| 38 | ~26.2 ms | 8.1 |
+| 46 | ~30.7 ms | 9.5 |
+
+**Reading.** Time grows **linearly with the rule count** — ~**578 µs per added rule** over
+the corpus, **4.1× slower at 46 rules than at 6**. So at realistic sizes the scan is
+dominated by *trying rules that cannot match the current byte*. A static look at the
+46-rule lexer confirms the opportunity: averaged over the input, only **~1.8 of 46** rules
+have a leading byte that *could* match a given position — a first-byte dispatch would try
+~1.8 rules instead of 46, i.e. **~25× fewer match attempts**. Subtracting the rule-count-
+independent floor (Token construction, the cursor loop, the few matching rules), the
+attempt-reduction projects to roughly a **3–7× wall-time speedup on 20–50-rule lexers**.
+
+**Verdict (data-first).** The dispatch is **justified** for realistic lexers: the
+per-position all-rules scan is the clear, measured bottleneck, and pruning by leading byte
+removes most of it without changing semantics. It stays **deferred until implemented under
+the same gate** (100 % 4D, behaviour-preserving) — but the data, not the principle, now
+backs it. Aho-Corasick / a fuller prefilter remain out of scope (no data demands them).
+
 ## Methodology & reproduction
 
 - **Goal:** a regression tripwire plus an honest win/lose map — not a throughput
