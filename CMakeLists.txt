@@ -7,7 +7,7 @@
 #   cmake -DSCILEX_REAL_INCLUDE=/path/to/real/include ...
 # (e.g. the path printed by `python -c "import real; print(real.get_include())"`).
 cmake_minimum_required(VERSION 3.16)
-project(scilex VERSION 2026.6.5 LANGUAGES CXX)
+project(scilex VERSION 2026.6.0 LANGUAGES CXX)
 
 # Use ccache as a compiler launcher when available (a no-op otherwise): the
 # coverage / sanitizer / dual-compiler gates rebuild from scratch, so caching
