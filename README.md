@@ -108,9 +108,10 @@ A separate `.github/workflows/docs.yml` workflow also deploys the API reference 
 **GitHub Pages** on each push to `main` (enable Pages once with "GitHub Actions" as
 the source).
 
-> **Note.** The first release, `v2026.6.0`, predates this docs step — it shipped
-> wheels + sdist only. The API-reference artifact and the Pages deployment were added
-> immediately after and apply to subsequent releases.
+> **Note.** The first release, `v2026.6.0`, shipped only the early binding (eager/lazy
+> `tokenize`, `eof`, `layout`, positioned errors) with wheels + sdist. The first-byte
+> dispatch, the error `.context` snippet, and the documentation artifact / Pages
+> deployment arrived after and ship from `v2026.6.1` onward.
 
 **One-time PyPI setup.** Publishing needs a PyPI
 [Trusted Publisher](https://docs.pypi.org/trusted-publishers/) configured once for

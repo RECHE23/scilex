@@ -39,7 +39,7 @@ the difference that matters for a lexer fed untrusted or machine-generated input
 | Machine | Apple Silicon (`arm64`), Darwin 23.6.0 |
 | Binding | abi3 CPython extension as built by `setup.py` (`Py_LIMITED_API` 3.10) |
 | Method | best-of-5 timed runs, **minimum** reported |
-| As of | 2026-06-19 — the Python-binding maturation reserve |
+| As of | 2026-06-19 — binding maturation (scan/eof/layout, dispatch, `.context`), shipped in v2026.6.1 |
 
 ## Baseline
 

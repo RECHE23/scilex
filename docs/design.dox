@@ -96,7 +96,8 @@ The **Python binding** (abi3, CPython Limited API) mirrors this surface:
 `Lexer.tokenize`, `Lexer.scan` (a lazy generator), and `Layout.apply`, each taking
 `eof=True` for the terminal token. A token is a real `Token` class with a structured
 `Position` (`offset` / `line` / `column`, also reachable as `token.position`); a
-lexical error is `scilex.error` (aliased `LexerError`) carrying a `.position`.
+lexical error is `scilex.error` (aliased `LexerError`) carrying a `.position` and a
+`.context` snippet of the source around the offending byte (with an enriched message).
 `scilex.get_include()` returns the header directory, so a C++ project can compile
 against SciLex located through its Python install (add `real.get_include()` too,
 since SciLex's headers include REAL's).
@@ -123,11 +124,12 @@ for t in lx.scan("foo + 42"):
 # eof=True appends a terminal END_OF_INPUT token (a parser always has a token).
 lx.tokenize("42", eof=True)[-1].kind == scilex.END_OF_INPUT
 
-# A lexical error carries its position.
+# A lexical error carries its position and a source-context snippet.
 try:
     lx.tokenize("foo @")
 except scilex.error as e:
     e.position            # Position(line=1, column=5, offset=4)
+    e.context             # 'foo ‹@›'  (the offending byte, fenced)
 
 # Indentation layout (Python-like): NEWLINE / INDENT / DEDENT from leading columns.
 src = "if x:\n    a\nb"
