@@ -13,7 +13,7 @@
  * comment-only) carry no structure and are naturally ignored.
  *
  * Indentation width is the byte column of a line's first token (tabs and spaces
- * each count as one column; v1 does not police mixed tabs/spaces, and there is
+ * each count as one column; it does not police mixed tabs/spaces, and there is
  * no implicit line continuation inside brackets).
  *
  * Input must be an end-of-input-terminated token sequence (the lexer's

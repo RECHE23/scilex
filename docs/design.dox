@@ -78,7 +78,7 @@ A line that dedents to a column **no open block used** throws a
 \ref scilex::layout_error. Blank and comment-only lines carry no token, so they add
 no structure and are naturally ignored. The terminal \ref scilex::end_of_input is
 preserved. The indentation width is simply the byte column of the line's first
-token — v1 does not police mixed tabs and spaces (see \ref x_limits).
+token — it does not police mixed tabs and spaces (see \ref x_limits).
 
 \section x_api 5. The API: eager, lazy, and layout
 
@@ -138,7 +138,7 @@ lay = scilex.Lexer([(0, r"\s+", True), (1, r"\w+", False), (2, r":", False)])
 # [1, 1, 2, NEWLINE, INDENT, 1, NEWLINE, DEDENT, 1, NEWLINE, END_OF_INPUT]
 \endcode
 
-\section x_limits 7. Known limitations (honest scope)
+\section x_limits 7. Current behaviour and growth
 
 - **Per-rule scan, pruned by a first-byte dispatch.** A naive scan tries every rule at
   every position (\f$\Theta(n_\text{rules}\times \text{input})\f$). The lexer instead
@@ -151,7 +151,7 @@ lay = scilex.Lexer([(0, r"\s+", True), (1, r"\w+", False), (2, r":", False)])
   a rule is never wrongly skipped). Bucketing *class*-led rules too is a possible further
   step, not yet warranted by data.
 - **No modes / context-sensitive lexing**, and **no compile-time `static_lexer`**
-  (on REAL's `static_regex`) in v1 — deferred until a concrete consumer needs them.
+  (on REAL's `static_regex`) — not yet; they grow in when a concrete consumer needs them.
 - **Byte columns.** A `column` counts bytes, matching REAL's UTF-8 byte model: an
   ASCII column equals a character column, but a multibyte codepoint spans several
   byte columns.
