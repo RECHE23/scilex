@@ -263,7 +263,8 @@ uninstall-cli:
 
 # Cuts a calendar-versioned release: computes YYYY.M.PATCH with the patch reset
 # each month (first release of a month is .0; PEP 440 drops leading zeros, so
-# 2026.6.1, never 2026.06.001), bumps both version files, commits, tags and
+# 2026.6.1, never 2026.06.001), bumps pyproject.toml + __init__.py (CMakeLists.txt
+# derives its version from pyproject.toml, so it follows automatically), commits, tags and
 # pushes from a clean main. Pushing the tag IS the release. PyPI publishing is a
 # separate, per-package opt-in (add a release.yml workflow + a PyPI Trusted
 # Publisher); without it, this just creates a versioned git tag.

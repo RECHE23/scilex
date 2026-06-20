@@ -27,7 +27,7 @@ measured optimality.
 - Positioned errors with context snippet
 - Linear-time / ReDoS-safe (via REAL)
 
-**Not yet:** modes, `static_lexer`, codepoint columns, CLI.
+**Not yet:** modes, `static_lexer`, codepoint columns.
 
 See the [guided tour](docs/design.dox) for details.
 
@@ -155,7 +155,7 @@ pip.
 For CI or a reproducible build — where no on-disk layout can be assumed — fetch
 REAL with CMake FetchContent instead (`make build FETCH=1`, or
 `-DSCILEX_FETCH_DEPS=ON`); point it at a remote and pin a tag with
-`-DSCILEX_REAL_REPO=https://… -DSCILEX_REAL_TAG=v2026.6.6`.
+`-DSCILEX_REAL_REPO=https://… -DSCILEX_REAL_TAG=v2026.6.8`.
 
 ## Development
 

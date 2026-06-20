@@ -7,7 +7,16 @@
 # override with cmake -DSCILEX_REAL_INCLUDE=...
 # (e.g. the path printed by `python -c "import real; print(real.get_include())"`).
 cmake_minimum_required(VERSION 3.16)
-project(scilex VERSION 2026.6.1 LANGUAGES CXX)
+
+# Single source of truth for the version: pyproject.toml (which `make release`
+# bumps and setup.py reads). Deriving it here means the CMake package version can
+# never drift from the Python package — the defect that had left this frozen at
+# 2026.6.1 while the wheels shipped 2026.6.3.
+file(READ "${CMAKE_CURRENT_LIST_DIR}/pyproject.toml" _scilex_pyproject)
+if(NOT _scilex_pyproject MATCHES "[\r\n]version = \"([0-9]+\\.[0-9]+\\.[0-9]+)\"")
+  message(FATAL_ERROR "SciLex: could not parse the project version from pyproject.toml")
+endif()
+project(scilex VERSION "${CMAKE_MATCH_1}" LANGUAGES CXX)
 
 # Use ccache as a compiler launcher when available (a no-op otherwise): the
 # coverage / sanitizer / dual-compiler gates rebuild from scratch, so caching
@@ -30,7 +39,7 @@ option(SCILEX_COVERAGE "Build the tests with LLVM source-based coverage instrume
 #    FetchContent from a configurable repository + tag (no on-disk-layout
 #    assumption). The repository defaults to the sibling git checkout, so it
 #    works locally too; on CI point it at a remote and pin a tag, e.g.
-#      -DSCILEX_FETCH_DEPS=ON -DSCILEX_REAL_REPO=https://… -DSCILEX_REAL_TAG=v2026.6.6
+#      -DSCILEX_FETCH_DEPS=ON -DSCILEX_REAL_REPO=https://… -DSCILEX_REAL_TAG=v2026.6.8
 option(SCILEX_FETCH_DEPS "Fetch the dependencies with FetchContent" OFF)
 
 set(SCILEX_REAL_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../real-v1/include"
