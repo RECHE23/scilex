@@ -1,13 +1,14 @@
 # SciLex — performance baseline
 
-A reproducible wall-time baseline for the Python binding, comparing SciLex against
-Python's standard-library `re`. Its purpose is twofold: a **regression tripwire**
-between versions on the same machine, and an honest statement of **where SciLex wins
-and where it does not**.
+A reproducible baseline at two layers: the **C++ engine** directly, per grammar
+(`make bench-lex`), and the **Python binding** against the standard-library `re`
+(`make bench` runs the C++ table and then `bench.py`). Its purpose is twofold: a
+**regression tripwire** between versions on the same machine, and an honest statement
+of **where SciLex wins and where it does not**.
 
-Run it with **`make bench`** (or `python benchmarks/bench.py`). It is informational
-only — it prints a table, is never invoked by `full-local-gate`, and never fails a
-build.
+Both are informational only — they print tables, are never invoked by
+`full-local-gate`, and never fail a build. `make bench-lex` needs no Python build;
+`make bench` runs the C++ engine table first, then the binding comparison.
 
 For *why* the numbers look the way they do — the linear-scan engine and the REAL
 foundation — see the [design tour](https://github.com/RECHE23/scilex/blob/main/docs/design.dox).
@@ -32,6 +33,70 @@ the difference that matters for a lexer fed untrusted or machine-generated input
 | adversarial / ReDoS (B2) | **SciLex** (linear vs exponential) | REAL is linear-time and ReDoS-safe; `re` backtracks catastrophically |
 | untrusted / machine-generated | **SciLex** | the linear bound holds on *every* input — no pathological cliff |
 
+## C++ engine throughput — per grammar
+
+`bench.py` (below) measures the **Python binding**; this section measures the **C++
+engine directly** — the speed a C++ embedder or a SciParse parser sees, with no
+interpreter in the path. `make bench-lex` lexes each of the seven example grammars
+(`examples/<lang>.hpp`) over its own sample scaled to a ~256 KiB steady-state input,
+reporting MB/s for `tokenize()` (eager, full token vector) and `scan()` (lazy, O(1)
+memory — the parser path).
+
+| grammar | rules | tokens | eager MB/s | lazy MB/s |
+| --- | ---: | ---: | ---: | ---: |
+| json   | 12 | 58 793  | 2.48 | 2.49 |
+| lisp   |  8 | 96 600  | 1.63 | 1.66 |
+| cpp    | 41 | 52 228  | 1.80 | 1.83 |
+| css    | 17 | 64 224  | 1.18 | 1.18 |
+| math   | 12 | 123 376 | 1.17 | 1.18 |
+| python | 36 | 89 613  | 1.11 | 1.12 |
+| sql    | 39 | 38 760  | 0.80 | 0.80 |
+
+Method: lexer built once, warmup then **min of 9** timed passes, `-O2`, every result
+consumed through a volatile sink. Sizes are KiB (1024 B), throughput is MB/s (10⁶ B/s),
+same machine as the conditions below. Reproduce with `make bench-lex`.
+
+**Reading — what sets the pace.** Two levers, both visible in the table:
+
+1. *Token density.* The cost is paid **per token** — each token is one maximal-munch
+   decision. `json` and `math` share a 12-rule set, yet `math` runs ~2× slower because
+   its sample packs ~2× the tokens per KB (123 k vs 59 k): throughput tracks KB ÷ tokens.
+2. *Rules in the general list.* A rule whose pattern has no single fixed leading byte is
+   tried at **every** position. `sql` has the **fewest** tokens of the seven yet is the
+   **slowest** — its 31 case-insensitive keyword rules carry the `icase` flag, and the
+   first-byte dispatch deliberately refuses to bucket a flagged literal (the case-fold
+   could match another byte), so all 31 land in the general list and are attempted byte
+   by byte. `cpp` has an equal keyword count but as **plain** literals (first-byte
+   bucketed), and runs 2.3× faster at a comparable total rule count.
+
+This is the measured motivation for the next perf step (couple the dispatch to REAL's
+`pattern_hints`): REAL already knows an `icase` literal's possible leading bytes, so such
+rules could rejoin the dispatch instead of the general list — directly lifting the `sql`
+floor.
+
+**Reading — eager vs lazy.** `scan()` edges out `tokenize()` (it never materializes the
+token vector), but only just: both pay REAL's per-position NFA scan, which dominates. The
+lazy path's real win is **O(1) memory**, not speed — which is why a parser prefers it.
+
+**Reading — linearity (the guarantee, in C++).** The same `cpp` grammar over growing
+inputs:
+
+| KiB | eager MB/s |
+| ---: | ---: |
+| 64  | 1.82 |
+| 128 | 1.80 |
+| 256 | 1.81 |
+| 512 | 1.81 |
+
+Flat MB/s means time scales **linearly** with input — REAL's linear, ReDoS-safe bound
+holds for the lexer too, not only for the pathological `re` contrast in B2 below.
+
+**The honest position.** 0.8–2.5 MB/s is **slower** than `re` or `flex` (tens to hundreds
+of MB/s) on benign input — the price of running a real NFA at every position and building
+ordered maximal-munch `Token`s, in exchange for the linear guarantee. The dispatch/hints
+step above is the identified lever to narrow that gap where it is widest (flag- and
+class-led rules).
+
 ## Conditions of this baseline
 
 | | |
@@ -39,9 +104,9 @@ the difference that matters for a lexer fed untrusted or machine-generated input
 | Machine | Apple Silicon (`arm64`), Darwin 23.6.0 |
 | Binding | abi3 CPython extension as built by `setup.py` (`Py_LIMITED_API` 3.10) |
 | Method | best-of-5 timed runs, **minimum** reported |
-| As of | 2026-06-19 — binding maturation (scan/eof/layout, dispatch, `.context`), shipped in v2026.6.1 |
+| As of | 2026-06-20 — added the per-grammar C++ engine table (`make bench-lex`); binding rows from v2026.6.1 (scan/eof/layout, dispatch, `.context`) |
 
-## Baseline
+## Binding baseline (versus `re`)
 
 ### B1. Benign tokenization (the everyday case — `re` wins)
 
@@ -125,9 +190,10 @@ remaining ~6 ms floor matters.
 - **Goal:** a regression tripwire plus an honest win/lose map — not a throughput
   contest. Compare a fresh `make bench` to this table **on the same machine**; a clear,
   repeatable change is the signal.
-- **Reproduce:** `make bench` builds the extension in place and runs
-  `benchmarks/bench.py`. The pathological sweep stops `re` once a single match passes
-  one second (its curve is already established); SciLex is measured well past that.
+- **Reproduce:** `make bench-lex` compiles and runs the C++ per-grammar table (no
+  Python needed); `make bench` runs that and then builds the extension in place and runs
+  `benchmarks/bench.py`. The pathological sweep stops `re` once a single match passes one
+  second (its curve is already established); SciLex is measured well past that.
 - **Not gated.** `make bench` is excluded from `full-local-gate` on purpose — a noisy
   wall-time measurement must never turn a clean build red.
 - **Deferred:** a compile-time `static_lexer` (REAL's `static_regex`) and a faster

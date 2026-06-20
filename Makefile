@@ -37,11 +37,11 @@ CXXSTD       := -std=c++20
 # REAL is a dependency: include it as a system header so the linters analyze
 # SciLex's own code only (REAL passes its own gates).
 INCLUDES     := -Iinclude -isystem $(REAL_INCLUDE)
-FORMAT_FILES := $(shell find include tests examples fuzz -name '*.hpp' -o -name '*.cpp')
+FORMAT_FILES := $(shell find include tests examples fuzz benchmarks -name '*.hpp' -o -name '*.cpp')
 
 .PHONY: all build test sanitize coverage coverage-build coverage-html \
         lint misra doc doc-no-coverage format format-check full-local-gate \
-        python python-test bench example fuzz-check fuzz install uninstall release clean help
+        python python-test bench bench-lex example fuzz-check fuzz install uninstall release clean help
 
 .DEFAULT_GOAL := help
 
@@ -60,7 +60,8 @@ help:
 	@echo "  make format-check  Uncrustify, dry-run, exits non-zero on diff"
 	@echo "  make python     Build the Python extension in place (abi3)"
 	@echo "  make python-test  Run the Python binding test suite"
-	@echo "  make bench      Wall-time micro-benchmarks vs Python re (informational)"
+	@echo "  make bench      C++ per-grammar throughput + Python re comparison (informational)"
+	@echo "  make bench-lex  C++ per-grammar engine throughput only, MB/s (informational)"
 	@echo "  make example    Build and run the example lexers (real languages)"
 	@echo "  make fuzz-check Deterministic lexer-oracle gate (property invariants)"
 	@echo "  make fuzz       libFuzzer robustness fuzzing of the lexer (Clang; FUZZ_TIME=secs)"
@@ -164,7 +165,16 @@ python-test: python
 	$(PYRUN) -m unittest discover -s python/tests
 
 # Wall-time micro-benchmarks vs Python's re (informational; never gated). See BENCHMARKS.md.
-bench: python
+# C++ per-grammar engine throughput (MB/s) on the example grammars, scaled to
+# steady state. Standalone (no Python build); informational, never gated.
+bench-lex:
+	@mkdir -p $(BUILD)/benchmarks
+	c++ $(CXXSTD) -O2 -Wall -Wextra -Wpedantic -Werror $(INCLUDES) -Iexamples benchmarks/bench_lex.cpp -o $(BUILD)/benchmarks/bench_lex
+	@$(BUILD)/benchmarks/bench_lex
+
+# The full benchmark picture: the C++ engine throughput first, then the Python
+# binding versus re. Informational only — never part of full-local-gate.
+bench: bench-lex python
 	$(PYRUN) benchmarks/bench.py
 
 # Builds the example driver and runs every example's self-check. The grammars
