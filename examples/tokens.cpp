@@ -12,16 +12,19 @@
  *   tokens <lang>           tokenize <lang>'s built-in sample
  *   tokens <lang> <text>…   tokenize each <text> argument
  *
- * Printing one token per line (KIND, lexeme, line:col) is also the seed of the
- * eventual `scilex` command-line tool.
+ * A language flagged `uses_layout` runs through \ref scilex::layout (the
+ * indentation pass: NEWLINE / INDENT / DEDENT). Printing one token per line
+ * (KIND, lexeme, line:col) is also the seed of the eventual `scilex` CLI.
  */
 #include <iostream>
 #include <string_view>
 #include <vector>
 
 #include <scilex/scilex.hpp>
+#include <scilex/layout.hpp>
 
 #include "json.hpp"
+#include "python.hpp"
 
 namespace {
 
@@ -33,25 +36,41 @@ namespace {
     const char     * (*  kind_name)(int);       //!< Names a token kind for printing.
     std::string_view sample;                    //!< The built-in sample document.
     bool             (*          self_check)(); //!< Invariant self-check (true = ok).
+    bool             uses_layout;               //!< Run the indentation layout pass.
   };
 
   // The registry. Each new language: include its header above, add one line here.
   const std::vector<example> registry {
     {"json",
-     &scilex::examples::json::make_lexer,
-     &scilex::examples::json::kind_name,
-     scilex::examples::json::sample,
-     &scilex::examples::json::self_check},
+     &scilex::examples::json::make_lexer, &scilex::examples::json::kind_name,
+     scilex::examples::json::sample, &scilex::examples::json::self_check, false},
+    {"python",
+     &scilex::examples::python::make_lexer, &scilex::examples::python::kind_name,
+     scilex::examples::python::sample, &scilex::examples::python::self_check, true},
   };
 
-  //! \brief Tokenizes \p source with \p lang's grammar and prints each token.
+  //! \brief Tokenizes \p source with \p lang's grammar and prints each token
+  //!        (applying the layout pass when the language is layout-sensitive).
   void dump(const example&   lang,
             std::string_view source)
   {
     const scilex::lexer lex {lang.make_lexer()};
-    for (const scilex::token& tok : lex.scan(source)) {
-      std::cout << lang.kind_name(tok.kind) << '\t' << tok.lexeme << '\t'
-                << tok.start.line << ':' << tok.start.column << '\n';
+    const auto          print = [&](const scilex::token& tok) {
+                                  std::cout << lang.kind_name(tok.kind) << '\t' << tok.lexeme << '\t'
+                                            << tok.start.line << ':' << tok.start.column << '\n';
+                                };
+    if (lang.uses_layout) {
+      // Layout works from token positions: tokenize with a terminal EOF, then
+      // insert NEWLINE / INDENT / DEDENT.
+      const std::vector<scilex::token> flat {lex.tokenize(source, scilex::eof_policy::append)};
+      for (const scilex::token& tok : scilex::layout(flat)) {
+        print(tok);
+      }
+    }
+    else {
+      for (const scilex::token& tok : lex.scan(source)) {
+        print(tok);
+      }
     }
   }
 
