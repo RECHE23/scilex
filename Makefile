@@ -43,7 +43,7 @@ FORMAT_FILES := $(shell find include tests examples fuzz benchmarks cli -name '*
 
 .PHONY: all build test sanitize coverage coverage-build coverage-html \
         lint misra doc doc-no-coverage format format-check full-local-gate \
-        python python-test bench bench-lex cli example fuzz-check fuzz install uninstall release clean help
+        python python-test bench bench-lex cli example fuzz-check fuzz install uninstall install-cli uninstall-cli release clean help
 
 .DEFAULT_GOAL := help
 
@@ -69,7 +69,8 @@ help:
 	@echo "  make fuzz-check Deterministic lexer-oracle gate (property invariants)"
 	@echo "  make fuzz       libFuzzer robustness fuzzing of the lexer (Clang; FUZZ_TIME=secs)"
 	@echo "  make full-local-gate  Every gate in one command (the macOS gate of record)"
-	@echo "  make install    Install the Python package (pip) + the scilex CLI to PREFIX/bin"
+	@echo "  make install    Install the Python package (pip)"
+	@echo "  make install-cli  Install the scilex CLI to PREFIX/bin (opt-in; DESTDIR-aware)"
 	@echo "  make uninstall  Uninstall the Python package (pip)"
 	@echo "  make release    Cut a calendar-versioned release (tag + push)"
 	@echo "  make clean      Remove build artifacts"
@@ -243,14 +244,21 @@ full-local-gate:
 format-check:
 	uncrustify -c uncrustify.cfg --check $(FORMAT_FILES)
 
-install: cli
+install:
 	$(PYTHON) -m pip install .
+
+uninstall:
+	$(PYTHON) -m pip uninstall -y scilex
+
+# Install the scilex CLI binary — opt-in and separate from the pip package, so a
+# plain `make install` never needs write access to a system prefix. Override the
+# location with PREFIX= or BINDIR=; DESTDIR is honoured for staged installs.
+install-cli: cli
 	install -d $(DESTDIR)$(BINDIR)
 	install -m 0755 $(BUILD)/bin/scilex $(DESTDIR)$(BINDIR)/scilex
 	@echo "installed: $(DESTDIR)$(BINDIR)/scilex (override location with PREFIX= or BINDIR=)"
 
-uninstall:
-	$(PYTHON) -m pip uninstall -y scilex
+uninstall-cli:
 	rm -f $(DESTDIR)$(BINDIR)/scilex
 
 # Cuts a calendar-versioned release: computes YYYY.M.PATCH with the patch reset
