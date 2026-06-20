@@ -25,6 +25,7 @@
 
 #include "json.hpp"
 #include "python.hpp"
+#include "cpp.hpp"
 
 namespace {
 
@@ -47,6 +48,9 @@ namespace {
     {"python",
      &scilex::examples::python::make_lexer, &scilex::examples::python::kind_name,
      scilex::examples::python::sample, &scilex::examples::python::self_check, true},
+    {"cpp",
+     &scilex::examples::cpp::make_lexer, &scilex::examples::cpp::kind_name,
+     scilex::examples::cpp::sample, &scilex::examples::cpp::self_check, false},
   };
 
   //! \brief Tokenizes \p source with \p lang's grammar and prints each token
