@@ -37,11 +37,11 @@ CXXSTD       := -std=c++20
 # REAL is a dependency: include it as a system header so the linters analyze
 # SciLex's own code only (REAL passes its own gates).
 INCLUDES     := -Iinclude -isystem $(REAL_INCLUDE)
-FORMAT_FILES := $(shell find include tests -name '*.hpp' -o -name '*.cpp')
+FORMAT_FILES := $(shell find include tests examples -name '*.hpp' -o -name '*.cpp')
 
 .PHONY: all build test sanitize coverage coverage-build coverage-html \
         lint misra doc doc-no-coverage format format-check full-local-gate \
-        python python-test bench install uninstall release clean help
+        python python-test bench example install uninstall release clean help
 
 .DEFAULT_GOAL := help
 
@@ -61,6 +61,7 @@ help:
 	@echo "  make python     Build the Python extension in place (abi3)"
 	@echo "  make python-test  Run the Python binding test suite"
 	@echo "  make bench      Wall-time micro-benchmarks vs Python re (informational)"
+	@echo "  make example    Build and run the example lexers (real languages)"
 	@echo "  make full-local-gate  Every gate in one command (the macOS gate of record)"
 	@echo "  make install    Install the Python package (pip)"
 	@echo "  make uninstall  Uninstall the Python package (pip)"
@@ -164,6 +165,16 @@ python-test: python
 bench: python
 	$(PYRUN) benchmarks/bench.py
 
+# Builds the example driver and runs every example's self-check. The grammars
+# live in reusable headers (examples/<lang>.hpp, namespace scilex::examples::<lang>)
+# so the bench/fuzz/CLI can share them; examples/tokens.cpp is the thin demo +
+# `--check` gate over them. Compiled under -Werror; a failing self-check fails the gate.
+example:
+	@mkdir -p $(BUILD)/examples
+	c++ $(CXXSTD) -O2 -Wall -Wextra -Wpedantic -Werror $(INCLUDES) -Iexamples examples/tokens.cpp -o $(BUILD)/examples/tokens
+	@$(BUILD)/examples/tokens --check
+	@echo "examples: built; all self-checks pass"
+
 # The complete local quality gate in one command — the canonical pre-push check
 # and, since CI no longer runs macOS (see .github/workflows/ci.yml), the macOS gate
 # of record. Runs every check this machine owns and fails on any issue, including a
@@ -177,13 +188,14 @@ full-local-gate:
 	@$(MAKE) misra
 	@$(MAKE) doc-no-coverage
 	@$(MAKE) python-test
+	@$(MAKE) example
 	@$(MAKE) lint | tee $(BUILD)/lint.log; ! grep -qE 'warning:|error:' $(BUILD)/lint.log
 	@$(MAKE) coverage | tee $(BUILD)/coverage.log
 	# Gate on a flag, not a bare exit 1 in the rule: that exit is overridden by END's exit,
 	# so the gate silently accepted coverage below 100% 4D before this fix.
 	@awk '/^TOTAL/{seen=1; if (gsub(/100\.00%/, "&") != 4) bad=1} END{exit (seen && !bad) ? 0 : 1}' $(BUILD)/coverage.log \
 	  || { echo "full-local-gate: coverage is below 100% on some dimension — see above"; exit 1; }
-	@echo "full-local-gate: ALL gates green (clang + g++-14, sanitize, MISRA, lint, doc, python, 100% coverage)"
+	@echo "full-local-gate: ALL gates green (clang + g++-14, sanitize, MISRA, lint, doc, python, example, 100% coverage)"
 
 format-check:
 	uncrustify -c uncrustify.cfg --check $(FORMAT_FILES)
