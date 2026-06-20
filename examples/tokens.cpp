@@ -28,6 +28,7 @@
 #include "cpp.hpp"
 #include "sql.hpp"
 #include "css.hpp"
+#include "lisp.hpp"
 
 namespace {
 
@@ -59,6 +60,9 @@ namespace {
     {"css",
      &scilex::examples::css::make_lexer, &scilex::examples::css::kind_name,
      scilex::examples::css::sample, &scilex::examples::css::self_check, false},
+    {"lisp",
+     &scilex::examples::lisp::make_lexer, &scilex::examples::lisp::kind_name,
+     scilex::examples::lisp::sample, &scilex::examples::lisp::self_check, false},
   };
 
   //! \brief Tokenizes \p source with \p lang's grammar and prints each token
