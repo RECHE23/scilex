@@ -37,11 +37,11 @@ CXXSTD       := -std=c++20
 # REAL is a dependency: include it as a system header so the linters analyze
 # SciLex's own code only (REAL passes its own gates).
 INCLUDES     := -Iinclude -isystem $(REAL_INCLUDE)
-FORMAT_FILES := $(shell find include tests examples -name '*.hpp' -o -name '*.cpp')
+FORMAT_FILES := $(shell find include tests examples fuzz -name '*.hpp' -o -name '*.cpp')
 
 .PHONY: all build test sanitize coverage coverage-build coverage-html \
         lint misra doc doc-no-coverage format format-check full-local-gate \
-        python python-test bench example install uninstall release clean help
+        python python-test bench example fuzz-check fuzz install uninstall release clean help
 
 .DEFAULT_GOAL := help
 
@@ -62,6 +62,8 @@ help:
 	@echo "  make python-test  Run the Python binding test suite"
 	@echo "  make bench      Wall-time micro-benchmarks vs Python re (informational)"
 	@echo "  make example    Build and run the example lexers (real languages)"
+	@echo "  make fuzz-check Deterministic lexer-oracle gate (property invariants)"
+	@echo "  make fuzz       libFuzzer robustness fuzzing of the lexer (Clang; FUZZ_TIME=secs)"
 	@echo "  make full-local-gate  Every gate in one command (the macOS gate of record)"
 	@echo "  make install    Install the Python package (pip)"
 	@echo "  make uninstall  Uninstall the Python package (pip)"
@@ -175,6 +177,27 @@ example:
 	@$(BUILD)/examples/tokens --check
 	@echo "examples: built; all self-checks pass"
 
+# Deterministic lexer-oracle gate (fuzz/reference.hpp): runs every property invariant
+# (munch equivalence vs an independent reference scanner, coverage, lazy==eager, layout
+# balance, positioned errors, determinism) over the example grammars x a fixed adversarial
+# input set, compiled -Werror. The continuous libFuzzer explorer is `make fuzz`.
+fuzz-check:
+	@mkdir -p $(BUILD)/fuzz
+	c++ $(CXXSTD) -O2 -Wall -Wextra -Wpedantic -Werror $(INCLUDES) -Iexamples -Ifuzz fuzz/oracle_check.cpp -o $(BUILD)/fuzz/oracle_check
+	@$(BUILD)/fuzz/oracle_check
+
+# Continuous, coverage-guided fuzzing carrying the property oracle (fuzz/reference.hpp):
+# Clang + libFuzzer + ASan/UBSan. NOT part of the gate (it runs unbounded) — the bounded,
+# deterministic gate is `make fuzz-check`. FUZZ_TIME bounds a local run; the corpus lives
+# under build/ (not versioned), seeded from the example grammars and tests as representative
+# byte sequences. A wrong tokenization aborts with the grammar and the violated invariant.
+FUZZ_TIME ?= 30
+fuzz:
+	@mkdir -p $(BUILD)/fuzz/corpus
+	@cp examples/*.hpp tests/*.cpp $(BUILD)/fuzz/corpus/ 2>/dev/null || true
+	clang++ $(CXXSTD) -O1 -g -fsanitize=fuzzer,address,undefined $(INCLUDES) -Iexamples -Ifuzz fuzz/fuzz_lexer.cpp -o $(BUILD)/fuzz/fuzz_lexer
+	$(BUILD)/fuzz/fuzz_lexer -max_total_time=$(FUZZ_TIME) -timeout=10 -max_len=8192 $(BUILD)/fuzz/corpus
+
 # The complete local quality gate in one command — the canonical pre-push check
 # and, since CI no longer runs macOS (see .github/workflows/ci.yml), the macOS gate
 # of record. Runs every check this machine owns and fails on any issue, including a
@@ -189,13 +212,14 @@ full-local-gate:
 	@$(MAKE) doc-no-coverage
 	@$(MAKE) python-test
 	@$(MAKE) example
+	@$(MAKE) fuzz-check
 	@$(MAKE) lint | tee $(BUILD)/lint.log; ! grep -qE 'warning:|error:' $(BUILD)/lint.log
 	@$(MAKE) coverage | tee $(BUILD)/coverage.log
 	# Gate on a flag, not a bare exit 1 in the rule: that exit is overridden by END's exit,
 	# so the gate silently accepted coverage below 100% 4D before this fix.
 	@awk '/^TOTAL/{seen=1; if (gsub(/100\.00%/, "&") != 4) bad=1} END{exit (seen && !bad) ? 0 : 1}' $(BUILD)/coverage.log \
 	  || { echo "full-local-gate: coverage is below 100% on some dimension — see above"; exit 1; }
-	@echo "full-local-gate: ALL gates green (clang + g++-14, sanitize, MISRA, lint, doc, python, example, 100% coverage)"
+	@echo "full-local-gate: ALL gates green (clang + g++-14, sanitize, MISRA, lint, doc, python, example, fuzz-check, 100% coverage)"
 
 format-check:
 	uncrustify -c uncrustify.cfg --check $(FORMAT_FILES)
