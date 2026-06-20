@@ -122,8 +122,8 @@ tokenizer (`(?P<NUM>…)|(?P<ID>…)|…` + `finditer`).
 
 **Reading.** `re` is ~5× faster here. That is expected and reported plainly: the cost
 buys SciLex's linear guarantee and its ordered maximal-munch semantics, not a speed
-record on benign input. Tightening the per-position scan is a known, deliberately
-deferred lever — to be pursued only if a real workload makes it the bottleneck.
+record on benign input. Tightening the per-position scan is a known lever, pursued
+when a real workload makes it the bottleneck.
 
 ### B2. Pathological input (the linearity guarantee — SciLex wins decisively)
 
@@ -181,7 +181,7 @@ only ever try *more* rules than needed, never fewer. The 43 Python tests and the
 (incl. dedicated dispatch tests) pass unchanged; 100 % 4D on `lexer.hpp`.
 
 **Verdict.** Implemented (data-backed, measured ~5× on a realistic 46-rule lexer).
-Aho-Corasick / a fuller prefilter remain out of scope (no data demands them); bucketing
+Aho-Corasick / a fuller prefilter are not warranted yet (no data demands them); bucketing
 *class* leads (not just literals) is a possible further step if a future workload shows the
 remaining ~6 ms floor matters.
 
@@ -196,6 +196,6 @@ remaining ~6 ms floor matters.
   second (its curve is already established); SciLex is measured well past that.
 - **Not gated.** `make bench` is excluded from `full-local-gate` on purpose — a noisy
   wall-time measurement must never turn a clean build red.
-- **Deferred:** a compile-time `static_lexer` (REAL's `static_regex`) and a faster
-  per-position scan (e.g. first-byte / trie dispatch) are known levers, left until a
+- **Grows in:** a compile-time `static_lexer` (REAL's `static_regex`) and a faster
+  per-position scan (e.g. first-byte / trie dispatch) are known levers, grown in when a
   measured workload justifies them. No phantom numbers here for paths not yet built.

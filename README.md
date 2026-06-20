@@ -159,7 +159,7 @@ Publishing — while `docs.yml` deploys the reference to GitHub Pages.
 ## Design
 
 A guided tour of how SciLex works (maximal munch, REAL foundation, layout,
-C++/Python API, limitations) lives in
+C++/Python API, current scope) lives in
 [`docs/design.dox`](docs/design.dox) (also rendered by `make doc`).
 
 ## Performance
