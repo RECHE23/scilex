@@ -27,6 +27,7 @@
 #include "python.hpp"
 #include "cpp.hpp"
 #include "sql.hpp"
+#include "css.hpp"
 
 namespace {
 
@@ -55,6 +56,9 @@ namespace {
     {"sql",
      &scilex::examples::sql::make_lexer, &scilex::examples::sql::kind_name,
      scilex::examples::sql::sample, &scilex::examples::sql::self_check, false},
+    {"css",
+     &scilex::examples::css::make_lexer, &scilex::examples::css::kind_name,
+     scilex::examples::css::sample, &scilex::examples::css::self_check, false},
   };
 
   //! \brief Tokenizes \p source with \p lang's grammar and prints each token
