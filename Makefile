@@ -6,9 +6,12 @@
 #   make test CXX=g++-14
 # Switching compilers reuses a cached build dir, so run `make clean` first.
 #
-# SciLex depends on REAL's headers. REAL_INCLUDE points at them (default: a
-# sibling ../real-v1/include); override on the command line if REAL lives
-# elsewhere or is installed (real.get_include()).
+# SciLex depends on REAL's headers. REAL_INCLUDE points at them.
+# When cloning the repo, the common name is "real-regex" (to match the GitHub repo).
+# The default below is the maintainer's local layout. Override with
+#   make ... REAL_INCLUDE=/path/to/real-regex/include
+# or use FETCH=1 for CI. Use `python -c "import real; print(real.get_include())"`
+# when REAL is installed.
 
 CMAKE  ?= cmake
 CTEST  ?= ctest
@@ -18,7 +21,7 @@ PYRUN  := PYTHONPATH=$(CURDIR)/python $(PYTHON)
 # Parallelism: detected core count (override with JOBS=N).
 JOBS   ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
-REAL_INCLUDE ?= $(CURDIR)/../real-v1/include
+REAL_INCLUDE ?= $(CURDIR)/../real-v1/include  # common names: real-regex, real, real-v1
 
 ifeq ($(origin CXX),command line)
 CMAKE_CXX := -DCMAKE_CXX_COMPILER=$(CXX)

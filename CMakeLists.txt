@@ -3,8 +3,8 @@
 # The root Makefile is a thin orchestrator over these targets.
 #
 # SciLex is header-only and depends on REAL's headers. By default it looks for
-# them in a sibling checkout (../real-v1/include); override with
-#   cmake -DSCILEX_REAL_INCLUDE=/path/to/real/include ...
+# them in a sibling checkout (the maintainer's local layout uses ../real-v1);
+# override with cmake -DSCILEX_REAL_INCLUDE=...
 # (e.g. the path printed by `python -c "import real; print(real.get_include())"`).
 cmake_minimum_required(VERSION 3.16)
 project(scilex VERSION 2026.6.1 LANGUAGES CXX)
@@ -34,7 +34,7 @@ option(SCILEX_COVERAGE "Build the tests with LLVM source-based coverage instrume
 option(SCILEX_FETCH_DEPS "Fetch the dependencies with FetchContent" OFF)
 
 set(SCILEX_REAL_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../real-v1/include"
-    CACHE PATH "Path to REAL's include directory (when not fetching)")
+    CACHE PATH "Path to REAL's include directory (maintainer's default; override for your layout)")
 set(SCILEX_REAL_REPO "${CMAKE_CURRENT_SOURCE_DIR}/../real-v1"
     CACHE STRING "REAL git repository (path or URL) when fetching")
 set(SCILEX_REAL_TAG "main" CACHE STRING "REAL git tag when fetching")

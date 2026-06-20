@@ -6,7 +6,7 @@
 # against REAL's headers (located via `real.get_include()` in setup.py), but the built
 # extension is self-contained and imports nothing at run time. In an isolated build
 # (pip / `python -m build` / cibuildwheel) this makes REAL's headers available; a
-# source checkout falls back to a sibling `../real-v1/include` (see setup.py).
+# source checkout falls back to a sibling checkout of REAL (see setup.py for the exact default).
 [build-system]
 requires = ["setuptools>=68", "real-regex>=2026.6.6"]
 build-backend = "setuptools.build_meta"
@@ -19,7 +19,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
-authors = [{ name = "René Chenard", email = "rene.chenard.1@ulaval.ca" }]
+authors = [{ name = "René Chenard" }]
 keywords = ["lexer", "tokenizer", "maximal-munch", "scanner", "linear-time"]
 classifiers = [
     "Development Status :: 4 - Beta",
@@ -33,7 +33,9 @@ classifiers = [
 ]
 
 [project.urls]
+Homepage = "https://github.com/RECHE23/scilex"
 Repository = "https://github.com/RECHE23/scilex"
+Documentation = "https://reche23.github.io/scilex/"
 Issues = "https://github.com/RECHE23/scilex/issues"
 
 # The `scilex` package lives under python/; the C++ binding source under

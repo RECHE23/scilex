@@ -1,57 +1,108 @@
 # SciLex
 
-A small, header-only C++20 lexer built on [REAL](https://github.com/RECHE23/real-regex).
+**A small, header-only C++20 maximal-munch lexer built on REAL.**
 
-Define an ordered set of token rules — each a kind paired with a REAL regular
-expression — and SciLex tokenizes source text by **maximal munch** (longest
-match wins, rule order breaks ties). Because REAL is a linear-time engine,
-tokenization is linear and ReDoS-safe by construction: no token rule can make
-the scanner backtrack catastrophically.
+- Linear-time and ReDoS-safe by construction (via REAL).
+- Eager `tokenize` or lazy `scan`.
+- Optional indentation layout for significant-whitespace languages.
+- C++20 header-only + abi3 Python binding (CPython 3.10+).
+- Zero dependencies beyond REAL headers.
 
-This is a deliberate fresh start under the same premises as REAL — purity,
-simplicity, and measured optimality. SciLex is a thin layer over REAL, not a
-re-implementation of pattern matching.
+Define an ordered set of token rules — each a `(kind, regex, skip)` triple — and
+SciLex tokenizes by **maximal munch**: the longest anchored match wins, with rule
+order breaking ties. Because it is a thin layer over REAL, tokenization is linear
+and ReDoS-safe by construction.
 
-## Scope (v1)
+This follows the same design principles as REAL: purity, simplicity, and
+measured optimality.
 
-**Included:**
+## Features (v1)
 
-- Token rules: a kind, a `real::regex`, and a `skip` flag (whitespace, comments).
-- Maximal-munch tokenization with rule-order priority on equal-length ties.
-- Source positions: byte `offset`, 1-based `line` and byte `column`.
-- Non-owning tokens: each `lexeme` views into the source.
-- Two ways to consume tokens: `tokenize` (eager, into a vector) and `scan`
-  (a lazy single-pass range that produces one token at a time — no token
-  vector is allocated; the parser-friendly access pattern).
-- Optional synthetic end-of-input token (`eof_policy::append`): emits a final
-  `end_of_input` token at the real end position, so a parser always has a
-  current token to match.
-- Optional indentation layout (`scilex::layout`, an opt-in header): rewrites a
-  token stream with synthetic `newline` / `indent` / `dedent` tokens for
-  indentation-significant languages; throws `layout_error` on an inconsistent
-  dedent.
-- Lexical errors as exceptions carrying the failing position (`lex_error`).
-- Linear-time / ReDoS-safe tokenization, inherited from REAL.
+- Ordered token rules: `(kind, real::regex, skip)`
+- Maximal-munch matching (longest match wins, rule order for ties)
+- Source positions (byte offset, line, column)
+- Eager (`tokenize`) and lazy (`scan`) APIs
+- Optional `END_OF_INPUT` token
+- Optional indentation layout (NEWLINE / INDENT / DEDENT)
+- Positioned errors with context snippet
+- Linear-time / ReDoS-safe (via REAL)
 
-**Not in v1 (and honestly excluded — no phantom features):**
+**Out of scope for v1:** modes, `static_lexer`, codepoint columns, CLI.
 
-- Modes / context-sensitive lexing.
-- Compile-time `static_lexer` (built on REAL's `static_regex`).
-- Codepoint columns (columns are byte-based, matching REAL's UTF-8 model).
-- Command-line tool, JSON specification language.
+See the [guided tour](docs/design.dox) for details and known limitations.
 
-These may come later, each only if it earns its place — measured, tested, and
-kept minimal.
+## C++ API
+
+```cpp
+#include <scilex/scilex.hpp>
+
+std::vector<scilex::rule> rules = {
+    {0, real::regex("\\s+"), true},           // whitespace (skip)
+    {1, real::regex("if")},                   // keyword before identifier
+    {2, real::regex("[a-z_][a-z0-9_]*")},     // identifier
+    {3, real::regex("[0-9]+")},               // number
+};
+
+scilex::lexer lexer(std::move(rules));
+
+// Eager
+for (const auto& tok : lexer.tokenize("if x + 42")) { ... }
+
+// Lazy (preferred for parsers)
+for (const auto& tok : lexer.scan("if x + 42")) { ... }
+```
+
+See [`docs/design.dox`](docs/design.dox) for the complete C++ API (`lexer`, `token`, `position`, `layout`, `lex_error`).
+
+## Python binding
+
+An abi3 CPython extension (CPython 3.10+, Limited API).
+
+```python
+import scilex
+
+lx = scilex.Lexer([
+    (0, r"\s+", True),                 # whitespace (skip)
+    (1, r"[0-9]+", False),             # number
+    (2, r"[A-Za-z_][A-Za-z0-9_]*", False),
+])
+
+# Eager
+tokens = lx.tokenize("foo 42", eof=True)
+
+# Lazy (generator)
+for tok in lx.scan("foo 42"):
+    print(tok.kind, tok.lexeme, tok.position)
+
+# Errors with context
+try:
+    lx.tokenize("foo @")
+except scilex.error as e:
+    e.position
+    e.context
+```
+
+For significant indentation:
+
+```python
+laid = scilex.Layout().apply(lx.tokenize(src, eof=True))
+```
+
+`pip install scilex` (wheels + sdist). Use `scilex.get_include()` to compile C++ code against the installed headers.
+
+Build locally: `make python && make python-test`.
 
 ## Dependencies
 
-SciLex is header-only and depends only on REAL's headers. By default the build
-looks for them in a sibling checkout:
+SciLex is header-only and depends only on REAL's headers (the package
+`real-regex` on PyPI / https://github.com/RECHE23/real-regex).
+
+By default the build looks for them in a sibling checkout:
 
 ```
 ~/Projects/
-├── real-v1/      # REAL
-└── scilex-v1/    # SciLex  (uses ../real-v1/include by default)
+├── real-regex/   # REAL (https://github.com/RECHE23/real-regex)
+└── scilex/       # SciLex  (uses ../real-regex/include by default)
 ```
 
 Point the build elsewhere with `REAL_INCLUDE` (Makefile) or
@@ -64,7 +115,7 @@ REAL with CMake FetchContent instead (`make build FETCH=1`, or
 `-DSCILEX_FETCH_DEPS=ON`); point it at a remote and pin a tag with
 `-DSCILEX_REAL_REPO=https://… -DSCILEX_REAL_TAG=v2026.6.6`.
 
-## Build
+## Development
 
 ```bash
 make test        # build and run the test suite
@@ -75,7 +126,14 @@ make format      # uncrustify, in place
 make doc         # API reference (Doxygen) with embedded coverage
 ```
 
+The API reference is published at <https://reche23.github.io/scilex/>.
+
 Override the compiler with `make test CXX=g++-14`.
+
+**Coverage bar.** SciLex holds the SciLang-stack gate — **100% on all four
+dimensions** (lines, functions, regions and branches) of `include/`, checked by
+`make coverage` and enforced by `make full-local-gate`. (REAL, the engine beneath
+it, is the one documented exception to that gate — see its README.)
 
 `scilex::scilex` is the CMake target — `add_subdirectory`, `FetchContent`, or an
 installed config package. The config calls `find_dependency(real)`, so installing
@@ -90,131 +148,21 @@ target_link_libraries(app PRIVATE scilex::scilex)
 
 ## Releasing
 
-`make release` computes the next calendar version `YYYY.M.PATCH` — the patch
-resets each month, the first release of a month is `.0` (PEP 440 drops leading
-zeros, so `2026.6.1`, never `2026.06.001`) — bumps it in `pyproject.toml` and
-`python/scilex/__init__.py`, then commits, tags and pushes from a clean `main`.
-The pushed tag drives `.github/workflows/release.yml`,
-which checks the tag matches the version, builds abi3 wheels (`cibuildwheel`,
-Linux/macOS/Windows) and the self-contained sdist, builds the full **API reference**
-(Doxygen + the embedded coverage report + the guided tour), and publishes the
-distributions to PyPI via Trusted Publishing (OIDC, no stored secret). It then
-populates the GitHub `/releases` page with auto-generated notes, the wheels/sdist,
-and the API-reference tarball (`scilex-doc.tar.gz`). The pushed tag is the single
-thing that triggers a publish; SciLex remains consumable as source too (sibling
-checkout / FetchContent / `get_include()`).
-
-A separate `.github/workflows/docs.yml` workflow also deploys the API reference to
-**GitHub Pages** on each push to `main` (enable Pages once with "GitHub Actions" as
-the source).
-
-> **Note.** The first release, `v2026.6.0`, shipped only the early binding (eager/lazy
-> `tokenize`, `eof`, `layout`, positioned errors) with wheels + sdist. The first-byte
-> dispatch, the error `.context` snippet, and the documentation artifact / Pages
-> deployment arrived after and ship from `v2026.6.1` onward.
-
-**One-time PyPI setup.** Publishing needs a PyPI
-[Trusted Publisher](https://docs.pypi.org/trusted-publishers/) configured once for
-the project (publisher `RECHE23/scilex`, workflow `release.yml`, environment
-`pypi`) and a matching `pypi` GitHub environment — no API token is stored.
-
-## Python binding
-
-SciLex ships an abi3 CPython extension (use the C++ lexer from Python).
-`pip install scilex` installs one `cp310-abi3` wheel per platform (CPython 3.10+;
-the self-contained sdist compiles where no wheel matches, pulling REAL's headers
-from the `real-regex` build dependency). For a source checkout:
-
-```bash
-make python        # build the extension in place
-make python-test   # run the binding test suite
-```
-
-```python
-import scilex
-lx = scilex.Lexer([
-    (0, r"\s+", True),                       # (kind, pattern, skip) — skipped
-    (1, r"[0-9]+", False),                   # number
-    (2, r"[A-Za-z_][A-Za-z0-9_]*", False),   # identifier
-])
-
-# Eager: a list of rich Token objects (kind, lexeme, structured position).
-[(t.kind, t.lexeme) for t in lx.tokenize("foo 42")]      # [(2, 'foo'), (1, '42')]
-
-# Lazy: a generator yielding one Token at a time — nothing else is held.
-for tok in lx.scan("foo 42"):
-    tok.kind, tok.lexeme, tok.position.line, tok.position.column
-
-# A lexical error carries the failing position and a source-context snippet.
-try:
-    lx.tokenize("foo @")
-except scilex.error as e:
-    e.position                                            # Position(line=1, column=5, offset=4)
-    e.context                                             # 'foo ‹@›'  (the offending byte, fenced)
-    str(e)                                                # 'no rule matches at line 1, column 5: foo ‹@›'
-
-# eof=True appends a terminal END_OF_INPUT token (a parser always has a token).
-lx.tokenize("42", eof=True)[-1].kind == scilex.END_OF_INPUT
-```
-
-For indentation-significant languages, `Layout` rewrites an `eof=True` token
-stream with `NEWLINE` / `INDENT` / `DEDENT` tokens read from each line's leading
-column:
-
-```python
-lx = scilex.Lexer([(0, r"\s+", True), (1, r"\w+", False), (2, r":", False)])
-laid = scilex.Layout().apply(lx.tokenize("if x:\n    a\nb", eof=True))
-[t.kind for t in laid]
-# [1, 1, 2, NEWLINE, INDENT, 1, NEWLINE, DEDENT, 1, NEWLINE, END_OF_INPUT]
-```
-
-`scilex.get_include()` returns the header directory so a C++ project can compile
-against SciLex located through its Python install (add `real.get_include()` too,
-since SciLex's headers include REAL's).
-
-## Example
-
-```cpp
-#include <scilex/scilex.hpp>
-#include <vector>
-
-enum kind { WS, KW_IF, ID, NUM, PLUS };
-
-std::vector<scilex::rule> rules;
-rules.push_back({WS,    real::regex("\\s+"),  true}); // skipped
-rules.push_back({KW_IF, real::regex("if")});          // before ID: wins ties
-rules.push_back({ID,    real::regex("[a-z]+")});
-rules.push_back({NUM,   real::regex("[0-9]+")});
-rules.push_back({PLUS,  real::regex("\\+")});
-
-const scilex::lexer lexer(std::move(rules));
-
-// Eager: all tokens in a vector.
-for (const scilex::token& t : lexer.tokenize("if x + 42")) {
-    // t.kind, t.lexeme, t.start.{offset,line,column}
-}
-
-// Lazy: one token at a time, nothing else materialized.
-for (const scilex::token& t : lexer.scan("if x + 42")) {
-    // ...
-}
-```
+`make release` computes the next calendar version `YYYY.M.PATCH` (the patch resets
+each month; PEP 440 drops leading zeros). The pushed tag drives the release workflow
+— wheels + sdist + the API-reference tarball + a GitHub Release, published via Trusted
+Publishing — while `docs.yml` deploys the reference to GitHub Pages.
 
 ## Design
 
-A guided tour of how SciLex works — maximal munch, the REAL foundation,
-indentation layout, the C++/Python API, and the honest known limitations — lives in
-[`docs/design.dox`](https://github.com/RECHE23/scilex/blob/main/docs/design.dox),
-rendered into the API reference by `make doc`.
+A guided tour of how SciLex works (maximal munch, REAL foundation, layout,
+C++/Python API, limitations) lives in
+[`docs/design.dox`](docs/design.dox) (also rendered by `make doc`).
 
 ## Performance
 
-See [BENCHMARKS.md](BENCHMARKS.md) for a reproducible, honest baseline (`make
-bench`). The short of it: on benign input Python's `re` is faster (a mature C
-backtracking engine), but SciLex is **linear-time and ReDoS-safe by construction**
-— on a pathological pattern like `(a+)+b` it stays flat (~78 µs at 1000 chars)
-where `re` explodes exponentially (seconds, then never finishing). SciLex trades
-raw throughput on easy inputs for a guarantee that holds on every input.
+See [BENCHMARKS.md](BENCHMARKS.md). On normal input `re` is faster. On adversarial
+input SciLex stays linear while `re` explodes. See the benchmarks for details.
 
 ## License
 
@@ -222,4 +170,4 @@ MIT — see [LICENSE](LICENSE).
 
 ## Author
 
-René Chenard — rene.chenard@gmail.com
+René Chenard
