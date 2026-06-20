@@ -16,7 +16,7 @@ and ReDoS-safe by construction.
 This follows the same design principles as REAL: purity, simplicity, and
 measured optimality.
 
-## Features (v1)
+## Capabilities
 
 - Ordered token rules: `(kind, real::regex, skip)`
 - Maximal-munch matching (longest match wins, rule order for ties)
@@ -27,9 +27,9 @@ measured optimality.
 - Positioned errors with context snippet
 - Linear-time / ReDoS-safe (via REAL)
 
-**Out of scope for v1:** modes, `static_lexer`, codepoint columns, CLI.
+**Not yet:** modes, `static_lexer`, codepoint columns, CLI.
 
-See the [guided tour](docs/design.dox) for details and known limitations.
+See the [guided tour](docs/design.dox) for details.
 
 ## C++ API
 
