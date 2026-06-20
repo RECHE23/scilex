@@ -70,7 +70,7 @@ namespace scilex::examples::css {
   //! \brief Builds the CSS-like lexer. DIMENSION and PERCENTAGE precede the
   //!        bare NUMBER rule, so `12px` / `50%` munch whole rather than leaving
   //!        a dangling unit; HASH and at-rules precede IDENT.
-  inline scilex::lexer make_lexer()
+  inline std::vector<scilex::rule> make_rules()
   {
     std::vector<scilex::rule> rules;
     rules.push_back({ws, real::regex("\\s+"), true});
@@ -91,7 +91,13 @@ namespace scilex::examples::css {
     rules.push_back({semicolon, real::regex(";"), false});
     rules.push_back({comma, real::regex(","), false});
     rules.push_back({delim, real::regex(R"re([-.*>+~/])re"), false});
-    return scilex::lexer(std::move(rules));
+    return rules;
+  }
+
+  //! \brief Builds the lexer from its rule list (see \ref make_rules).
+  inline scilex::lexer make_lexer()
+  {
+    return scilex::lexer(make_rules());
   }
 
   //! \brief A stylesheet exercising a hash colour, a dimension and a percentage.

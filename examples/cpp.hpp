@@ -59,7 +59,7 @@ namespace scilex::examples::cpp {
   //! \brief Builds the C++-like lexer. Keyword rules precede \ref ident (munch
   //!        tie-break); the operator rule lists multi-byte forms before the
   //!        single-byte class so the longest operator always wins.
-  inline scilex::lexer make_lexer()
+  inline std::vector<scilex::rule> make_rules()
   {
     std::vector<scilex::rule> rules;
     rules.push_back({ws, real::regex("\\s+"), true});
@@ -81,7 +81,13 @@ namespace scilex::examples::cpp {
     // The munch stress: every multi-byte operator before the single-byte class.
     rules.push_back({op, real::regex(R"re(<<=|>>=|->\*|\.\.\.|<=>|::|->|<<|>>|<=|>=|==|!=|&&|\|\||\+\+|--|\+=|-=|\*=|/=|%=|&=|\|=|\^=|[-+*/%<>=&|^~!?.])re"), false});
     rules.push_back({punct, real::regex(R"re([{}()\[\];,])re"), false});
-    return scilex::lexer(std::move(rules));
+    return rules;
+  }
+
+  //! \brief Builds the lexer from its rule list (see \ref make_rules).
+  inline scilex::lexer make_lexer()
+  {
+    return scilex::lexer(make_rules());
   }
 
   //! \brief A snippet exercising scope (`::`), shift-assign (`<<=`),

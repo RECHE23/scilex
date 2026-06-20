@@ -78,7 +78,7 @@ namespace scilex::examples::python {
   //! \brief Builds the base lexer (before the layout pass). Keyword rules come
   //!        before \ref ident, so on an equal-length match (e.g. `if`) the
   //!        keyword wins; a longer identifier (`iffy`) still wins by munch.
-  inline scilex::lexer make_lexer()
+  inline std::vector<scilex::rule> make_rules()
   {
     std::vector<scilex::rule> rules;
     rules.push_back({ws, real::regex("\\s+"), true});
@@ -103,7 +103,13 @@ namespace scilex::examples::python {
     rules.push_back({rbracket, real::regex("\\]"), false});
     rules.push_back({lbrace, real::regex("\\{"), false});
     rules.push_back({rbrace, real::regex("\\}"), false});
-    return scilex::lexer(std::move(rules));
+    return rules;
+  }
+
+  //! \brief Builds the lexer from its rule list (see \ref make_rules).
+  inline scilex::lexer make_lexer()
+  {
+    return scilex::lexer(make_rules());
   }
 
   //! \brief A small function with nested blocks, so the layout pass must emit

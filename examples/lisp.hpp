@@ -53,7 +53,7 @@ namespace scilex::examples::lisp {
   //! \brief Builds the Lisp-like lexer. NUMBER precedes SYMBOL so a numeric
   //!        atom is a NUMBER on an equal-length match; SYMBOL is the catch-all
   //!        atom — any run of non-delimiter bytes — so operators need no rules.
-  inline scilex::lexer make_lexer()
+  inline std::vector<scilex::rule> make_rules()
   {
     std::vector<scilex::rule> rules;
     rules.push_back({ws, real::regex("\\s+"), true});
@@ -64,7 +64,13 @@ namespace scilex::examples::lisp {
     rules.push_back({number, real::regex("[+-]?[0-9]+(\\.[0-9]+)?"), false});
     rules.push_back({quote, real::regex("'"), false});
     rules.push_back({symbol, real::regex(R"re([^\s()";']+)re"), false});
-    return scilex::lexer(std::move(rules));
+    return rules;
+  }
+
+  //! \brief Builds the lexer from its rule list (see \ref make_rules).
+  inline scilex::lexer make_lexer()
+  {
+    return scilex::lexer(make_rules());
   }
 
   //! \brief A recursive function: nested, balanced parentheses with symbol and

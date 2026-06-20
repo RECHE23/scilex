@@ -53,7 +53,7 @@ namespace scilex::examples::sql {
   //! \brief Builds the SQL-like lexer. Each keyword rule carries the `icase`
   //!        flag, so it matches in any letter case; keyword rules precede
   //!        \ref ident so an equal-length match resolves to the keyword.
-  inline scilex::lexer make_lexer()
+  inline std::vector<scilex::rule> make_rules()
   {
     std::vector<scilex::rule> rules;
     rules.push_back({ws, real::regex("\\s+"), true});
@@ -71,7 +71,13 @@ namespace scilex::examples::sql {
     rules.push_back({str, real::regex(R"re('([^']|'')*')re"), false});
     rules.push_back({op, real::regex(R"re(<>|<=|>=|!=|\|\||[-+*/%<>=])re"), false});
     rules.push_back({punct, real::regex(R"re([(),.;])re"), false});
-    return scilex::lexer(std::move(rules));
+    return rules;
+  }
+
+  //! \brief Builds the lexer from its rule list (see \ref make_rules).
+  inline scilex::lexer make_lexer()
+  {
+    return scilex::lexer(make_rules());
   }
 
   //! \brief A query with a mixed-case keyword and a doubled-quote escape.

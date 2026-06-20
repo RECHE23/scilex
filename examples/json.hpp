@@ -66,7 +66,7 @@ namespace scilex::examples::json {
   //!
   //! Order is only a tie-break; here every rule has a distinct first byte (or a
   //! longer match), so maximal munch alone resolves each token.
-  inline scilex::lexer make_lexer()
+  inline std::vector<scilex::rule> make_rules()
   {
     std::vector<scilex::rule> rules;
     rules.push_back({ws, real::regex("\\s+"), true});
@@ -83,7 +83,13 @@ namespace scilex::examples::json {
     rules.push_back({kw_true, real::regex("true"), false});
     rules.push_back({kw_false, real::regex("false"), false});
     rules.push_back({kw_null, real::regex("null"), false});
-    return scilex::lexer(std::move(rules));
+    return rules;
+  }
+
+  //! \brief Builds the lexer from its rule list (see \ref make_rules).
+  inline scilex::lexer make_lexer()
+  {
+    return scilex::lexer(make_rules());
   }
 
   //! \brief A document exercising every token kind, including a string whose

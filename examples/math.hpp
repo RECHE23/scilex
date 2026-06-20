@@ -62,7 +62,7 @@ namespace scilex::examples::math {
   //! \brief Builds the calculator lexer. The NUMBER rule covers integer,
   //!        decimal and scientific forms, so an exponent sign stays inside the
   //!        number rather than splitting off as a minus operator.
-  inline scilex::lexer make_lexer()
+  inline std::vector<scilex::rule> make_rules()
   {
     std::vector<scilex::rule> rules;
     rules.push_back({ws, real::regex("\\s+"), true});
@@ -77,7 +77,13 @@ namespace scilex::examples::math {
     rules.push_back({lparen, real::regex("\\("), false});
     rules.push_back({rparen, real::regex("\\)"), false});
     rules.push_back({comma, real::regex(","), false});
-    return scilex::lexer(std::move(rules));
+    return rules;
+  }
+
+  //! \brief Builds the lexer from its rule list (see \ref make_rules).
+  inline scilex::lexer make_lexer()
+  {
+    return scilex::lexer(make_rules());
   }
 
   //! \brief A calculator expression: functions, a scientific number, every
