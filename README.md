@@ -92,6 +92,48 @@ laid = scilex.Layout().apply(lx.tokenize(src, eof=True))
 
 Build locally: `make python && make python-test`.
 
+## CLI
+
+`scilex` is a command-line lexer — `make cli` builds it, `make install` puts it on
+your `PATH` (`PREFIX=`/`BINDIR=` to choose where). It has two input modes.
+
+**Built-in grammars** — a showcase over the seven example languages (JSON, Python,
+C++, SQL, CSS, Lisp, math):
+
+```console
+$ scilex --list                       # the built-in grammars
+$ scilex --example json file.json     # lex a file …
+$ scilex --example python --layout    # … or its bundled sample, with INDENT/DEDENT
+```
+
+**Your own grammar** — the universal mode: bring a `.lex` file and lex anything.
+A grammar is one rule per line — `name`, a tab, `regex`, then an optional tab and
+`skip` (`#` comments and blank lines are ignored):
+
+```console
+$ cat my.lex
+WS	\s+	skip
+NUMBER	[0-9]+(\.[0-9]+)?
+IDENT	[A-Za-z_][A-Za-z0-9_]*
+OP	<=|>=|==|!=|[-+*/%=<>]
+
+$ echo 'x = 41 + 1' | scilex my.lex        # stdin when no file is given
+IDENT	x	1:1
+OP	=	1:3
+NUMBER	41	1:5
+OP	+	1:8
+NUMBER	1	1:10
+```
+
+Output is one token per line — the kind, a tab, the lexeme, a tab, then `line:col`;
+`--layout` adds the indentation tokens. A malformed grammar is reported with a
+clear, positioned error (`my.lex:3: invalid regex: …`) — never a crash. See
+`examples/sample.lex` for a worked file.
+
+This `.lex` format is a *tool* convenience parsed by the CLI; the library itself
+stays plain C++ rule lists (`std::vector<scilex::rule>`) — no spec language is
+embedded.
+
 ## Dependencies
 
 SciLex is header-only and depends only on REAL's headers (the package

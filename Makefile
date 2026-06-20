@@ -18,6 +18,8 @@ CTEST  ?= ctest
 BUILD  := build
 PYTHON ?= python3
 PYRUN  := PYTHONPATH=$(CURDIR)/python $(PYTHON)
+PREFIX ?= /usr/local
+BINDIR ?= $(PREFIX)/bin
 # Parallelism: detected core count (override with JOBS=N).
 JOBS   ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
@@ -37,11 +39,11 @@ CXXSTD       := -std=c++20
 # REAL is a dependency: include it as a system header so the linters analyze
 # SciLex's own code only (REAL passes its own gates).
 INCLUDES     := -Iinclude -isystem $(REAL_INCLUDE)
-FORMAT_FILES := $(shell find include tests examples fuzz benchmarks -name '*.hpp' -o -name '*.cpp')
+FORMAT_FILES := $(shell find include tests examples fuzz benchmarks cli -name '*.hpp' -o -name '*.cpp')
 
 .PHONY: all build test sanitize coverage coverage-build coverage-html \
         lint misra doc doc-no-coverage format format-check full-local-gate \
-        python python-test bench bench-lex example fuzz-check fuzz install uninstall release clean help
+        python python-test bench bench-lex cli example fuzz-check fuzz install uninstall release clean help
 
 .DEFAULT_GOAL := help
 
@@ -62,11 +64,12 @@ help:
 	@echo "  make python-test  Run the Python binding test suite"
 	@echo "  make bench      C++ per-grammar throughput + Python re comparison (informational)"
 	@echo "  make bench-lex  C++ per-grammar engine throughput only, MB/s (informational)"
-	@echo "  make example    Build and run the example lexers (real languages)"
+	@echo "  make cli        Build the scilex command-line lexer (cli/scilex.cpp)"
+	@echo "  make example    Build the CLI and run every example self-check (gate)"
 	@echo "  make fuzz-check Deterministic lexer-oracle gate (property invariants)"
 	@echo "  make fuzz       libFuzzer robustness fuzzing of the lexer (Clang; FUZZ_TIME=secs)"
 	@echo "  make full-local-gate  Every gate in one command (the macOS gate of record)"
-	@echo "  make install    Install the Python package (pip)"
+	@echo "  make install    Install the Python package (pip) + the scilex CLI to PREFIX/bin"
 	@echo "  make uninstall  Uninstall the Python package (pip)"
 	@echo "  make release    Cut a calendar-versioned release (tag + push)"
 	@echo "  make clean      Remove build artifacts"
@@ -177,15 +180,21 @@ bench-lex:
 bench: bench-lex python
 	$(PYRUN) benchmarks/bench.py
 
-# Builds the example driver and runs every example's self-check. The grammars
-# live in reusable headers (examples/<lang>.hpp, namespace scilex::examples::<lang>)
-# so the bench/fuzz/CLI can share them; examples/tokens.cpp is the thin demo +
-# `--check` gate over them. Compiled under -Werror; a failing self-check fails the gate.
-example:
-	@mkdir -p $(BUILD)/examples
-	c++ $(CXXSTD) -O2 -Wall -Wextra -Wpedantic -Werror $(INCLUDES) -Iexamples examples/tokens.cpp -o $(BUILD)/examples/tokens
-	@$(BUILD)/examples/tokens --check
-	@echo "examples: built; all self-checks pass"
+# Builds the scilex CLI (cli/scilex.cpp). The example grammars live in reusable
+# headers (examples/<lang>.hpp, namespace scilex::examples::<lang>) so the CLI,
+# bench, and fuzzer all share them; the CLI reuses that same registry for its
+# built-in --example grammars, and parses user .lex files for everything else.
+# Compiled under -Werror.
+cli:
+	@mkdir -p $(BUILD)/bin
+	c++ $(CXXSTD) -O2 -Wall -Wextra -Wpedantic -Werror $(INCLUDES) -Iexamples cli/scilex.cpp -o $(BUILD)/bin/scilex
+	@echo "cli: built $(BUILD)/bin/scilex"
+
+# The example gate: build the CLI, then run every grammar's self-check through
+# `scilex --check`. A failing self-check fails the gate.
+example: cli
+	@$(BUILD)/bin/scilex --check
+	@echo "examples: all self-checks pass"
 
 # Deterministic lexer-oracle gate (fuzz/reference.hpp): runs every property invariant
 # (munch equivalence vs an independent reference scanner, coverage, lazy==eager, layout
@@ -234,11 +243,15 @@ full-local-gate:
 format-check:
 	uncrustify -c uncrustify.cfg --check $(FORMAT_FILES)
 
-install:
+install: cli
 	$(PYTHON) -m pip install .
+	install -d $(DESTDIR)$(BINDIR)
+	install -m 0755 $(BUILD)/bin/scilex $(DESTDIR)$(BINDIR)/scilex
+	@echo "installed: $(DESTDIR)$(BINDIR)/scilex (override location with PREFIX= or BINDIR=)"
 
 uninstall:
 	$(PYTHON) -m pip uninstall -y scilex
+	rm -f $(DESTDIR)$(BINDIR)/scilex
 
 # Cuts a calendar-versioned release: computes YYYY.M.PATCH with the patch reset
 # each month (first release of a month is .0; PEP 440 drops leading zeros, so
