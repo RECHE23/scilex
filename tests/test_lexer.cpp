@@ -1,6 +1,7 @@
 // The lexer: maximal-munch tokenization, rule priority, skipping, position
 // tracking, empty-match safety and lexical errors.
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 #include "framework.hpp"
@@ -9,6 +10,12 @@
 using namespace std::string_view_literals;
 
 namespace {
+
+  // The lexer holds `const rule*` into its own rules_, so a copy would dangle; copy is
+  // deleted (move stays valid — vector move preserves element addresses). Enforce it.
+  static_assert(!std::is_copy_constructible_v<scilex::lexer>, "lexer must not be copyable");
+  static_assert(!std::is_copy_assignable_v<scilex::lexer>, "lexer must not be copy-assignable");
+  static_assert(std::is_move_constructible_v<scilex::lexer>, "lexer should stay movable");
 
   // Token kinds shared by the tests (plain ints: a token's kind is an int).
   inline constexpr int WS    {0};

@@ -113,6 +113,15 @@ namespace scilex {
       build_dispatch();
     }
 
+    // first_byte_index_/general_rules_ hold `const rule*` into rules_. A copy would
+    // duplicate rules_ but leave those pointers aimed at the source's buffer (dangling /
+    // wrong tie-break), so copy is deleted. Move is safe and kept: std::vector move
+    // preserves element addresses, so the pointers stay valid in the moved-to lexer.
+    lexer(const lexer&)            = delete;
+    lexer& operator=(const lexer&) = delete;
+    lexer(lexer&&)                 = default;
+    lexer& operator=(lexer&&)      = default;
+
     /*!
      * \brief Tokenizes \p source into the sequence of non-skipped tokens.
      *
