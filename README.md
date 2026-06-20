@@ -132,8 +132,11 @@ Override the compiler with `make test CXX=g++-14`.
 
 **Coverage bar.** SciLex holds the SciLang-stack gate — **100% on all four
 dimensions** (lines, functions, regions and branches) of `include/`, checked by
-`make coverage` and enforced by `make full-local-gate`. (REAL, the engine beneath
-it, is the one documented exception to that gate — see its README.)
+`make coverage` and enforced by `make full-local-gate` (using Apple clang 16).
+The published report on GitHub Pages / the doc tarball (built on clang 18) reads
+mid-90s (newer clang instruments more branches). This is the documented toolchain
+distinction; see the live report for exact figures. (REAL is the other documented
+exception to the 100% gate — see its README.)
 
 `scilex::scilex` is the CMake target — `add_subdirectory`, `FetchContent`, or an
 installed config package. The config calls `find_dependency(real)`, so installing
