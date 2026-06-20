@@ -26,6 +26,7 @@
 #include "json.hpp"
 #include "python.hpp"
 #include "cpp.hpp"
+#include "sql.hpp"
 
 namespace {
 
@@ -51,6 +52,9 @@ namespace {
     {"cpp",
      &scilex::examples::cpp::make_lexer, &scilex::examples::cpp::kind_name,
      scilex::examples::cpp::sample, &scilex::examples::cpp::self_check, false},
+    {"sql",
+     &scilex::examples::sql::make_lexer, &scilex::examples::sql::kind_name,
+     scilex::examples::sql::sample, &scilex::examples::sql::self_check, false},
   };
 
   //! \brief Tokenizes \p source with \p lang's grammar and prints each token
