@@ -43,7 +43,7 @@ FORMAT_FILES := $(shell find include tests examples fuzz benchmarks cli -name '*
 
 .PHONY: all build test sanitize coverage coverage-build coverage-html \
         lint misra doc doc-no-coverage format format-check full-local-gate \
-        python python-test bench bench-lex cli example fuzz-check fuzz install uninstall install-cli uninstall-cli release clean help
+        python python-test bench bench-lex cli example fuzz-check fuzz version-check install uninstall install-cli uninstall-cli release clean help
 
 .DEFAULT_GOAL := help
 
@@ -68,6 +68,7 @@ help:
 	@echo "  make example    Build the CLI and run every example self-check (gate)"
 	@echo "  make fuzz-check Deterministic lexer-oracle gate (property invariants)"
 	@echo "  make fuzz       libFuzzer robustness fuzzing of the lexer (Clang; FUZZ_TIME=secs)"
+	@echo "  make version-check  Assert pyproject = __init__ = CMake-derived version"
 	@echo "  make full-local-gate  Every gate in one command (the macOS gate of record)"
 	@echo "  make install    Install the Python package (pip)"
 	@echo "  make install-cli  Install the scilex CLI to PREFIX/bin (opt-in; DESTDIR-aware)"
@@ -218,6 +219,19 @@ fuzz:
 	clang++ $(CXXSTD) -O1 -g -fsanitize=fuzzer,address,undefined $(INCLUDES) -Iexamples -Ifuzz fuzz/fuzz_lexer.cpp -o $(BUILD)/fuzz/fuzz_lexer
 	$(BUILD)/fuzz/fuzz_lexer -max_total_time=$(FUZZ_TIME) -timeout=10 -max_len=8192 $(BUILD)/fuzz/corpus
 
+# Version-consistency gate: pyproject.toml is the single source of truth — `make
+# release` bumps __init__.py from it, CMakeLists.txt derives it. Asserts the three
+# agree and that CMake still DERIVES (no hardcoded literal that could drift) — the
+# invariant the CMake 2026.6.1-vs-.3 drift violated.
+version-check:
+	@py=$$(sed -nE 's/^version = "([0-9][0-9.]*)"/\1/p' pyproject.toml); \
+	 ini=$$(sed -nE 's/^__version__ = "([0-9][0-9.]*)"/\1/p' python/scilex/__init__.py); \
+	 if [ -z "$$py" ]; then echo "version-check: no version found in pyproject.toml"; exit 1; fi; \
+	 if [ "$$py" != "$$ini" ]; then echo "version-check: DRIFT pyproject=$$py vs __init__=$$ini"; exit 1; fi; \
+	 if ! grep -q 'file(READ.*pyproject\.toml' CMakeLists.txt; then echo "version-check: CMakeLists.txt must derive its version from pyproject.toml"; exit 1; fi; \
+	 if grep -qE '^project\([A-Za-z_]+ VERSION [0-9]' CMakeLists.txt; then echo "version-check: CMakeLists.txt has a hardcoded VERSION (must derive from pyproject.toml)"; exit 1; fi; \
+	 echo "version-check: $$py (pyproject = __init__ = CMake-derived)"
+
 # The complete local quality gate in one command — the canonical pre-push check
 # and, since CI no longer runs macOS (see .github/workflows/ci.yml), the macOS gate
 # of record. Runs every check this machine owns and fails on any issue, including a
@@ -225,6 +239,7 @@ fuzz:
 # is ever suspect, `rm -rf $(COV_DIR)` first to force a clean re-measure.
 full-local-gate:
 	@$(MAKE) format-check
+	@$(MAKE) version-check
 	@$(MAKE) test
 	@$(MAKE) test CXX=g++-14 BUILD=$(BUILD)/gcc
 	@$(MAKE) sanitize
@@ -239,7 +254,7 @@ full-local-gate:
 	# so the gate silently accepted coverage below 100% 4D before this fix.
 	@awk '/^TOTAL/{seen=1; if (gsub(/100\.00%/, "&") != 4) bad=1} END{exit (seen && !bad) ? 0 : 1}' $(BUILD)/coverage.log \
 	  || { echo "full-local-gate: coverage is below 100% on some dimension — see above"; exit 1; }
-	@echo "full-local-gate: ALL gates green (clang + g++-14, sanitize, MISRA, lint, doc, python, example, fuzz-check, 100% coverage)"
+	@echo "full-local-gate: ALL gates green (clang + g++-14, sanitize, MISRA, lint, doc, python, example, fuzz-check, version-check, 100% coverage)"
 
 format-check:
 	uncrustify -c uncrustify.cfg --check $(FORMAT_FILES)
