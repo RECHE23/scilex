@@ -9,8 +9,10 @@
  *
  * What this grammar covers
  *   - realistic code: a full keyword set, identifiers, operators (augmented and
- *     walrus/arrow/ellipsis), `@` decorators, `(` `)` `[` `]`, and `{` `}` as
- *     dict/set punctuation at the top level;
+ *     walrus/arrow/ellipsis), `@` decorators, and `(` `)` `[` `]` `{` `}` as
+ *     brackets / dict / set;
+ *   - implicit line continuation: code wrapped across lines inside `()` `[]` `{}`
+ *     adds no INDENT/DEDENT (Layout Awareness Level A — `bracket` is insignificant);
  *   - numbers: decimal/float/exponent, `_` separators, `0x`/`0o`/`0b` bases, and
  *     the `j` imaginary suffix;
  *   - strings: single/double quoted with escapes, and triple-quoted `"""…"""` /
@@ -21,34 +23,28 @@
  *
  * What it does not cover (a realistic *example of modes*, not a full Python lexer
  * — none of these is excluded in principle, they are just beyond this sample):
- *   - implicit line continuation inside `()` `[]` `{}` (the layout pass treats
- *     every newline as significant — the same Layout Awareness gap as YAML's
- *     multi-line flow; see include/scilex/layout.hpp);
  *   - triple-quoted / multi-line f-strings;
  *   - f-string format specs: the `:fmt` tail of `{value:fmt}` lexes as code
  *     (colon + tokens), not as a literal spec;
- *   - bracket depth for the end of an interpolation: only `{` `}` are tracked, so
- *     a literal `}` inside a `[]`/`()` of an interpolation would close it (a rare
- *     edge);
  *   - raw / byte string prefixes (`r"…"`, `b"…"`, `rf"…"`).
  *
  * The modes and the brace-depth insight
- *   Four modes: `default` (top-level code), `fstr_dq` / `fstr_sq` (an f-string
- *   body), and `interp` (an interpolation). The decisive design point is that an
- *   interpolation IS code: every code rule is active in both `default` and
- *   `interp` (`in_mode = {"default", "interp"}`), so the interpolation reuses the
- *   exact same rules with no duplication. And `{` pushes `interp` from inside any
- *   f-string body OR from inside an interpolation, while `}` pops — so the stack
- *   tracks brace depth, exactly like CPython:
+ *   Five modes: `default` (top-level code), `fstr_dq` / `fstr_sq` (an f-string
+ *   body), `interp` (an f-string interpolation), and `bracket` (inside `()` `[]`
+ *   `{}`). The decisive design point is that an interpolation and a bracket are both
+ *   *code*: every code rule is active in `default`, `interp` and `bracket`, so they
+ *   reuse the exact same rules with no duplication. `{` opens an interpolation from
+ *   an f-string body (push `interp`) but a dict/set elsewhere (push `bracket`); a
+ *   `}` closes whichever the stack top is. `bracket` is layout-insignificant, so
+ *   code wrapped across lines in brackets is implicit line continuation:
  *
  *     f"{ {1:2} }"
- *       f"  push fstr_dq   { push interp   {(dict) push interp
- *       1:2   }(dict) pop   }(interp) pop  " pop
+ *       f"  push fstr_dq   {  push interp   {(dict) push bracket
+ *       1:2   }(dict) pop bracket   }(interp) pop interp  " pop fstr_dq
  *
- *   The interpolation ends at the `}` that pops back to the f-string body, not at
- *   the first `}` — a dict/set literal inside `{…}` just nests another level.
- *   The engine is unchanged: the only additions over a flat grammar are `in_mode`
- *   and a push/pop `action` on the delimiter rules.
+ *   The interpolation ends at the `}` that pops `interp`, not at the dict's `}`
+ *   (which pops `bracket`) — the stack tells them apart. The engine is unchanged:
+ *   the only additions over a flat grammar are `in_mode` and a push/pop `action`.
  */
 #ifndef SCILEX_EXAMPLE_PYTHON_HPP
 #define SCILEX_EXAMPLE_PYTHON_HPP
@@ -87,10 +83,10 @@ namespace scilex::examples::python {
     rparen,
     lbracket,
     rbracket,
-    lbrace,       //!< top-level `{` (dict/set) — no mode change
-    rbrace,       //!< top-level `}` (dict/set) — no mode change
-    interp_open,  //!< `{` opening an interpolation — pushes `interp`
-    interp_close, //!< `}` closing the innermost interpolation/brace — pops `interp`
+    lbrace,       //!< `{` (dict / set) — pushes `bracket`
+    rbrace,       //!< `}` closing a dict / set — pops `bracket`
+    interp_open,  //!< `{` opening an f-string interpolation — pushes `interp`
+    interp_close, //!< `}` closing an interpolation — pops `interp`
   };
 
   //! \brief A printable name for each kind, including the layout / EOF tokens.
@@ -152,8 +148,11 @@ namespace scilex::examples::python {
   inline std::vector<scilex::rule> make_rules()
   {
     using op_t = scilex::mode_action::op;
-    const std::vector<std::string> code   {"default", "interp"};            // interpolation is code
-    const std::vector<std::string> bodies {"fstr_dq", "fstr_sq", "interp"}; // where `{` opens an interp
+    // Code runs at the top level, inside an interpolation, and inside a bracket
+    // (the layout-insignificant continuation mode — see make_lexer).
+    const std::vector<std::string> code     {"default", "interp", "bracket"};
+    const std::vector<std::string> bodies   {"fstr_dq", "fstr_sq"};           // a `{` here opens an interpolation
+    const std::vector<std::string> brackets {"default", "interp", "bracket"}; // ( [ { open a bracket here
 
     std::vector<scilex::rule> rules;
     // --- trivia (shared by code and interpolations) --------------------------
@@ -189,15 +188,19 @@ namespace scilex::examples::python {
     rules.push_back(rule(colon, R"re(:)re", code));
     rules.push_back(rule(comma, R"re(,)re", code));
     rules.push_back(rule(dot, R"re(\.)re", code));
-    rules.push_back(rule(lparen, R"re(\()re", code));
-    rules.push_back(rule(rparen, R"re(\))re", code));
-    rules.push_back(rule(lbracket, R"re(\[)re", code));
-    rules.push_back(rule(rbracket, R"re(\])re", code));
-    // --- top-level braces: dict / set literals, no mode change (default only) --
-    rules.push_back(rule(lbrace, R"re(\{)re", {"default"}));
-    rules.push_back(rule(rbrace, R"re(\})re", {"default"}));
-    // --- the core: `{` opens an interpolation from a body OR nests inside one;
-    //     `}` pops the innermost. The stack therefore tracks brace depth. --------
+    // --- brackets: ( [ { open an insignificant "bracket" mode (Layout Awareness
+    //     Level A: implicit line continuation), the closers pop it. Active in code
+    //     (default/interp/bracket) so brackets nest; NOT in an f-string body, where
+    //     ( [ are literal text and { opens an interpolation (below). --------------
+    rules.push_back(rule(lparen, R"re(\()re", brackets, false, go(op_t::push, "bracket")));
+    rules.push_back(rule(rparen, R"re(\))re", {"bracket"}, false, go(op_t::pop)));
+    rules.push_back(rule(lbracket, R"re(\[)re", brackets, false, go(op_t::push, "bracket")));
+    rules.push_back(rule(rbracket, R"re(\])re", {"bracket"}, false, go(op_t::pop)));
+    rules.push_back(rule(lbrace, R"re(\{)re", brackets, false, go(op_t::push, "bracket")));    // dict / set
+    rules.push_back(rule(rbrace, R"re(\})re", {"bracket"}, false, go(op_t::pop)));
+    // --- f-string interpolation: a `{` in a string body opens it (push interp); a
+    //     `}` while in interp closes it. A `}` while in a bracket pops the bracket
+    //     (above) — the stack top tells an interpolation `}` from a dict `}`. -------
     rules.push_back(rule(interp_open, R"re(\{)re", bodies, false, go(op_t::push, "interp")));
     rules.push_back(rule(interp_close, R"re(\})re", {"interp"}, false, go(op_t::pop)));
     // --- f-string bodies: literal text (incl. {{ }} escapes) up to `{` or close -
@@ -211,7 +214,9 @@ namespace scilex::examples::python {
   //! \brief Builds the lexer from its rule list (see \ref make_rules).
   inline scilex::lexer make_lexer()
   {
-    return scilex::lexer(make_rules());
+    // "bracket" is layout-insignificant (Layout Awareness Level A): code spanning
+    // several lines inside ( ) [ ] { } is implicit line continuation — no INDENT.
+    return scilex::lexer(make_rules(), {"bracket"});
   }
 
   //! \brief A realistic snippet exercising every covered context: a decorator, a
@@ -288,18 +293,31 @@ def stats(values, base=0x1F):
         }
       }
     }
-    // (6) The full sample lexes, and the layout pass is balanced (some INDENTs,
-    //     as many DEDENTs) over a real multi-line, multi-mode source.
+    // (6) The full sample lexes, and the (policy-aware) layout pass is balanced —
+    //     some INDENTs, as many DEDENTs — over a real multi-line, multi-mode source.
     {
-      const std::vector<scilex::token> laid    {scilex::layout(lex.tokenize(sample, scilex::eof_policy::append))};
-      int                              indents {0};
-      int                              dedents {0};
+      const std::vector<scilex::token> laid {
+        scilex::layout(lex.tokenize(sample, scilex::eof_policy::append), lex.mode_significant())};
+      int indents                           {0};
+      int dedents                           {0};
       for (const scilex::token& tok : laid) {
         indents += static_cast<int>(tok.kind == scilex::indent);
         dedents += static_cast<int>(tok.kind == scilex::dedent);
       }
       if (indents == 0 || indents != dedents) {
         return false;
+      }
+    }
+    // (6b) Implicit line continuation (Layout Awareness Level A): a multi-line call
+    //      inside ( ) adds NO INDENT/DEDENT — the bracket mode is insignificant.
+    {
+      const std::vector<scilex::token> laid {
+        scilex::layout(lex.tokenize("foo(\n    x,\n    y,\n)\n", scilex::eof_policy::append),
+                       lex.mode_significant())};
+      for (const scilex::token& tok : laid) {
+        if (tok.kind == scilex::indent || tok.kind == scilex::dedent) {
+          return false;
+        }
       }
     }
     // (7) An unterminated f-string reports the OPENING position (error #3).
