@@ -2,10 +2,10 @@
 //
 // Exposes the generic maximal-munch lexer:
 //   _scilex.compile(rules) -> capsule        # [(kind, pattern, skip[, in_mode[, action]]), …]
-//   _scilex.tokenize(handle, text, eof) -> list  # eager [(kind, lexeme, offset, line, column), …]
+//   _scilex.tokenize(handle, text, eof) -> list  # [(kind, lexeme, offset, line, column, mode), …]
 //   _scilex.scan_start(handle, text, eof) -> capsule  # a lazy scan cursor
-//   _scilex.scan_next(cursor) -> tuple | None    # the next token, or None at the end
-//   _scilex.layout(tokens) -> list           # insert NEWLINE/INDENT/DEDENT from indentation
+//   _scilex.scan_next(cursor) -> tuple | None    # the next 6-token tuple, or None at the end
+//   _scilex.layout(tokens, insignificant=()) -> list  # mode-aware NEWLINE/INDENT/DEDENT
 //   _scilex.error                             # raised on a bad pattern, unlexable input, or bad indent
 //
 // A compiled lexer (held in a PyCapsule) owns its REAL regexes, so the rules are
@@ -22,8 +22,10 @@
 #include <scilex/scilex.hpp>
 #include <scilex/layout.hpp> // opt-in: not pulled in by scilex.hpp
 
+#include <algorithm>
 #include <cstddef>
 #include <exception>
+#include <map>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -113,10 +115,11 @@ int read_source(PyObject* obj, const char** data, Py_ssize_t* len, bool* is_byte
     return -1;
 }
 
-// Builds the (kind, lexeme, offset, line, column) tuple for one token. The lexeme is
-// a str (decoded from the UTF-8 bytes) when the source was str, or bytes when it was
-// bytes — matching the input type. Returns a new reference, or null on error.
-PyObject* token_tuple(const scilex::token& token, bool is_bytes)
+// Builds the (kind, lexeme, offset, line, column, mode) tuple for one token. The
+// lexeme is a str (decoded from the UTF-8 bytes) when the source was str, or bytes
+// when it was bytes — matching the input type. `mode` is the name of the mode the
+// token was lexed in. Returns a new reference, or null on error.
+PyObject* token_tuple(const scilex::token& token, bool is_bytes, const std::string& mode)
 {
     // A synthetic token (newline/indent/dedent) carries a default, null-data view;
     // use "" so an empty lexeme becomes an empty str/bytes rather than tripping on null.
@@ -127,10 +130,11 @@ PyObject* token_tuple(const scilex::token& token, bool is_bytes)
     if (lexeme == nullptr) {
         return nullptr;
     }
-    return Py_BuildValue("(iNnnn)", token.kind, lexeme, // N steals the lexeme ref
+    return Py_BuildValue("(iNnnns)", token.kind, lexeme, // N steals the lexeme ref
                          static_cast<Py_ssize_t>(token.start.offset),
                          static_cast<Py_ssize_t>(token.start.line),
-                         static_cast<Py_ssize_t>(token.start.column));
+                         static_cast<Py_ssize_t>(token.start.column),
+                         mode.c_str());
 }
 
 // Capsule destructor: frees the lexer when the Python handle is collected.
@@ -147,6 +151,7 @@ void capsule_free(PyObject* capsule)
 struct scan_state
 {
     PyObject*              lexer_capsule {nullptr}; // owned ref, keeps the lexer alive
+    const scilex::lexer*   lexer         {nullptr}; // borrowed from the capsule (for mode_name)
     PyObject*              source_obj    {nullptr}; // owned ref to the str/bytes; its buffer is borrowed
     bool                   is_bytes      {false};   // output lexeme type follows the input
     scilex::token_iterator it;                      // current position (views into source_obj's buffer)
@@ -357,7 +362,7 @@ PyObject* scilex_tokenize(PyObject* /*self*/, PyObject* args)
         result = PyList_New(static_cast<Py_ssize_t>(tokens.size()));
         if (result != nullptr) {
             for (std::size_t i = 0; i < tokens.size(); ++i) {
-                PyObject* tuple {token_tuple(tokens[i], is_bytes)};
+                PyObject* tuple {token_tuple(tokens[i], is_bytes, lexer->mode_name(tokens[i].mode_id))};
                 if (tuple == nullptr) {
                     Py_CLEAR(result);
                     break;
@@ -402,6 +407,7 @@ PyObject* scilex_scan_start(PyObject* /*self*/, PyObject* args)
     // Keep refs to the lexer (its rules) and the source (its borrowed buffer backs
     // the iterator and every token's lexeme view); both must outlive the cursor.
     state->lexer_capsule = Py_NewRef(capsule);
+    state->lexer         = lexer; // borrowed; the capsule ref above keeps it alive
     state->source_obj    = Py_NewRef(text_obj);
     state->is_bytes      = is_bytes;
     try {
@@ -462,7 +468,7 @@ PyObject* scilex_scan_next(PyObject* /*self*/, PyObject* args)
         }
     }
     state->needs_advance = true;
-    return token_tuple(*state->it, state->is_bytes);
+    return token_tuple(*state->it, state->is_bytes, state->lexer->mode_name(state->it->mode_id));
 }
 
 // _scilex.layout(tokens) -> list. Rewrites an end_of_input-terminated sequence of
@@ -470,16 +476,36 @@ PyObject* scilex_scan_next(PyObject* /*self*/, PyObject* args)
 // tokens inserted from each line's indentation; returns the same tuple shape.
 PyObject* scilex_layout(PyObject* /*self*/, PyObject* args)
 {
-    PyObject* seq = nullptr;
-    if (PyArg_ParseTuple(args, "O", &seq) == 0) {
+    PyObject* seq               = nullptr;
+    PyObject* insignificant_obj = nullptr; // optional: an iterable of mode names
+    if (PyArg_ParseTuple(args, "O|O", &seq, &insignificant_obj) == 0) {
         return nullptr;
     }
     const Py_ssize_t count = PySequence_Size(seq);
     if (count < 0) {
         return nullptr; // not a sequence (error already set)
     }
+    std::vector<std::string> insignificant;
+    if (parse_in_mode(insignificant_obj, &insignificant) < 0) {
+        return nullptr; // not a sequence of mode names (error set)
+    }
     PyObject* result = nullptr;
     try {
+        // Re-derive a self-consistent mode-id space from the tuples' mode names:
+        // "default" is id 0 (so the synthetic NEWLINE/INDENT/DEDENT, which carry mode
+        // id 0, stay significant), then each distinct name in first-seen order. The
+        // significance policy is built from that name set and the insignificant set.
+        std::map<std::string, std::size_t> mode_id;
+        std::vector<std::string>           names;
+        const auto intern = [&mode_id, &names](const std::string& name) -> std::size_t {
+            const auto [position, inserted] {mode_id.emplace(name, names.size())};
+            if (inserted) {
+                names.push_back(name);
+            }
+            return position->second;
+        };
+        intern("default"); // id 0
+
         // Own every lexeme's bytes (reserved so addresses stay stable as the token
         // views below point into them); rebuild the scilex::token sequence.
         std::vector<std::string>   lexemes;
@@ -497,27 +523,34 @@ PyObject* scilex_layout(PyObject* /*self*/, PyObject* args)
             Py_ssize_t  offset = 0;
             Py_ssize_t  line   = 0;
             Py_ssize_t  column = 0;
-            const int   parsed = PyArg_ParseTuple(item, "is#nnn", &kind, &lexeme, &length,
-                                                   &offset, &line, &column);
+            const char* mode   = nullptr; // optional 6th field (the mode name)
+            const int   parsed = PyArg_ParseTuple(item, "is#nnn|s", &kind, &lexeme, &length,
+                                                   &offset, &line, &column, &mode);
+            const std::string mode_name {parsed != 0 && mode != nullptr ? mode : "default"};
             if (parsed != 0) {
                 lexemes.emplace_back(lexeme != nullptr ? lexeme : "", static_cast<std::size_t>(length));
             }
             Py_DECREF(item);
             if (parsed == 0) {
-                return nullptr; // not a (kind, lexeme, offset, line, column) tuple
+                return nullptr; // not a (kind, lexeme, offset, line, column[, mode]) tuple
             }
             const scilex::position where {static_cast<std::size_t>(offset),
                                           static_cast<std::size_t>(line),
                                           static_cast<std::size_t>(column)};
-            input.push_back(scilex::token {kind, std::string_view(lexemes.back()), where});
+            input.push_back(scilex::token {kind, std::string_view(lexemes.back()), where, intern(mode_name)});
         }
-        const std::vector<scilex::token> out {scilex::layout(input)};
+        std::vector<bool> mode_significant(names.size(), true);
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            mode_significant[i] = std::find(insignificant.begin(), insignificant.end(), names[i])
+                                  == insignificant.end();
+        }
+        const std::vector<scilex::token> out {scilex::layout(input, mode_significant)};
         result = PyList_New(static_cast<Py_ssize_t>(out.size()));
         if (result != nullptr) {
             for (std::size_t i = 0; i < out.size(); ++i) {
                 // Layout is a str/indentation pass (its input lexemes parse via "s#"),
                 // so its synthetic and re-emitted tokens are str lexemes.
-                PyObject* tuple {token_tuple(out[i], /*is_bytes=*/false)};
+                PyObject* tuple {token_tuple(out[i], /*is_bytes=*/false, names[out[i].mode_id])};
                 if (tuple == nullptr) {
                     Py_CLEAR(result);
                     break;
@@ -558,7 +591,7 @@ PyMethodDef module_methods[] = {
      "    text (str): The source to tokenize.\n"
      "    eof (bool): Append a terminal end_of_input token.\n\n"
      "Returns:\n"
-     "    list: (kind, lexeme, offset, line, column) tuples, skip matches omitted.\n\n"
+     "    list: (kind, lexeme, offset, line, column, mode) tuples, skip matches omitted.\n\n"
      "Raises:\n"
      "    error: If some position is matched by no rule (carrying .offset/.line/.column)."},
     {"scan_start", scilex_scan_start, METH_VARARGS,
@@ -578,15 +611,17 @@ PyMethodDef module_methods[] = {
      "Args:\n"
      "    cursor (capsule): A cursor from scan_start().\n\n"
      "Returns:\n"
-     "    tuple | None: (kind, lexeme, offset, line, column), or None when exhausted.\n\n"
+     "    tuple | None: (kind, lexeme, offset, line, column, mode), or None when exhausted.\n\n"
      "Raises:\n"
      "    error: If some position is matched by no rule (after earlier tokens are yielded)."},
     {"layout", scilex_layout, METH_VARARGS,
-     "layout(tokens)\n"
-     "Insert NEWLINE/INDENT/DEDENT tokens from indentation.\n\n"
+     "layout(tokens, insignificant=())\n"
+     "Insert NEWLINE/INDENT/DEDENT tokens from indentation (mode-aware).\n\n"
      "Args:\n"
      "    tokens (sequence): An end_of_input-terminated sequence of\n"
-     "        (kind, lexeme, offset, line, column) tuples.\n\n"
+     "        (kind, lexeme, offset, line, column, mode) tuples.\n"
+     "    insignificant (sequence): Mode names whose tokens carry no layout\n"
+     "        structure (Layout Awareness Level A); empty is the positional pass.\n\n"
      "Returns:\n"
      "    list: The layout-aware tuples (still end_of_input-terminated).\n\n"
      "Raises:\n"

@@ -110,18 +110,20 @@ class Position:
 
 
 class Token:
-    """A lexical token: ``kind`` (int), ``lexeme`` (str) and ``position`` (:class:`Position`).
+    """A lexical token: ``kind`` (int), ``lexeme`` (str), ``position`` (:class:`Position`)
+    and ``mode`` (the name of the mode it was lexed in, ``"default"`` at the root).
 
     ``offset``, ``line`` and ``column`` are exposed directly as read-only shortcuts
     for ``position.offset`` / ``.line`` / ``.column``.
     """
 
-    __slots__ = ("kind", "lexeme", "position")
+    __slots__ = ("kind", "lexeme", "position", "mode")
 
-    def __init__(self, kind, lexeme, position):
+    def __init__(self, kind, lexeme, position, mode="default"):
         self.kind = kind
         self.lexeme = lexeme
         self.position = position
+        self.mode = mode
 
     @property
     def offset(self):
@@ -140,22 +142,22 @@ class Token:
 
     def __repr__(self):
         return (f"Token(kind={self.kind}, lexeme={self.lexeme!r}, "
-                f"line={self.position.line}, column={self.position.column})")
+                f"line={self.position.line}, column={self.position.column}, mode={self.mode!r})")
 
     def __eq__(self, other):
         if not isinstance(other, Token):
             return NotImplemented
         return (self.kind == other.kind and self.lexeme == other.lexeme
-                and self.position == other.position)
+                and self.position == other.position and self.mode == other.mode)
 
     def __hash__(self):
-        return hash((self.kind, self.lexeme, self.position))
+        return hash((self.kind, self.lexeme, self.position, self.mode))
 
 
 def _token(fields):
-    """Build a :class:`Token` from a (kind, lexeme, offset, line, column) tuple."""
-    kind, lexeme, offset, line, column = fields
-    return Token(kind, lexeme, Position(offset, line, column))
+    """Build a :class:`Token` from a (kind, lexeme, offset, line, column, mode) tuple."""
+    kind, lexeme, offset, line, column, mode = fields
+    return Token(kind, lexeme, Position(offset, line, column), mode)
 
 
 def _attach_position(exc, source=None):
@@ -216,12 +218,17 @@ class Lexer:
             stack and is ``None`` or one of ``("push", mode)`` / ``("set", mode)`` /
             ``("pop",)``. These last two are SciLex's *modes* (contextual lexing); a
             plain ``(kind, pattern, skip)`` rule needs neither.
+        insignificant_modes (iterable): Mode names whose tokens carry no layout
+            structure (Layout Awareness Level A — see :meth:`layout`): code spanning
+            lines in such a mode is treated as continuation. Each must be a mode the
+            rules use.
 
     Raises:
         error: If a pattern is an invalid regex, or a transition targets an empty mode.
+        ValueError: If ``insignificant_modes`` names a mode the rules do not use.
     """
 
-    def __init__(self, rules):
+    def __init__(self, rules, insignificant_modes=()):
         normalized = []
         for entry in rules:
             kind, pattern = entry[0], entry[1]
@@ -247,12 +254,45 @@ class Lexer:
                 normalized.append((int(kind), pattern, skip)) # plain rule stays a triple
         self._rules = normalized
         self._handle = _compile(normalized)
+        known = {"default"}
+        for entry in normalized:
+            if len(entry) > 3:
+                known.update(entry[3]) # the rule's in_mode names
+        self._insignificant = []
+        for mode in insignificant_modes:
+            if mode not in known:
+                raise ValueError(f"insignificant_modes: unknown mode {mode!r}")
+            self._insignificant.append(mode)
 
     @property
     def rules(self):
         """The normalized rules: ``(kind, pattern, skip)``, or
         ``(kind, pattern, skip, in_mode, action)`` for rules that use modes."""
         return list(self._rules)
+
+    @property
+    def insignificant_modes(self):
+        """The mode names whose tokens carry no layout structure (Level A)."""
+        return list(self._insignificant)
+
+    def layout(self, tokens):
+        """Insert NEWLINE / INDENT / DEDENT from indentation, mode-aware.
+
+        Uses this lexer's :attr:`insignificant_modes` (Layout Awareness Level A):
+        a token in an insignificant mode is passed through without shaping
+        indentation, so multi-line brackets / flow collections read as continuation.
+
+        Args:
+            tokens (iterable[Token]): An end-of-input-terminated token stream
+                (tokenize with ``eof=True``).
+
+        Returns:
+            list[Token]: The layout-aware tokens (still END_OF_INPUT-terminated).
+
+        Raises:
+            error: On a line that dedents to an unknown indentation (``.position``).
+        """
+        return Layout(self._insignificant).apply(tokens)
 
     def tokenize(self, text, eof=False):
         """Tokenize ``text`` eagerly into a list.
@@ -330,6 +370,11 @@ class Layout:
     column of a line's first token changes. Blank and comment-only lines carry no
     token, so they add no structure.
 
+    With ``insignificant_modes`` (Layout Awareness Level A), a token whose
+    :attr:`Token.mode` is listed is passed through without shaping indentation, so a
+    multi-line bracket or flow collection reads as line continuation. The default
+    (none) is the positional pass. :meth:`Lexer.layout` wires a lexer's own modes.
+
     The reserved kinds are exposed as :attr:`newline_kind`, :attr:`indent_kind` and
     :attr:`dedent_kind`.
     """
@@ -338,13 +383,16 @@ class Layout:
     indent_kind = INDENT
     dedent_kind = DEDENT
 
+    def __init__(self, insignificant_modes=()):
+        self._insignificant = [str(mode) for mode in insignificant_modes]
+
     def apply(self, tokens):
         """Rewrite ``tokens`` with NEWLINE/INDENT/DEDENT inserted.
 
         Args:
             tokens (iterable[Token]): An **end-of-input-terminated** token stream —
                 tokenize with ``eof=True`` (the terminal :data:`END_OF_INPUT` is
-                preserved). Only each token's ``kind`` and position are read.
+                preserved). Each token's ``kind``, position and ``mode`` are read.
 
         Returns:
             list[Token]: The layout-aware tokens (still END_OF_INPUT-terminated).
@@ -359,9 +407,9 @@ class Layout:
             if not isinstance(t.lexeme, str):
                 raise TypeError("layout operates on str tokens; got a bytes lexeme — "
                                 "tokenize a str source before applying layout")
-            fields.append((t.kind, t.lexeme, t.offset, t.line, t.column))
+            fields.append((t.kind, t.lexeme, t.offset, t.line, t.column, t.mode))
         try:
-            raw = _layout(fields)
+            raw = _layout(fields, self._insignificant)
         except error as exc:
             _attach_position(exc)
             raise
@@ -396,16 +444,18 @@ def scan(rules, text, eof=False):
     return Lexer(rules).scan(text, eof=eof)
 
 
-def layout(tokens):
+def layout(tokens, insignificant_modes=()):
     """Insert NEWLINE/INDENT/DEDENT into ``tokens`` (see :meth:`Layout.apply`).
 
     Args:
         tokens (iterable[Token]): An end-of-input-terminated token stream.
+        insignificant_modes (iterable): Mode names that carry no layout structure
+            (Layout Awareness Level A).
 
     Returns:
         list[Token]: The layout-aware tokens.
     """
-    return Layout().apply(tokens)
+    return Layout(insignificant_modes).apply(tokens)
 
 
 def get_include():

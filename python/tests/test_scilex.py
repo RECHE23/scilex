@@ -513,7 +513,19 @@ def yaml_lexer():
         (_Y_FCLOSE, r"[}\]]", False, ["flow"], ("pop",)),
         (_Y_COMMA, r",", False, ["flow"]),
         (_Y_SCALAR, r"[^\s#&*!\"'{}\[\]:,][^\s#:{}\[\],]*", False, ["flow"]),
-    ])
+    ], insignificant_modes=["flow"])  # Layout Awareness Level A: flow adds no layout
+
+
+def bracket_lexer():
+    """A minimal Python-ish lexer with a layout-insignificant bracket mode."""
+    code = ["default", "bracket"]
+    return scilex.Lexer([
+        (0, r"\s+", True, code),
+        (1, r"[A-Za-z_]\w*", False, code),
+        (2, r",", False, code),
+        (3, r"\(", False, code, ("push", "bracket")),
+        (4, r"\)", False, ["bracket"], ("pop",)),
+    ], insignificant_modes=["bracket"])
 
 
 class YamlModeTests(unittest.TestCase):
@@ -560,6 +572,52 @@ class YamlModeTests(unittest.TestCase):
             indents += tok.kind == scilex.INDENT
         self.assertGreater(indents, 0)
         self.assertEqual(depth, 0)
+
+
+class LayoutAwarenessTests(unittest.TestCase):
+    def test_tokens_carry_their_mode(self):
+        # Provenance: each token's .mode is the mode it was lexed in.
+        toks = fstring_lexer().tokenize('f"a{x}"')
+        self.assertEqual(toks[0].mode, "default")    # the f" opener, lexed in code
+        modes = {t.mode for t in toks}
+        self.assertIn("fstr", modes)                 # the body
+        self.assertIn("interp", modes)               # the interpolation
+
+    def test_mode_is_part_of_token_identity(self):
+        base = (1, "x", scilex.Position(0, 1, 1))
+        a = scilex.Token(*base, "default")
+        b = scilex.Token(*base, "interp")
+        same = scilex.Token(*base, "default")
+        self.assertNotEqual(a, b)                    # .mode distinguishes them
+        self.assertEqual(a, same)
+        self.assertEqual(hash(a), hash(same))
+
+    def test_yaml_multiline_flow_no_layout_via_binding(self):
+        # YAML flow is insignificant: a multi-line flow collection adds no layout.
+        lexer = yaml_lexer()
+        laid = lexer.layout(lexer.tokenize("[\n  1,\n  2\n]\n", eof=True))
+        kinds = {t.kind for t in laid}
+        self.assertNotIn(scilex.INDENT, kinds)
+        self.assertNotIn(scilex.DEDENT, kinds)
+
+    def test_python_continuation_no_layout_via_binding(self):
+        # An insignificant bracket mode: a multi-line call is line continuation.
+        lexer = bracket_lexer()
+        laid = lexer.layout(lexer.tokenize("foo(\n  x,\n  y\n)\n", eof=True))
+        kinds = {t.kind for t in laid}
+        self.assertNotIn(scilex.INDENT, kinds)
+        self.assertNotIn(scilex.DEDENT, kinds)
+
+    def test_module_layout_default_is_positional(self):
+        # Without a policy, layout() is the positional pass — a multi-line bracket
+        # then DOES produce structure (invariant 1: no policy = today's layout).
+        lexer = bracket_lexer()
+        laid = scilex.layout(lexer.tokenize("foo(\n  x\n)\n", eof=True))
+        self.assertIn(scilex.INDENT, {t.kind for t in laid})
+
+    def test_unknown_insignificant_mode_rejected(self):
+        with self.assertRaises(ValueError):
+            scilex.Lexer([(0, r"a", False)], insignificant_modes=["nope"])
 
 
 if __name__ == "__main__":
