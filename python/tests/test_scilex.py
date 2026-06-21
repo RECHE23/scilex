@@ -333,7 +333,7 @@ def fstring_lexer():
         (_OP, r"[-+*/%=<>!&|^,.:;()]+", False, code),
         (_OPEN, r'f"', False, code, ("push", "fstr")),
         (_TEXT, r'\{\{|\}\}|[^{}"]+', False, ["fstr"]),
-        (_LB, r"\{", False, ["fstr"], ("push", "interp")),
+        (_LB, r"\{", False, ["fstr", "interp"], ("push", "interp")),  # nests: brace depth
         (_CLOSE, r'"', False, ["fstr"], ("pop",)),
         (_RB, r"\}", False, ["interp"], ("pop",)),
     ])
@@ -361,6 +361,21 @@ class ModeTests(unittest.TestCase):
         toks = fstring_lexer().tokenize('f"{{x}}"')
         self.assertEqual([(t.kind, t.lexeme) for t in toks],
                          [(_OPEN, 'f"'), (_TEXT, "{{"), (_TEXT, "x"), (_TEXT, "}}"), (_CLOSE, '"')])
+
+    def test_dict_nested_in_interpolation(self):
+        # Brace depth via the stack: a dict { } inside an interpolation nests
+        # another interp level, so the interpolation ends at the matching }.
+        toks = fstring_lexer().tokenize('f"{ {x} }"')
+        self.assertEqual([t.kind for t in toks],
+                         [_OPEN, _LB, _LB, _IDENT, _RB, _RB, _CLOSE])
+
+    def test_triple_quote_spans_newlines(self):
+        # A dotall + lazy regex makes a triple-quoted string a single token, even
+        # across newlines (the f-string sibling feature, regex not modes).
+        lexer = scilex.Lexer([(0, r'(?s)""".*?"""', False), (1, r"\s+", True)])
+        toks = lexer.tokenize('"""line1\nline2"""')
+        self.assertEqual(len(toks), 1)
+        self.assertEqual(toks[0].lexeme, '"""line1\nline2"""')
 
     def test_code_rules_are_shared_with_interpolations(self):
         # The NUMBER rule (a code rule) lexes inside an interpolation, unduplicated.

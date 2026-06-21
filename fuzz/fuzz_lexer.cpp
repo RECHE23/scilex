@@ -8,13 +8,13 @@
  * checked against an independent brute-force reference scanner, so a *wrong*
  * (not just crashing) tokenization is a finding. Three modes per input:
  *
- *   (a) every real example grammar (JSON, Python, C++, SQL, CSS, Lisp, math,
- *       f-strings) — all applicable invariants including indentation layout, and
- *       (for f-strings) the per-mode dispatch over a real multi-mode grammar;
+ *   (a) every real example grammar (JSON, Python, C++, SQL, CSS, Lisp, math) —
+ *       all applicable invariants including indentation layout, and (for Python's
+ *       f-strings) the per-mode dispatch over a real multi-mode grammar;
  *   (b) a rule-set assembled from a palette of REAL patterns, seeded by the
  *       input itself — structural invariants only (no layout). This is where
  *       the first-byte dispatch meets rule orderings and bucket splits the
- *       eight fixed grammars never produce — exactly the dispatch's blind spots;
+ *       seven fixed grammars never produce — exactly the dispatch's blind spots;
  *   (c) a multi-mode rule-set seeded by the input (push/pop/set, nesting,
  *       skip-transitions) — exercises the per-mode dispatch and the mode stack,
  *       which the mono-mode grammars (a)/(b) never reach.
@@ -35,7 +35,6 @@
 
 #include "cpp.hpp"
 #include "css.hpp"
-#include "fstring.hpp"
 #include "json.hpp"
 #include "lisp.hpp"
 #include "math.hpp"
@@ -61,7 +60,6 @@ namespace {
     {"css", &scilex::examples::css::make_rules, &scilex::examples::css::make_lexer, false},
     {"lisp", &scilex::examples::lisp::make_rules, &scilex::examples::lisp::make_lexer, false},
     {"math", &scilex::examples::math::make_rules, &scilex::examples::math::make_lexer, false},
-    {"fstring", &scilex::examples::fstring::make_rules, &scilex::examples::fstring::make_lexer, false},
   };
 
   // A palette of valid REAL patterns for mode (b)'s random rule-sets. The mix

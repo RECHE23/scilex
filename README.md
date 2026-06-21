@@ -97,8 +97,8 @@ Build locally: `make python && make python-test`.
 `scilex` is a command-line lexer — `make cli` builds it, `make install` puts it on
 your `PATH` (`PREFIX=`/`BINDIR=` to choose where). It has two input modes.
 
-**Built-in grammars** — a showcase over the eight example languages (JSON, Python,
-C++, SQL, CSS, Lisp, math, f-strings):
+**Built-in grammars** — a showcase over the seven example languages (JSON, Python,
+C++, SQL, CSS, Lisp, math):
 
 ```console
 $ scilex --list                       # the built-in grammars

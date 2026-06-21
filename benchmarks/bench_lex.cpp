@@ -11,6 +11,10 @@
  *   - \c scan()     — lazy, one token at a time (O(1) memory) — the path a
  *                     parser actually consumes.
  *
+ * A final section contrasts the modal Python grammar with a mono-mode baseline
+ * (the same code rules with the f-string modes stripped, so f-strings lex as a
+ * name + plain string) on the same sample — isolating the mode-stack overhead.
+ *
  * Methodology (no measurement artifact): each input is scaled to a steady-state
  * size, the lexer is built once, the timed region is warmed up, and the
  * **minimum** wall time over N repetitions is taken (the cleanest throughput
@@ -26,6 +30,7 @@
 #include <limits>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "cpp.hpp"
 #include "css.hpp"
@@ -147,6 +152,41 @@ int main()
                                             g_sink += clex.tokenize(source).size();
                                           })};
     std::printf("  %8zu %13.2f\n", source.size() / 1024, mbps(source.size(), best));
+  }
+
+  // Mode overhead: the modal Python grammar vs a mono-mode baseline on the SAME
+  // sample. The baseline drops the f-string mode rules (so f"…" lexes as a NAME +
+  // plain string) and clears in_mode/action — the delta is the mode-stack cost.
+  namespace py = scilex::examples::python;
+  std::printf("\nmode overhead — python on its sample (modal vs a mono-mode baseline):\n");
+  std::printf("  %-10s %8s %9s %13s\n", "variant", "KiB", "tokens", "eager MB/s");
+  const std::string pysrc {scale(py::sample, target_bytes)};
+  {
+    const scilex::lexer modal {py::make_lexer()};
+    const std::size_t   toks  {modal.tokenize(pysrc).size()};
+    const double        secs  {min_seconds([&] {
+                                             g_sink += modal.tokenize(pysrc).size();
+                                           })};
+    std::printf("  %-10s %8zu %9zu %13.2f\n", "modal", pysrc.size() / 1024, toks, mbps(pysrc.size(), secs));
+  }
+  {
+    std::vector<scilex::rule> mono;
+    for (scilex::rule& candidate : py::make_rules()) {
+      const int kind {candidate.kind};
+      if (kind == py::fstr_open || kind == py::fstr_text || kind == py::fstr_close
+          || kind == py::interp_open || kind == py::interp_close) {
+        continue; // drop the f-string mode rules (f-strings become NAME + string)
+      }
+      candidate.in_mode.clear();
+      candidate.action.reset();
+      mono.push_back(std::move(candidate));
+    }
+    const scilex::lexer base {std::move(mono)};
+    const std::size_t   toks {base.tokenize(pysrc).size()};
+    const double        secs {min_seconds([&] {
+                                            g_sink += base.tokenize(pysrc).size();
+                                          })};
+    std::printf("  %-10s %8zu %9zu %13.2f\n", "mono-mode", pysrc.size() / 1024, toks, mbps(pysrc.size(), secs));
   }
 
   (void)g_sink;
