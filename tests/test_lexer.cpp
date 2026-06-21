@@ -11,10 +11,10 @@ using namespace std::string_view_literals;
 
 namespace {
 
-  // The lexer holds `const rule*` into its own rules_, so a copy would dangle; copy is
-  // deleted (move stays valid — vector move preserves element addresses). Enforce it.
-  static_assert(!std::is_copy_constructible_v<scilex::lexer>, "lexer must not be copyable");
-  static_assert(!std::is_copy_assignable_v<scilex::lexer>, "lexer must not be copy-assignable");
+  // The lexer stores indices (not pointers) into its own rules_, so it is a value
+  // type: copy and move are both well-defined (a copy tokenizes identically).
+  static_assert(std::is_copy_constructible_v<scilex::lexer>, "lexer should be copyable");
+  static_assert(std::is_copy_assignable_v<scilex::lexer>, "lexer should be copy-assignable");
   static_assert(std::is_move_constructible_v<scilex::lexer>, "lexer should stay movable");
 
   // Token kinds shared by the tests (plain ints: a token's kind is an int).

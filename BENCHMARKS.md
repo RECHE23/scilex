@@ -44,35 +44,34 @@ memory — the parser path).
 
 | grammar | rules | tokens | eager MB/s | lazy MB/s |
 | --- | ---: | ---: | ---: | ---: |
-| json   | 12 | 58 793  | 2.48 | 2.49 |
-| lisp   |  8 | 96 600  | 1.63 | 1.66 |
-| cpp    | 41 | 52 228  | 1.80 | 1.83 |
-| css    | 17 | 64 224  | 1.18 | 1.18 |
-| math   | 12 | 123 376 | 1.17 | 1.18 |
-| python | 36 | 89 613  | 1.11 | 1.12 |
-| sql    | 39 | 38 760  | 0.80 | 0.80 |
+| json   | 12 | 58 793  | 7.96 | 8.24 |
+| cpp    | 41 | 52 228  | 7.94 | 8.13 |
+| sql    | 39 | 38 760  | 7.68 | 7.82 |
+| lisp   |  8 | 96 600  | 6.71 | 6.96 |
+| python | 36 | 89 613  | 6.68 | 6.95 |
+| css    | 17 | 64 224  | 6.49 | 6.68 |
+| math   | 12 | 123 376 | 5.66 | 5.86 |
 
 Method: lexer built once, warmup then **min of 9** timed passes, `-O2`, every result
 consumed through a volatile sink. Sizes are KiB (1024 B), throughput is MB/s (10⁶ B/s),
 same machine as the conditions below. Reproduce with `make bench-lex`.
 
-**Reading — what sets the pace.** Two levers, both visible in the table:
+**Reading — what sets the pace.** Dispatch is **exact**: the lexer builds a 256-bucket
+first-byte index from REAL's first-byte API (`has_first_byte_set` / `unique_first_byte` /
+`may_start_with`), so a rule is tried at a position **only if its pattern can begin there**.
+That collapses the per-position rule count, leaving throughput governed mainly by **token
+density** — the cost is paid per token (one maximal-munch decision each): `math` is densest
+(123 k tokens) and slowest (5.66), while `json` / `cpp` / `sql` (fewer tokens) top the
+table (~8). `sql` — 31 *case-insensitive* keyword rules — is **no longer the outlier**:
+REAL reports an icase literal's both-case first bytes (`{s, S}`), so the dispatch buckets
+those keywords by case instead of trying all 31 at every byte.
 
-1. *Token density.* The cost is paid **per token** — each token is one maximal-munch
-   decision. `json` and `math` share a 12-rule set, yet `math` runs ~2× slower because
-   its sample packs ~2× the tokens per KB (123 k vs 59 k): throughput tracks KB ÷ tokens.
-2. *Rules in the general list.* A rule whose pattern has no single fixed leading byte is
-   tried at **every** position. `sql` has the **fewest** tokens of the seven yet is the
-   **slowest** — its 31 case-insensitive keyword rules carry the `icase` flag, and the
-   first-byte dispatch deliberately refuses to bucket a flagged literal (the case-fold
-   could match another byte), so all 31 land in the general list and are attempted byte
-   by byte. `cpp` has an equal keyword count but as **plain** literals (first-byte
-   bucketed), and runs 2.3× faster at a comparable total rule count.
-
-This is the measured motivation for the next perf step (couple the dispatch to REAL's
-`pattern_hints`): REAL already knows an `icase` literal's possible leading bytes, so such
-rules could rejoin the dispatch instead of the general list — directly lifting the `sql`
-floor.
+This exact dispatch replaced an earlier *textual* heuristic that conservatively dumped any
+class, alternation, or flagged literal into a general list tried everywhere. Switching to
+REAL's exact set lifted `sql` from **0.80 → 7.68 MB/s** (~9.6×) and every grammar **3–7×**
+across the board — the single biggest engine win measured here. The general list now holds
+only *nullable* rules (which can match the empty string, so they genuinely can start
+anywhere).
 
 **Reading — eager vs lazy.** `scan()` edges out `tokenize()` (it never materializes the
 token vector), but only just: both pay REAL's per-position NFA scan, which dominates. The
@@ -83,19 +82,19 @@ inputs:
 
 | KiB | eager MB/s |
 | ---: | ---: |
-| 64  | 1.82 |
-| 128 | 1.80 |
-| 256 | 1.81 |
-| 512 | 1.81 |
+| 64  | 8.11 |
+| 128 | 8.00 |
+| 256 | 7.98 |
+| 512 | 7.90 |
 
 Flat MB/s means time scales **linearly** with input — REAL's linear, ReDoS-safe bound
 holds for the lexer too, not only for the pathological `re` contrast in B2 below.
 
-**The honest position.** 0.8–2.5 MB/s is **slower** than `re` or `flex` (tens to hundreds
-of MB/s) on benign input — the price of running a real NFA at every position and building
-ordered maximal-munch `Token`s, in exchange for the linear guarantee. The dispatch/hints
-step above is the identified lever to narrow that gap where it is widest (flag- and
-class-led rules).
+**The honest position.** ~5.7–8.2 MB/s is still **slower** than `re` or `flex` (tens to
+hundreds of MB/s) on benign input — the price of running a real NFA at every position and
+building ordered maximal-munch `Token`s, in exchange for the linear guarantee. Now that the
+first-byte dispatch is exact (REAL's set, not a textual guess), the remaining lever is a
+compile-time `static_lexer`, grown in when a workload demands it.
 
 ## Conditions of this baseline
 
@@ -104,7 +103,7 @@ class-led rules).
 | Machine | Apple Silicon (`arm64`), Darwin 23.6.0 |
 | Binding | abi3 CPython extension as built by `setup.py` (`Py_LIMITED_API` 3.10) |
 | Method | best-of-5 timed runs, **minimum** reported |
-| As of | 2026-06-20 — added the per-grammar C++ engine table (`make bench-lex`); binding rows from v2026.6.1 (scan/eof/layout, dispatch, `.context`) |
+| As of | 2026-06-20 — C++ engine table reflects exact first-byte dispatch (REAL's first-byte API); binding rows B1–B3 are from v2026.6.1 and predate it |
 
 ## Binding baseline (versus `re`)
 
@@ -180,10 +179,12 @@ lead, or compile flag sends it to the general list (tried everywhere), so the di
 only ever try *more* rules than needed, never fewer. The 43 Python tests and the C++ suite
 (incl. dedicated dispatch tests) pass unchanged; 100 % 4D on `lexer.hpp`.
 
-**Verdict.** Implemented (data-backed, measured ~5× on a realistic 46-rule lexer).
-Aho-Corasick / a fuller prefilter are not warranted yet (no data demands them); bucketing
-*class* leads (not just literals) is a possible further step if a future workload shows the
-remaining ~6 ms floor matters.
+**Verdict.** Implemented (data-backed, measured ~5× on a realistic 46-rule lexer). The
+*textual* heuristic this section measured has since been replaced by REAL's **exact**
+first-byte API, which buckets class, alternation, and icase leads too (not just plain
+literals) — see the C++ engine table above, where it lifted the engine 3–7× and is now the
+dispatch. The figures here predate that switch (they are the Python-binding study via
+`bench.py`). Aho-Corasick / a fuller prefilter remain not warranted (no data demands them).
 
 ## Methodology & reproduction
 
