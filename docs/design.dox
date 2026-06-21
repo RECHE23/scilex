@@ -7,13 +7,15 @@ maximal munch and indentation layout work, and points at the file or class
 responsible for each step. It pairs with the per-file API reference generated
 from the headers.
 
-> **At a glance.** SciLex is a small, header-only C++20 **maximal-munch** lexer
-> built on [REAL](https://github.com/RECHE23/real-regex): an ordered set of
-> `(kind, regex, skip)` rules; at each position the *longest* anchored match wins,
-> rule order breaks ties. Linear-time and **ReDoS-safe by construction** (inherited
-> from REAL). Consume tokens eagerly (\ref scilex::lexer::tokenize) or lazily
-> (\ref scilex::lexer::scan); add an opt-in indentation pass (\ref scilex::layout);
-> use it from C++ or through an abi3 Python binding.
+> **At a glance.** SciLex is a small, header-only C++20 **contextual** lexer built on
+> [REAL](https://github.com/RECHE23/real-regex): an ordered set of `(kind, regex, skip)`
+> rules; at each position the *longest* anchored match wins, rule order breaks ties
+> (maximal munch). A rule can opt into **modes** (`in_mode` + a push/pop/set mode
+> stack), so the same byte lexes differently by context. Linear-time and **ReDoS-safe
+> by construction** (inherited from REAL). Consume tokens eagerly
+> (\ref scilex::lexer::tokenize) or lazily (\ref scilex::lexer::scan); add the opt-in,
+> mode-aware indentation pass (\ref scilex::layout); use it from C++ or through an abi3
+> Python binding.
 
 \tableofcontents
 
@@ -150,14 +152,24 @@ lay = scilex.Lexer([(0, r"\s+", True), (1, r"\w+", False), (2, r":", False)])
   see BENCHMARKS.md §B3), with behaviour unchanged (the general fallback is conservative, so
   a rule is never wrongly skipped). Bucketing *class*-led rules too is a possible further
   step, not yet warranted by data.
-- **No modes / context-sensitive lexing**, and **no compile-time `static_lexer`**
-  (on REAL's `static_regex`) — not yet; they grow in when a concrete consumer needs them.
+- **Modes (contextual lexing).** A rule may carry `in_mode` (the modes it is active
+  in) and an `action` (push/pop/set), so the lexer runs maximal munch + the exact
+  first-byte dispatch *per mode* — f-strings, XML content/tag, YAML block/flow. The
+  mode stack is per-scan, so the lexer stays immutable and shareable. A compile-time
+  `static_lexer` (on REAL's `static_regex`) is **not yet** — it grows in on demand.
+- **Layout Awareness (Level A).** Each token carries the mode it was lexed in, and a
+  mode can be marked *insignificant* (`lexer(rules, insignificant_modes)`), so
+  \ref scilex::layout passes its tokens through: multi-line flow collections and
+  bracket continuation add no spurious INDENT/DEDENT. Invariants: an empty policy is
+  byte-for-byte the positional pass (zero cost); the mode is the single source of the
+  policy (no per-rule flag). **Block scalars** `|`/`>` and heredocs (a reference
+  indent carried in the frame) are **Level B** — designed, not built.
 - **Byte columns.** A `column` counts bytes, matching REAL's UTF-8 byte model: an
   ASCII column equals a character column, but a multibyte codepoint spans several
   byte columns.
-- **Layout v1** uses the byte column of a line's first token as its indentation
-  width; it does **not** police mixed tabs/spaces and has **no** implicit
-  line-continuation inside brackets.
+- **Layout** uses the byte column of a line's first token as its indentation width;
+  it does **not** police mixed tabs/spaces. Implicit line-continuation inside brackets
+  is handled by Layout Awareness (an insignificant mode), not the positional pass.
 - **Integer kinds.** Token kinds are plain `int`s (an `enum`/`IntEnum` reads well);
   a named-rule API is a possible future convenience, not part of the core.
 

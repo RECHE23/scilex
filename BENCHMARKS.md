@@ -37,20 +37,28 @@ the difference that matters for a lexer fed untrusted or machine-generated input
 
 `bench.py` (below) measures the **Python binding**; this section measures the **C++
 engine directly** — the speed a C++ embedder or a SciParse parser sees, with no
-interpreter in the path. `make bench-lex` lexes each of the seven example grammars
+interpreter in the path. `make bench-lex` lexes each of the nine example grammars
 (`examples/<lang>.hpp`) over its own sample scaled to a ~256 KiB steady-state input,
 reporting MB/s for `tokenize()` (eager, full token vector) and `scan()` (lazy, O(1)
 memory — the parser path).
 
 | grammar | rules | tokens | eager MB/s | lazy MB/s |
 | --- | ---: | ---: | ---: | ---: |
-| json   | 12 | 58 793  | 7.96 | 8.24 |
-| cpp    | 41 | 52 228  | 7.94 | 8.13 |
-| sql    | 39 | 38 760  | 7.68 | 7.82 |
-| lisp   |  8 | 96 600  | 6.71 | 6.96 |
-| python | 36 | 89 613  | 6.68 | 6.95 |
-| css    | 17 | 64 224  | 6.49 | 6.68 |
-| math   | 12 | 123 376 | 5.66 | 5.86 |
+| xml    | 12 | 65 588  | 9.23 | 9.74 |
+| cpp    | 41 | 52 228  | 8.10 | 8.30 |
+| json   | 12 | 58 793  | 8.06 | 8.24 |
+| sql    | 39 | 38 760  | 7.71 | 7.87 |
+| yaml   | 14 | 56 829  | 7.42 | 7.58 |
+| python | 65 | 53 960  | 7.35 | 7.52 |
+| lisp   |  8 | 96 600  | 6.78 | 6.98 |
+| css    | 17 | 64 224  | 6.68 | 6.66 |
+| math   | 12 | 123 376 | 5.70 | 5.94 |
+
+Three of the nine are **modal** (contextual lexing): `python` (f-strings — five
+modes), `xml` (content ↔ tag), `yaml` (block ↔ flow). They sit in the same band as
+the flat grammars — the dispatch runs *per mode*, so modes cost throughput nothing
+structural. `python` carries **65** rules (35 keywords + the modal machinery) yet
+holds ~7.35 MB/s: the first-byte dispatch keeps it rule-count-independent.
 
 Method: lexer built once, warmup then **min of 9** timed passes, `-O2`, every result
 consumed through a volatile sink. Sizes are KiB (1024 B), throughput is MB/s (10⁶ B/s),
@@ -61,8 +69,8 @@ first-byte index from REAL's first-byte API (`has_first_byte_set` / `unique_firs
 `may_start_with`), so a rule is tried at a position **only if its pattern can begin there**.
 That collapses the per-position rule count, leaving throughput governed mainly by **token
 density** — the cost is paid per token (one maximal-munch decision each): `math` is densest
-(123 k tokens) and slowest (5.66), while `json` / `cpp` / `sql` (fewer tokens) top the
-table (~8). `sql` — 31 *case-insensitive* keyword rules — is **no longer the outlier**:
+(123 k tokens) and slowest (5.70), while `xml` / `cpp` / `json` (fewer tokens per byte) top
+the table (8–9). `sql` — 31 *case-insensitive* keyword rules — is **no longer the outlier**:
 REAL reports an icase literal's both-case first bytes (`{s, S}`), so the dispatch buckets
 those keywords by case instead of trying all 31 at every byte.
 
@@ -82,13 +90,23 @@ inputs:
 
 | KiB | eager MB/s |
 | ---: | ---: |
-| 64  | 8.11 |
-| 128 | 8.00 |
-| 256 | 7.98 |
-| 512 | 7.90 |
+| 64  | 8.06 |
+| 128 | 8.10 |
+| 256 | 8.11 |
+| 512 | 8.07 |
 
 Flat MB/s means time scales **linearly** with input — REAL's linear, ReDoS-safe bound
 holds for the lexer too, not only for the pathological `re` contrast in B2 below.
+
+**Reading — modes & Layout Awareness.** Contextual lexing is throughput-neutral by
+construction (the dispatch runs per mode). `make bench-lex` also contrasts the modal
+`python` grammar with a mono-mode baseline — the same code rules with the f-string
+modes stripped, so an f-string lexes as a name + one opaque string — on the same
+sample: **modal 7.41 vs mono-mode 7.88 MB/s** (~6%), and the modal path does
+materially more work (53 960 vs 44 872 tokens — full f-string structure, not an
+opaque string). The mode stack is per-scan; Layout Awareness reads each token's mode
+but adds nothing when no mode is insignificant (invariant 1: an empty policy is
+byte-for-byte the positional pass). Both are informational, never gated.
 
 **The honest position.** ~5.7–8.2 MB/s is still **slower** than `re` or `flex` (tens to
 hundreds of MB/s) on benign input — the price of running a real NFA at every position and
@@ -103,7 +121,7 @@ compile-time `static_lexer`, grown in when a workload demands it.
 | Machine | Apple Silicon (`arm64`), Darwin 23.6.0 |
 | Binding | abi3 CPython extension as built by `setup.py` (`Py_LIMITED_API` 3.10) |
 | Method | best-of-5 timed runs, **minimum** reported |
-| As of | 2026-06-20 — C++ engine table = exact first-byte dispatch; B1 re-measured after the binding's zero-copy source + GIL release (str/bytes); B2/B3 predate those |
+| As of | 2026-06-21 — C++ engine table re-measured for the nine grammars (three modal: python/xml/yaml) + the modal-vs-mono overhead, on the exact first-byte dispatch; B1 reflects the binding's zero-copy source + GIL release (str/bytes); B2/B3 predate those |
 
 ## Binding baseline (versus `re`)
 

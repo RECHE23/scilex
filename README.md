@@ -1,17 +1,20 @@
 # SciLex
 
-**A small, header-only C++20 maximal-munch lexer built on REAL.**
+**A small, header-only C++20 contextual lexer built on REAL.**
 
 - Linear-time and ReDoS-safe by construction (via REAL).
-- Eager `tokenize` or lazy `scan`.
-- Optional indentation layout for significant-whitespace languages.
+- **Modes** — contextual lexing: the same byte lexes differently by context
+  (f-strings, XML tag/content, YAML block/flow).
+- **Layout Awareness** — mode-aware indentation (NEWLINE / INDENT / DEDENT).
+- Eager `tokenize` or lazy `scan`; positioned errors with a context snippet.
 - C++20 header-only + abi3 Python binding (CPython 3.10+).
 - Zero dependencies beyond REAL headers.
 
 Define an ordered set of token rules — each a `(kind, regex, skip)` triple — and
 SciLex tokenizes by **maximal munch**: the longest anchored match wins, with rule
-order breaking ties. Because it is a thin layer over REAL, tokenization is linear
-and ReDoS-safe by construction.
+order breaking ties. A rule can also opt into **modes** (contextual lexing), so the
+same byte lexes differently by context. Because it is a thin layer over REAL,
+tokenization is linear and ReDoS-safe by construction.
 
 This follows the same design principles as REAL: purity, simplicity, and
 measured optimality.
@@ -20,14 +23,17 @@ measured optimality.
 
 - Ordered token rules: `(kind, real::regex, skip)`
 - Maximal-munch matching (longest match wins, rule order for ties)
-- Source positions (byte offset, line, column)
+- **Contextual lexing (modes)** — per-rule `in_mode` + a push / pop / set mode stack
+- **Layout Awareness** — mode-aware indentation (NEWLINE / INDENT / DEDENT)
+- Source positions (byte offset, line, column); each token carries its mode
 - Eager (`tokenize`) and lazy (`scan`) APIs
 - Optional `END_OF_INPUT` token
-- Optional indentation layout (NEWLINE / INDENT / DEDENT)
-- Positioned errors with context snippet
+- Positioned errors with a context snippet
 - Linear-time / ReDoS-safe (via REAL)
+- Nine example grammars — three of them modal (f-strings, XML, YAML)
 
-**Not yet:** modes, `static_lexer`, codepoint columns.
+**Not yet:** block scalars / heredocs (Layout Awareness Level B), a compile-time
+`static_lexer`, codepoint columns.
 
 See the [guided tour](docs/design.dox) for details.
 
@@ -91,6 +97,75 @@ laid = scilex.Layout().apply(lx.tokenize(src, eof=True))
 `pip install scilex` (wheels + sdist). Use `scilex.get_include()` to compile C++ code against the installed headers.
 
 Build locally: `make python && make python-test`.
+
+## Contextual lexing — modes
+
+A flat rule list can't separate contexts where the *same* byte means different
+things — `{` opens a Python f-string interpolation but a dict elsewhere; `<` opens
+an XML tag in content but is just a character inside CDATA. SciLex handles this with
+an opt-in **mode stack**: a rule may be restricted to named modes (`in_mode`) and
+may push / pop / set the mode when it wins. The engine is unchanged — maximal munch
+and the exact first-byte dispatch simply run *per mode*.
+
+This unlocks, with no engine change:
+
+- **f-strings** — `f"sum={a+b}"`: code ↔ string body ↔ interpolation, nesting
+  through the stack;
+- **XML** — `content ↔ tag` (a shallow two-mode flip; CDATA and comments are single
+  regex tokens, so an inner `<` is literal);
+- **YAML** — `block ↔ flow` (significant indentation plus flow collections).
+
+```cpp
+using op = scilex::mode_action::op;
+scilex::rule open {.kind = OPEN, .pattern = real::regex("f\"")};
+open.in_mode = {"default", "interp"};                      // active in code
+open.action  = {.operation = op::push, .target = "fstr"};  // enters the f-string body
+// "{" pushes "interp"; the closing quote pops "fstr"; the stack tracks nesting.
+```
+
+```python
+NAME, OPEN, TEXT, LB, RB, CLOSE = range(6)
+fstr = scilex.Lexer([
+    (NAME, r"[a-z]+", False, ["default", "interp"]),               # code, shared
+    (OPEN, r'f"', False, ["default", "interp"], ("push", "fstr")),
+    (TEXT, r'[^{}"]+', False, ["fstr"]),
+    (LB, r"\{", False, ["fstr", "interp"], ("push", "interp")),
+    (CLOSE, r'"', False, ["fstr"], ("pop",)),
+    (RB, r"\}", False, ["interp"], ("pop",)),
+])
+[t.kind for t in fstr.tokenize(r'f"hi {name}"')]   # OPEN TEXT LB NAME RB CLOSE
+```
+
+An action is `None` | `("push", mode)` | `("set", mode)` | `("pop",)`; a plain
+`(kind, pattern, skip)` rule needs neither field, so existing grammars are
+unaffected. See `examples/python.hpp`, `examples/xml.hpp`, `examples/yaml.hpp` for
+the three modal profiles in full.
+
+## Layout Awareness (Level A)
+
+The layout pass is positional, and by default mode-blind. **Layout Awareness Level
+A** lets a mode be marked *insignificant* (`Lexer(insignificant_modes=…)`), so its
+tokens pass through without shaping indentation — and every token carries its `mode`
+(`Token.mode`) for the pass to read.
+
+That lifts two real cases a decoupled positional pass otherwise gets wrong:
+
+- **YAML multi-line flow** — `[\n  1,\n  2\n]` adds no spurious INDENT/DEDENT;
+- **Python implicit continuation** — a call/list/dict wrapped across lines inside
+  `()` `[]` `{}` reads as continuation, not a new block.
+
+```python
+laid = lexer.layout(lexer.tokenize(src, eof=True))   # uses the lexer's own policy
+```
+
+Two invariants hold: with **no** insignificant mode the result is byte-for-byte the
+positional pass (zero cost); and the **mode** is the single source of the policy (no
+per-rule flag).
+
+**Honest scope.** Level A covers multi-line flow and implicit continuation. **Block
+scalars** (`|` / `>`) and heredocs need a reference indent carried in the mode frame
+— that is **Level B**, a designed next step, not yet built. The bundled grammars
+*demonstrate* the features; each `examples/<lang>.hpp` header documents its own scope.
 
 ## CLI
 
