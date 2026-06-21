@@ -2,6 +2,11 @@
 # REAL clang-tidy configuration
 # Modern C++20 best practices for header-only library
 # Based on: C++ Core Guidelines + CERT + Modern C++20 best practices
+#
+# readability-redundant-member-init is disabled below: the {} on rule's
+# in_mode/action/target are load-bearing default-member-initializers (so the
+# existing 3-field rule inits don't trip -Wmissing-field-initializers on clang or
+# g++), not redundant. (A YAML comment can't sit inside the folded Checks scalar.)
 
 Checks: >
   -*,
@@ -57,6 +62,7 @@ Checks: >
   -performance-avoid-endl,
   portability-*,
   readability-*,
+  -readability-redundant-member-init,
   -readability-identifier-length,
   -readability-magic-numbers,
   -readability-function-cognitive-complexity,

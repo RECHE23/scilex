@@ -17,8 +17,10 @@
 #ifndef SCILEX_LEXER_HPP
 #define SCILEX_LEXER_HPP
 
+#include <algorithm>
 #include <array>
 #include <iterator>
+#include <map>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -49,14 +51,38 @@ namespace scilex {
   };
 
   /*!
-   * \brief A token rule: a kind, the pattern that recognizes it, and whether
-   *        matches are discarded (whitespace, comments).
+   * \brief A mode transition, fired when its rule wins, acting on the scan's mode
+   *        stack: enter a nested mode, leave the current one, or replace it.
+   */
+  struct mode_action
+  {
+    //! \brief The kind of transition.
+    enum class op
+    {
+      push, //!< Enter \ref target, remembering the mode below it (a nested context).
+      pop,  //!< Leave the current mode, returning to the one beneath it.
+      set,  //!< Replace the current mode with \ref target (stack depth unchanged).
+    };
+
+    op          operation;   //!< Which transition to perform.
+    std::string target {};   //!< The mode push/set enters; ignored (and omittable) for pop.
+  };
+
+  /*!
+   * \brief A token rule: a kind, the pattern that recognizes it, whether matches
+   *        are discarded (whitespace, comments), and — for contextual lexing — the
+   *        modes it is active in and an optional mode transition it fires when it wins.
+   *
+   * \ref in_mode empty means the rule is active in the implicit "default" mode only,
+   * so a plain `{kind, pattern, skip}` rule keeps working unchanged.
    */
   struct rule
   {
-    int         kind;         //!< Kind assigned to tokens this rule produces.
-    real::regex pattern;      //!< The recognizer (a linear-time REAL regex).
-    bool        skip {false}; //!< If true, matches are consumed but not emitted.
+    int                        kind;            //!< Kind assigned to tokens this rule produces.
+    real::regex                pattern;         //!< The recognizer (a linear-time REAL regex).
+    bool                       skip    {false}; //!< If true, matches are consumed but not emitted.
+    std::vector<std::string>   in_mode {};      //!< Modes this rule is active in; empty ⇒ {"default"}.
+    std::optional<mode_action> action  {};      //!< Mode transition fired when this rule wins.
   };
 
   /*!
@@ -206,10 +232,11 @@ namespace scilex {
                                   have     = true;
                                 }
                               };
-        for (const std::size_t idx : first_byte_index_[static_cast<unsigned char>(source[cursor.offset])]) {
+        const dispatch& active {per_mode_[0]}; // mono-mode for now (the mode stack arrives next)
+        for (const std::size_t idx : active.first_byte_index[static_cast<unsigned char>(source[cursor.offset])]) {
           consider(idx);
         }
-        for (const std::size_t idx : general_rules_) {
+        for (const std::size_t idx : active.general) {
           consider(idx);
         }
 
@@ -239,42 +266,113 @@ namespace scilex {
       return false;
     }
 
-    /*!
-     * \brief Builds the first-byte dispatch index from \ref rules_ (once, at
-     *        construction), via REAL's exact first-byte API:
-     *        - a nullable pattern (no usable first-byte set — it can match the empty
-     *          string, e.g. `a?`) joins \ref general_rules_ and is tried everywhere;
-     *        - a pattern with a single possible first byte joins that one bucket;
-     *        - any other pattern (a class, an alternation, an `icase` literal that
-     *          folds to several bytes…) joins every bucket its set admits.
-     *        Buckets and the general list keep \ref rules_ order, so the index-order
-     *        tie-break in \ref scan_next is the rule priority order. The dispatch is
-     *        exact — a rule is tried at a position iff its pattern can begin there —
-     *        so it only ever skips rules that provably cannot match.
-     */
-    void build_dispatch()
+    //! \brief Interns a mode name to its id, assigning the next id on first sight.
+    std::size_t intern_mode(const std::string& name)
     {
-      for (std::size_t idx {0}; idx < rules_.size(); ++idx) {
-        const real::regex& pattern {rules_[idx].pattern};
-        if (!pattern.has_first_byte_set()) {
-          general_rules_.push_back(idx);
-        }
-        else if (const std::optional<unsigned char> byte {pattern.unique_first_byte()}) {
-          first_byte_index_[*byte].push_back(idx);
-        }
-        else {
-          for (int candidate {0}; candidate < 256; ++candidate) {
-            if (pattern.may_start_with(static_cast<unsigned char>(candidate))) {
-              first_byte_index_[static_cast<unsigned char>(candidate)].push_back(idx);
-            }
+      const auto [it, inserted] {mode_id_.emplace(name, mode_names_.size())};
+      if (inserted) {
+        mode_names_.push_back(name);
+      }
+      return it->second;
+    }
+
+    //! \brief Adds rule \p idx to mode \p m's dispatch via REAL's exact first-byte
+    //!        API — the same 3-way split (nullable → general; one fixed byte → its
+    //!        bucket; otherwise → every bucket the set admits) as the mono-mode build.
+    void add_to_mode(std::size_t m,
+                     std::size_t idx)
+    {
+      const real::regex& pattern {rules_[idx].pattern};
+      dispatch&          target  {per_mode_[m]};
+      if (!pattern.has_first_byte_set()) {
+        target.general.push_back(idx);
+      }
+      else if (const std::optional<unsigned char> byte {pattern.unique_first_byte()}) {
+        target.first_byte_index[*byte].push_back(idx);
+      }
+      else {
+        for (int candidate {0}; candidate < 256; ++candidate) {
+          if (pattern.may_start_with(static_cast<unsigned char>(candidate))) {
+            target.first_byte_index[static_cast<unsigned char>(candidate)].push_back(idx);
           }
         }
       }
     }
 
-    std::vector<rule>                         rules_;            //!< The ordered token rules.
-    std::array<std::vector<std::size_t>, 256> first_byte_index_; //!< Rule indices by possible leading byte.
-    std::vector<std::size_t>                  general_rules_;    //!< Indices of nullable rules (tried everywhere).
+    //! \brief Whether mode \p m has no active rule (so nothing can match in it).
+    [[nodiscard]] bool mode_is_empty(std::size_t m) const
+    {
+      const dispatch& d {per_mode_[m]};
+      return d.general.empty()
+             && std::all_of(d.first_byte_index.begin(), d.first_byte_index.end(),
+                            [](const std::vector<std::size_t>& bucket) { return bucket.empty(); });
+    }
+
+    //! \brief Fail-fast transition checks: a transition rule must consume input, and
+    //!        a push/set target must be a defined, non-empty mode.
+    //! \throws std::invalid_argument on a violation.
+    void validate_transitions() const
+    {
+      for (const rule& candidate : rules_) {
+        if (!candidate.action) {
+          continue;
+        }
+        if (candidate.pattern.pattern().empty()) {
+          throw std::invalid_argument("a transition rule must consume input (empty pattern)");
+        }
+        if (candidate.action->operation != mode_action::op::pop
+            && mode_is_empty(mode_id_.at(candidate.action->target))) {
+          throw std::invalid_argument("a transition targets the empty mode '"
+                                      + candidate.action->target + "' (no rule is active in it)");
+        }
+      }
+    }
+
+    /*!
+     * \brief Builds the per-mode first-byte dispatch from \ref rules_ (once, at
+     *        construction). "default" is mode 0; every name in a rule's \ref
+     *        rule::in_mode and every push/set target is interned to an id. For each
+     *        mode, the rules active in it are bucketed by REAL's exact first-byte API,
+     *        keeping \ref rules_ order so the index tie-break in \ref scan_next is the
+     *        rule priority. Finishes with \ref validate_transitions.
+     */
+    void build_dispatch()
+    {
+      intern_mode("default"); // mode 0, always present
+      for (const rule& candidate : rules_) {
+        for (const std::string& name : candidate.in_mode) {
+          intern_mode(name);
+        }
+        if (candidate.action && candidate.action->operation != mode_action::op::pop) {
+          intern_mode(candidate.action->target);
+        }
+      }
+      per_mode_.resize(mode_names_.size());
+
+      for (std::size_t idx {0}; idx < rules_.size(); ++idx) {
+        if (rules_[idx].in_mode.empty()) {
+          add_to_mode(0, idx); // an undeclared rule is active in "default" only
+        }
+        else {
+          for (const std::string& name : rules_[idx].in_mode) {
+            add_to_mode(mode_id_.at(name), idx);
+          }
+        }
+      }
+      validate_transitions();
+    }
+
+    //! \brief Per-mode dispatch index: the ⑤ first-byte buckets scoped to one mode.
+    struct dispatch
+    {
+      std::array<std::vector<std::size_t>, 256> first_byte_index; //!< Rule indices by leading byte.
+      std::vector<std::size_t>                  general;          //!< Nullable rules (tried everywhere).
+    };
+
+    std::vector<rule>                  rules_;      //!< The ordered token rules.
+    std::vector<std::string>           mode_names_; //!< Mode id -> name ("default" is id 0).
+    std::map<std::string, std::size_t> mode_id_;    //!< Mode name -> id.
+    std::vector<dispatch>              per_mode_;   //!< Dispatch index, one per mode (by id).
   };
 
   /*!
