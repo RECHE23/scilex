@@ -284,3 +284,83 @@ TEST(flow_multiline_produces_spurious_indent_with_current_layout)
   EXPECT(indents > 0); // spurious: the flow body's inner lines look like a block
   EXPECT_EQ(indents, dedents);
 }
+
+// --- Layout Awareness Level A: the machine ---------------------------------------
+
+namespace {
+  // The same flow grammar built twice below: default (significant) + a "flow" mode.
+  std::vector<scilex::rule> flow_grammar()
+  {
+    std::vector<scilex::rule> rules;
+    rules.push_back(with_action(mode_rule(1, R"([{\[])", {"default", "flow"}), push_to("flow")));
+    rules.push_back(with_action(mode_rule(2, R"([}\]])", {"flow"}), pop_mode()));
+    rules.push_back(mode_rule(0, R"(\s+)", {"default", "flow"}, /*skip=*/ true));
+    rules.push_back(mode_rule(3, R"([^\s{}\[\]]+)", {"flow"}));
+    return rules;
+  }
+
+  int indent_dedent_count(const std::vector<scilex::token>& tokens)
+  {
+    int count {0};
+    for (const scilex::token& tok : tokens) {
+      count += static_cast<int>(tok.kind == scilex::indent || tok.kind == scilex::dedent);
+    }
+    return count;
+  }
+} // namespace
+
+TEST(layout_awareness_suppresses_an_insignificant_mode)
+{
+  // The same grammar, scanned identically (A never touches the scan). Without a
+  // policy a multi-line flow body emits spurious INDENT/DEDENT; with "flow" marked
+  // insignificant it emits none, while the default-mode tokens still shape layout.
+  const std::string_view src {"{\n a\n b\n}"};
+
+  const scilex::lexer plain(flow_grammar());
+  EXPECT(plain.mode_significant().empty()); // no policy
+  EXPECT(indent_dedent_count(scilex::layout(plain.tokenize(src, scilex::eof_policy::append))) > 0);
+
+  const scilex::lexer aware(flow_grammar(), {"flow"});
+  EXPECT(!aware.mode_significant().empty());
+  EXPECT(aware.mode_name(1) == "flow");    // "default" is 0, "flow" is 1
+  const std::vector<scilex::token> laid {
+    scilex::layout(aware.tokenize(src, scilex::eof_policy::append), aware.mode_significant())};
+  EXPECT_EQ(indent_dedent_count(laid), 0); // the flow body added no structure
+}
+
+TEST(an_empty_significance_policy_matches_the_positional_layout)
+{
+  // Invariant 1: with no insignificant modes the policy is empty, and layout() with
+  // it equals the positional pass (the default-argument overload) token-for-token.
+  const scilex::lexer lexer(string_modes()); // default + str, none insignificant
+  EXPECT(lexer.mode_significant().empty());
+  const std::vector<scilex::token> toks        {lexer.tokenize("ab\"x\ny\"cd", scilex::eof_policy::append)};
+  const std::vector<scilex::token> positional  {scilex::layout(toks)};
+  const std::vector<scilex::token> with_policy {scilex::layout(toks, lexer.mode_significant())};
+  EXPECT_EQ(positional.size(), with_policy.size());
+  bool identical                               {positional.size() == with_policy.size()};
+  for (std::size_t i {0}; identical && i < positional.size(); ++i) {
+    identical = positional[i].kind == with_policy[i].kind
+                && positional[i].start.offset == with_policy[i].start.offset;
+  }
+  EXPECT(identical);
+}
+
+TEST(a_mode_id_beyond_the_significance_policy_is_significant)
+{
+  // layout()'s guard: a token whose mode_id is past the policy is treated as
+  // significant, so a short policy never indexes out of bounds.
+  const std::vector<scilex::token> toks {
+    scilex::token {.kind = 1, .lexeme = "a"sv, .start = pos(0, 1, 1), .mode_id = 1},
+    scilex::token {.kind = 1, .lexeme = "b"sv, .start = pos(4, 2, 3), .mode_id = 1},
+    scilex::token {.kind = scilex::end_of_input, .lexeme = {}, .start = pos(5, 2, 4), .mode_id = 0},
+  };
+  const std::vector<bool> policy {false}; // size 1 (mode 0 only); mode 1 is beyond it
+  EXPECT(indent_dedent_count(scilex::layout(toks, policy)) > 0);
+}
+
+TEST(build_rejects_an_unknown_insignificant_mode)
+{
+  // An insignificant-mode name must be a mode the rules actually use.
+  EXPECT_THROWS(scilex::lexer(string_modes(), {"nonexistent"}), std::invalid_argument);
+}

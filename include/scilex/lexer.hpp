@@ -25,6 +25,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -175,11 +176,19 @@ namespace scilex {
     /*!
      * \brief Builds a lexer from \p rules (taken by value, then moved in).
      * \param[in] rules The ordered token rules.
+     * \param[in] insignificant_modes Modes whose tokens carry no layout structure
+     *            (Layout Awareness Level A — see \ref scilex::layout). Each name
+     *            must be a mode the rules use; empty (the default) leaves every mode
+     *            significant, so \ref mode_significant has no effect.
+     * \throws std::invalid_argument If a transition rule is malformed (empty
+     *         pattern or target), or \p insignificant_modes names an unknown mode.
      */
-    explicit lexer(std::vector<rule> rules)
+    explicit lexer(std::vector<rule>               rules,
+                   std::unordered_set<std::string> insignificant_modes = {})
       : rules_(std::move(rules))
     {
       build_dispatch();
+      build_significance(insignificant_modes);
     }
 
     /*!
@@ -231,6 +240,20 @@ namespace scilex {
     //! \brief Deleted: the range would point into a temporary lexer.
     token_range scan(std::string_view source,
                      eof_policy       policy = eof_policy::omit) const&& = delete;
+
+    //! \brief The per-mode-id layout-significance policy (see \ref scilex::layout).
+    //!        Index by a token's `mode_id`; `false` marks an insignificant mode.
+    //!        Empty unless the lexer was built with `insignificant_modes`.
+    [[nodiscard]] const std::vector<bool>& mode_significant() const noexcept
+    {
+      return mode_significant_;
+    }
+
+    //! \brief The name of mode \p id (0 is "default"), for labelling tokens.
+    [[nodiscard]] const std::string& mode_name(std::size_t id) const noexcept
+    {
+      return mode_names_[id];
+    }
 
   private:
 
@@ -315,7 +338,9 @@ namespace scilex {
         apply_transition(rules_[best_idx], start, stack, mode_id_); // advances, then transitions (#2 on a bad pop)
 
         if (!rules_[best_idx].skip) {
-          out = token {rules_[best_idx].kind, source.substr(start.offset, best_len), start};
+          // Tag the token with the mode it was lexed in (captured before the
+          // transition above) — Layout Awareness reads it; the scan is untouched.
+          out = token {rules_[best_idx].kind, source.substr(start.offset, best_len), start, mode};
           return true;
         }
         // Skip rule: keep scanning for the next emitted token (possibly in a new mode).
@@ -423,6 +448,25 @@ namespace scilex {
       validate_transitions();
     }
 
+    //! \brief Builds the layout-significance policy from the insignificant-mode
+    //!        names (validated against the interned modes). With none, the policy
+    //!        stays empty — every mode significant, so \ref scilex::layout is the
+    //!        positional pass (invariant 1).
+    void build_significance(const std::unordered_set<std::string>& insignificant_modes)
+    {
+      if (insignificant_modes.empty()) {
+        return;
+      }
+      mode_significant_.assign(mode_names_.size(), true);
+      for (const std::string& name : insignificant_modes) {
+        const auto found {mode_id_.find(name)};
+        if (found == mode_id_.end()) {
+          throw std::invalid_argument("insignificant_modes names an unknown mode: " + name);
+        }
+        mode_significant_[found->second] = false;
+      }
+    }
+
     //! \brief Per-mode dispatch index: the ⑤ first-byte buckets scoped to one mode.
     struct dispatch
     {
@@ -430,10 +474,11 @@ namespace scilex {
       std::vector<std::size_t>                  general;          //!< Nullable rules (tried everywhere).
     };
 
-    std::vector<rule>                  rules_;      //!< The ordered token rules.
-    std::vector<std::string>           mode_names_; //!< Mode id -> name ("default" is id 0).
-    std::map<std::string, std::size_t> mode_id_;    //!< Mode name -> id.
-    std::vector<dispatch>              per_mode_;   //!< Dispatch index, one per mode (by id).
+    std::vector<rule>                  rules_;            //!< The ordered token rules.
+    std::vector<std::string>           mode_names_;       //!< Mode id -> name ("default" is id 0).
+    std::map<std::string, std::size_t> mode_id_;          //!< Mode name -> id.
+    std::vector<dispatch>              per_mode_;         //!< Dispatch index, one per mode (by id).
+    std::vector<bool>                  mode_significant_; //!< Layout policy (empty = all significant).
   };
 
   /*!

@@ -313,7 +313,8 @@ namespace scilex::fuzz {
       const std::vector<scilex::token> flat {lex.tokenize(input, scilex::eof_policy::append)};
       std::vector<scilex::token>       laid;
       try {
-        laid = scilex::layout(flat);
+        // Policy-aware: the lexer's significance policy, whose ids match its tokens.
+        laid = scilex::layout(flat, lex.mode_significant());
       }
       catch (const scilex::layout_error&) {
         return {true, nullptr}; // inconsistent indentation → a positioned error is correct

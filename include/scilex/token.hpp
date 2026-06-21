@@ -45,9 +45,10 @@ namespace scilex {
    */
   struct token
   {
-    int              kind;   //!< Caller-defined token kind (e.g. an enum value).
-    std::string_view lexeme; //!< The matched text, viewing into the source.
-    position         start;  //!< Position of the token's first byte.
+    int              kind;        //!< Caller-defined token kind (e.g. an enum value).
+    std::string_view lexeme;      //!< The matched text, viewing into the source.
+    position         start;       //!< Position of the token's first byte.
+    std::size_t      mode_id {0}; //!< The mode this token was lexed in (0 = the default/root mode).
   };
 } // namespace scilex
 

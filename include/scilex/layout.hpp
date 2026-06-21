@@ -16,18 +16,18 @@
  * each count as one column; it does not police mixed tabs/spaces, and there is
  * no implicit line continuation inside brackets).
  *
- * This pass is positional and **mode-blind by design**. It therefore cannot stay
- * silent in indentation-insignificant regions — a multi-line flow collection
- * (`examples/yaml.hpp`), a block scalar `|` / `>`, or implicit line continuation
- * inside brackets (`examples/python.hpp`) each get structure they should not. That
- * is an assumed architectural limitation, not a temporary gap: lifting it is the
- * Layout Awareness arc, a design-first evolution (Level A makes the pass
- * mode-aware with a per-mode significant|insignificant policy; Level B carries a
- * reference indent for block scalars). Two invariants bound that arc: (1) with no
- * active mode — or a mode whose policy is significant — the output is byte-for-byte
- * this pass, at zero cost; (2) the **mode** is the single source of truth for the
- * policy, which forbids any per-rule flag (e.g. an `ignore_layout` on a rule): the
- * policy is derived from the mode, never set beside it.
+ * This pass is positional. With no significance policy it is mode-blind — every
+ * token shapes indentation — which is byte-for-byte the original behaviour. A
+ * per-mode significance policy (Layout Awareness Level A) lets a mode be marked
+ * **insignificant**, so its tokens pass through without affecting layout: this is
+ * how a multi-line flow collection (`examples/yaml.hpp`) and implicit line
+ * continuation inside brackets (`examples/python.hpp`) avoid spurious structure. A
+ * mode marked insignificant must be self-delimited (entered and left by its own
+ * tokens). Block scalars `|` / `>` and heredocs are a deeper case (a reference
+ * indent in the frame) — Layout Awareness Level B, still to come. Two invariants
+ * hold: (1) an empty policy ⇒ byte-for-byte the positional pass, at zero cost; (2)
+ * the **mode** is the single source of truth for the policy — there is no per-rule
+ * flag (e.g. `ignore_layout`); significance is derived from the mode, never beside it.
  *
  * Input must be an end-of-input-terminated token sequence (the lexer's
  * `eof_policy::append`); the terminal \ref scilex::end_of_input is preserved.
@@ -82,16 +82,24 @@ namespace scilex {
    * \brief Rewrites \p tokens with NEWLINE / INDENT / DEDENT inserted.
    *
    * \param[in] tokens An end-of-input-terminated token sequence.
+   * \param[in] mode_significant Per-mode-id significance policy (Layout Awareness
+   *        Level A): index by a token's `mode_id`; `true` (or a mode-id beyond the
+   *        vector) means the token shapes layout, `false` means it is passed through
+   *        without affecting indentation. An **empty** vector (the default) means
+   *        every token is significant — byte-for-byte the positional pass. (A
+   *        `std::vector<bool>` rather than a `std::span<const bool>`: the bit-packed
+   *        `vector<bool>` cannot be viewed as a contiguous span of `bool`.)
    * \return The layout-aware token sequence (still end-of-input-terminated).
    * \throws layout_error If a line dedents to an indentation that no open block
    *         used.
    */
-  [[nodiscard]] inline std::vector<token> layout(std::span<const token> tokens)
+  [[nodiscard]] inline std::vector<token> layout(std::span<const token>   tokens,
+                                                 const std::vector<bool>& mode_significant = {})
   {
     std::vector<token>       out;
     std::vector<std::size_t> levels        {0};
     bool                     started       {false};
-    std::size_t              previous_line {0};
+    std::size_t              previous_line {0}; // last *significant* line seen
     position                 end_position  {0, 1, 1};
 
     for (const token& current : tokens) {
@@ -99,7 +107,12 @@ namespace scilex {
         end_position = current.start; // remember; emit our own terminal at the end
         continue;
       }
-      if (!started || current.start.line != previous_line) {
+      // A token shapes layout unless its mode is marked insignificant. An empty
+      // policy makes every token significant — identical to the positional pass.
+      const bool significant {mode_significant.empty()
+                              || current.mode_id >= mode_significant.size()
+                              || mode_significant[current.mode_id]};
+      if (significant && (!started || current.start.line != previous_line)) {
         if (started) {
           out.push_back(token {newline, {}, current.start});
         }
@@ -117,10 +130,10 @@ namespace scilex {
             throw layout_error("inconsistent indentation", current.start);
           }
         }
-        started = true;
+        previous_line = current.start.line; // only significant lines advance this
+        started       = true;
       }
-      out.push_back(current);
-      previous_line = current.start.line;
+      out.push_back(current); // every token is kept, significant or not
     }
 
     if (started) {
