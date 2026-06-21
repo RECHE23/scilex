@@ -122,7 +122,10 @@ tokenizer (`(?P<NUM>…)|(?P<ID>…)|…` + `finditer`).
 **Reading.** `re` is ~2× faster here — down from ~5× before the binding's zero-copy
 source path (it no longer re-encodes and copies the text) and the exact first-byte
 dispatch (see the C++ engine table). The remaining gap buys SciLex's linear guarantee
-and its ordered maximal-munch semantics, not a speed record on benign input.
+and its ordered maximal-munch semantics, not a speed record on benign input. For
+multi-threaded throughput, `tokenize` releases the GIL around the scan of inputs ≥ 4 KB;
+the lazy `scan` holds the GIL per one-token step (the parser-friendly path, not the
+throughput path).
 
 ### B2. Pathological input (the linearity guarantee — SciLex wins decisively)
 

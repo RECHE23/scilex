@@ -224,6 +224,10 @@ class Lexer:
         demand; a lexical error surfaces while iterating, only after every token
         before it has been yielded.
 
+        ``scan`` holds the GIL for each one-token step (the parser-friendly access
+        pattern); for multi-threaded throughput use :meth:`tokenize`, which releases
+        the GIL around the scan of inputs of 4 KB or more.
+
         Args:
             text (str | bytes): The source to scan; each :class:`Token`'s lexeme is a
                 ``str`` when ``text`` is ``str``, ``bytes`` when it is ``bytes``.
