@@ -5,25 +5,38 @@
  *        lexer.
  *
  * The reference encodes SciLex's lexing **specification** directly, with **no
- * first-byte dispatch** — at each position it tries *every* rule. The real
- * \ref scilex::lexer reaches the same answer through the `leading_byte`
- * dispatch optimization (the most likely bug site). Comparing the two is a
- * non-circular equivalence oracle: any `reference != lexer` is a real bug, not
+ * first-byte dispatch** — at each position it tries *every rule active in the
+ * current mode*. The real \ref scilex::lexer reaches the same answer through the
+ * per-mode first-byte dispatch (the most likely bug site). Comparing the two is
+ * a non-circular equivalence oracle: any `reference != lexer` is a real bug, not
  * an artifact (the same idea as REAL's hints-disabled equivalence test, which
- * found real engine bugs). The reference deliberately does **not** reuse any
- * lexer internals.
+ * found real engine bugs).
+ *
+ * The reference reuses **exactly one** lexer internal: the pure free
+ * \ref scilex::apply_transition. The mode-stack transition *is* the spec, so
+ * sharing it verbatim (rather than cloning it) keeps the oracle non-circular on
+ * rule selection while guaranteeing both sides agree on push/pop/set. The
+ * reference re-derives its **own** mode name↔id map from the rules — the id
+ * *numbers* never reach the token stream, only name-membership (fixed by the
+ * rules) does — and keeps its own mode stack.
  *
  * The encoded spec (verified against `lexer.hpp` this session): at each
- * position, try every rule anchored; the **longest** match wins; on an **equal
- * length** the **earliest** rule (lowest index) wins; an **empty** match (length
- * 0) never wins; if nothing matches, throw a **positioned** \ref scilex::lex_error;
- * a skip rule advances the cursor but emits no token; line/column advance over
- * the consumed bytes (a `\n` resets the column).
+ * position, among the rules **active in the current mode** (empty `in_mode` ⇒
+ * the default mode; otherwise the listed modes), try each anchored; the
+ * **longest** match wins; on an **equal length** the **earliest** rule (lowest
+ * index) wins; an **empty** match (length 0) never wins; if nothing matches,
+ * throw a positioned #1 error at the byte; after a match `apply_transition` may
+ * push/pop/set the mode (a pop at the root is #2); a skip rule advances the
+ * cursor (and still transitions) but emits no token; line/column advance over
+ * the consumed bytes (a `\n` resets the column); if the input ends inside a
+ * pushed mode, throw #3 at the opening position.
  */
 #ifndef SCILEX_FUZZ_REFERENCE_HPP
 #define SCILEX_FUZZ_REFERENCE_HPP
 
 #include <cstddef>
+#include <map>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -32,25 +45,94 @@
 
 namespace scilex::fuzz {
 
+  //! \brief The mode name↔id mapping, re-derived independently from the rules.
+  //!
+  //! The id *numbers* are arbitrary (they never reach the token stream); only
+  //! name-membership matters, and that is fixed by the rules. So the reference
+  //! interns its own ids — "default" is 0, then every `in_mode` name and every
+  //! non-pop action target, in first-seen order — and stays internally
+  //! consistent: \ref names is the inverse of \ref ids.
+  struct mode_map
+  {
+    std::vector<std::string>           names; //!< id → name.
+    std::map<std::string, std::size_t> ids;   //!< name → id (fed to apply_transition).
+  };
+
+  //! \brief Re-derives the mode map from \p rules (independent of the lexer).
+  inline mode_map derive_modes(const std::vector<scilex::rule>& rules)
+  {
+    mode_map map;
+    auto     intern = [&map](const std::string& name) {
+                        if (map.ids.try_emplace(name, map.names.size()).second) {
+                          map.names.push_back(name);
+                        }
+                      };
+    intern("default"); // the root mode is always id 0
+    for (const scilex::rule& candidate : rules) {
+      for (const std::string& name : candidate.in_mode) {
+        intern(name);
+      }
+      if (candidate.action && candidate.action->operation != scilex::mode_action::op::pop) {
+        intern(candidate.action->target);
+      }
+    }
+    return map;
+  }
+
+  //! \brief Is \p rule active in the mode named \p mode_name?
+  //!
+  //! Empty `in_mode` ⇒ the rule lives in the default mode only; otherwise it is
+  //! active exactly in the modes it lists. Mirrors the lexer's per-mode rule
+  //! assignment, but computed independently and by name.
+  inline bool rule_active_in(const scilex::rule& rule,
+                             const std::string&  mode_name)
+  {
+    if (rule.in_mode.empty()) {
+      return mode_name == "default";
+    }
+    for (const std::string& name : rule.in_mode) {
+      if (name == mode_name) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   //! \brief Tokenizes \p source by the SciLex spec, brute-force (no dispatch).
   //!
-  //! \param[in] rules        The grammar's rule list.
-  //! \param[in] source       The text to tokenize.
-  //! \param[in] emit_skipped When true, emit skip-rule matches too (used by the
-  //!            coverage check); otherwise they advance the cursor silently.
+  //! Mode-aware: keeps its own mode stack, considers only the rules active in the
+  //! current mode, and drives push/pop/set through the shared
+  //! \ref scilex::apply_transition (so the oracle and the lexer cannot diverge on
+  //! the transition itself — only on rule selection, which is the point).
+  //!
+  //! \param[in]  rules        The grammar's rule list.
+  //! \param[in]  source       The text to tokenize.
+  //! \param[in]  emit_skipped When true, emit skip-rule matches too (used by the
+  //!             coverage check); otherwise they advance the cursor silently.
+  //! \param[out] modes_out    When non-null, receives the mode name each emitted
+  //!             token was lexed in (1:1 with the returned tokens) — lets the
+  //!             munch re-check stay mode-correct.
   //! \return The tokens in source order.
-  //! \throws scilex::lex_error (positioned) if a position matches no rule.
+  //! \throws scilex::lex_error (positioned) on #1 (no active rule), #2 (pop at
+  //!         the root, via apply_transition), or #3 (input ends inside a mode).
   inline std::vector<scilex::token> reference_tokenize(const std::vector<scilex::rule>& rules,
                                                        std::string_view                 source,
-                                                       bool                             emit_skipped = false)
+                                                       bool                             emit_skipped = false,
+                                                       std::vector<std::string>*        modes_out    = nullptr)
   {
+    const mode_map             modes  {derive_modes(rules)};
     std::vector<scilex::token> out;
     scilex::position           cursor {0, 1, 1};
+    std::vector<scilex::frame> stack  {scilex::frame {.mode_id = 0, .entry_pos = cursor}};
     while (cursor.offset < source.size()) {
-      const std::string_view rest     {source.substr(cursor.offset)};
-      std::size_t            best_len {0};
-      const scilex::rule*    best     {nullptr};
+      const std::string_view rest      {source.substr(cursor.offset)};
+      const std::string&     mode_name {modes.names[stack.back().mode_id]};
+      std::size_t            best_len  {0};
+      const scilex::rule*    best      {nullptr};
       for (const scilex::rule& candidate : rules) {
+        if (!rule_active_in(candidate, mode_name)) {
+          continue; // brute-force, but only over the rules active in this mode
+        }
         const auto        matched {candidate.pattern.match(rest)};
         const std::size_t len     {matched ? static_cast<std::size_t>(matched.end()) : 0};
         // Longest wins; updating only on a STRICTLY longer match keeps the
@@ -61,7 +143,7 @@ namespace scilex::fuzz {
         }
       }
       if (best == nullptr) {
-        throw scilex::lex_error("no rule matches the input", cursor);
+        throw scilex::lex_error("no rule matches in the current mode", cursor); // #1, at the byte
       }
       const scilex::position start {cursor};
       for (std::size_t i {0}; i < best_len; ++i) {
@@ -76,7 +158,16 @@ namespace scilex::fuzz {
       cursor.offset += best_len;
       if (emit_skipped || !best->skip) {
         out.push_back(scilex::token {best->kind, source.substr(start.offset, best_len), start});
+        if (modes_out != nullptr) {
+          modes_out->push_back(mode_name); // the mode this token was lexed in
+        }
       }
+      // The transition is part of the spec: share the lexer's pure pivot verbatim
+      // (a pop at the root throws #2 here, at start, exactly as the lexer does).
+      scilex::apply_transition(*best, start, stack, modes.ids);
+    }
+    if (stack.size() > 1) {                                                 // input ran out inside a pushed mode
+      throw scilex::lex_error("unterminated mode", stack.back().entry_pos); // #3, at the opening
     }
     return out;
   }
@@ -125,8 +216,9 @@ namespace scilex::fuzz {
     bool                       reference_threw {false};
     std::size_t                reference_pos   {0};
     std::vector<scilex::token> reference;
+    std::vector<std::string>   reference_modes; // the mode each reference token was lexed in
     try {
-      reference = reference_tokenize(rules, input);
+      reference = reference_tokenize(rules, input, false, &reference_modes);
     }
     catch (const scilex::lex_error& error) {
       reference_threw = true;
@@ -187,12 +279,18 @@ namespace scilex::fuzz {
       return {false, "coverage: the input was not fully consumed"};
     }
 
-    // --- #4 independent per-token munch re-check ---
-    for (const scilex::token& tok : eager) {
-      const std::string_view at         {input.substr(tok.start.offset)};
-      std::size_t            longest    {0};
-      bool                   kind_fits  {false};
+    // --- #4 independent per-token munch re-check (mode-aware) ---
+    // reference == eager (checked above), so reference_modes aligns 1:1 with eager.
+    for (std::size_t i {0}; i < eager.size(); ++i) {
+      const scilex::token&   tok       {eager[i]};
+      const std::string&     mode_name {reference_modes[i]};
+      const std::string_view at        {input.substr(tok.start.offset)};
+      std::size_t            longest   {0};
+      bool                   kind_fits {false};
       for (const scilex::rule& candidate : rules) {
+        if (!rule_active_in(candidate, mode_name)) {
+          continue; // only the rules the lexer could have used in this mode
+        }
         const auto        matched {candidate.pattern.match(at)};
         const std::size_t len     {matched ? static_cast<std::size_t>(matched.end()) : 0};
         if (len > longest) {
@@ -205,7 +303,7 @@ namespace scilex::fuzz {
       if (!kind_fits) {
         return {false, "munch: the chosen kind's rule does not match the lexeme anchored"};
       }
-      if (longest != tok.lexeme.size()) { // (b) no rule matches a longer prefix here
+      if (longest != tok.lexeme.size()) { // (b) no active rule matches a longer prefix here
         return {false, "munch: a rule matches a longer prefix than the chosen token"};
       }
     }

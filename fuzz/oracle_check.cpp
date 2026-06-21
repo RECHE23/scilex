@@ -86,6 +86,119 @@ namespace {
     return out;
   }
 
+  // --- multi-mode grammars ---------------------------------------------------
+  // Crafted grammars that drive push/pop/set, nesting, skip-transitions and the
+  // three positioned errors, checked against the lexer. The reference shares
+  // apply_transition (so the transition cannot diverge); any disagreement here is
+  // a real per-mode dispatch bug.
+  scilex::mode_action act_push(const char* mode)
+  {
+    return {.operation = scilex::mode_action::op::push, .target = mode};
+  }
+
+  scilex::mode_action act_set(const char* mode)
+  {
+    return {.operation = scilex::mode_action::op::set, .target = mode};
+  }
+
+  scilex::mode_action act_pop()
+  {
+    return {.operation = scilex::mode_action::op::pop};
+  }
+
+  scilex::rule in_mode_rule(int                      kind,
+                            const char             * pattern,
+                            std::vector<std::string> modes,
+                            bool                     skip = false)
+  {
+    scilex::rule rule {.kind = kind, .pattern = real::regex(pattern), .skip = skip};
+    rule.in_mode = std::move(modes);
+    return rule;
+  }
+
+  scilex::rule acting(scilex::rule               rule,
+                      const scilex::mode_action& action)
+  {
+    rule.action = action;
+    return rule;
+  }
+
+  // "..." string: letters-only body, so a digit inside is #1 and EOF inside is #3.
+  std::vector<scilex::rule> string_grammar()
+  {
+    std::vector<scilex::rule> rules;
+    rules.push_back({1, real::regex("[a-z]+")});
+    rules.push_back({2, real::regex(R"(\s+)"), true});
+    rules.push_back(acting(in_mode_rule(3, "\"", {}), act_push("str")));
+    rules.push_back(in_mode_rule(4, "[a-z]+", {"str"}));
+    rules.push_back(acting(in_mode_rule(5, "\"", {"str"}), act_pop()));
+    return rules;
+  }
+
+  // (...) groups: the opener is active in default AND in a group, so it nests.
+  std::vector<scilex::rule> nest_grammar()
+  {
+    std::vector<scilex::rule> rules;
+    rules.push_back(acting(in_mode_rule(1, R"(\()", {"default", "grp"}), act_push("grp")));
+    rules.push_back(acting(in_mode_rule(2, R"(\))", {"grp"}), act_pop()));
+    rules.push_back(in_mode_rule(3, "[a-z]+", {"grp"}));
+    rules.push_back({4, real::regex(R"(\s+)"), true});
+    return rules;
+  }
+
+  // A pop active at the root: popping there is #2 (via the shared apply_transition).
+  std::vector<scilex::rule> root_pop_grammar()
+  {
+    std::vector<scilex::rule> rules;
+    rules.push_back({1, real::regex("[a-z]+")});
+    rules.push_back(acting(in_mode_rule(2, R"(\))", {}), act_pop()));
+    return rules;
+  }
+
+  // "#...\n" via set (no push): depth never grows, so EOF is clean (no #3); the \n
+  // exercises the reference's line/column advance.
+  std::vector<scilex::rule> set_grammar()
+  {
+    std::vector<scilex::rule> rules;
+    rules.push_back({1, real::regex("[a-z]+")});
+    rules.push_back(acting(in_mode_rule(2, "#", {}), act_set("cmt")));
+    rules.push_back(in_mode_rule(3, R"([^\n]+)", {"cmt"}));
+    rules.push_back(acting(in_mode_rule(4, R"(\n)", {"cmt"}), act_set("default")));
+    return rules;
+  }
+
+  // <<...>> raw block: the delimiters are skipped yet still drive push/pop.
+  std::vector<scilex::rule> raw_grammar()
+  {
+    std::vector<scilex::rule> rules;
+    rules.push_back({1, real::regex("[a-z]+")});
+    rules.push_back(acting(in_mode_rule(2, "<<", {}, true), act_push("raw")));
+    rules.push_back(in_mode_rule(3, R"([^>]+)", {"raw"}));
+    rules.push_back(acting(in_mode_rule(4, ">>", {"raw"}, true), act_pop()));
+    return rules;
+  }
+
+  //! \brief A multi-mode grammar with crafted inputs (balanced, nesting, the three errors).
+  struct mode_grammar
+  {
+    std::string_view              name;
+    std::vector<scilex::rule>     rules;
+    std::vector<std::string_view> inputs;
+  };
+
+  std::vector<mode_grammar> mode_grammars()
+  {
+    std::vector<mode_grammar> out;
+    out.push_back({"mm.string", string_grammar(),
+                   {"ab cd", "\"ab\"", "x \"ab\" y", "\"\"", "\"ab", "\"a1\""}});
+    out.push_back({"mm.nest", nest_grammar(),
+                   {"(a(b)c)", "(a(b))", "(a", "((", ")", ""}});
+    out.push_back({"mm.rootpop", root_pop_grammar(), {"ab", "a)", ")"}});
+    out.push_back({"mm.set", set_grammar(), {"ab#xy\ncd", "ab#xy", "#\nab"}});
+    out.push_back({"mm.raw", raw_grammar(), {"xy", "a<<bc>>d", "<<bc"}});
+    return out;
+  }
+
   int run()
   {
     int         failures {0};
@@ -113,8 +226,22 @@ namespace {
         }
       }
     }
+
+    // Multi-mode grammars: the per-mode dispatch vs the brute-force reference.
+    for (const mode_grammar& gram : mode_grammars()) {
+      const scilex::lexer lex {gram.rules};
+      for (const std::string_view input : gram.inputs) {
+        ++cases;
+        const scilex::fuzz::result outcome {scilex::fuzz::check(gram.rules, lex, input, false)};
+        if (!outcome.ok) {
+          std::cerr << "FAIL [" << gram.name << "] " << outcome.invariant << '\n'
+                    << "  input (" << input.size() << " bytes): " << preview(input) << '\n';
+          ++failures;
+        }
+      }
+    }
     if (failures == 0) {
-      std::cout << "fuzz-check: " << cases << " cases (7 grammars x sample/truncations/adversarial) — all invariants hold\n";
+      std::cout << "fuzz-check: " << cases << " cases (7 grammars x sample/truncations/adversarial + 5 multi-mode grammars) — all invariants hold\n";
       return 0;
     }
     std::cerr << "fuzz-check: " << failures << " invariant violation(s)\n";
