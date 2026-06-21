@@ -319,5 +319,104 @@ class ErrorContextTests(unittest.TestCase):
         self.assertIsNone(getattr(caught.exception, "context", None))
 
 
+# f-string grammar kinds (mirrors examples/fstring.hpp).
+_WS, _IDENT, _NUM, _OP, _OPEN, _TEXT, _CLOSE, _LB, _RB = range(9)
+
+
+def fstring_lexer():
+    """A Python-style f-string lexer over default / fstr / interp modes."""
+    code = ["default", "interp"]  # code rules are shared by top level and interps
+    return scilex.Lexer([
+        (_WS, r"\s+", True, code),
+        (_IDENT, r"[A-Za-z_][A-Za-z0-9_]*", False, code),
+        (_NUM, r"[0-9]+(\.[0-9]+)?", False, code),
+        (_OP, r"[-+*/%=<>!&|^,.:;()]+", False, code),
+        (_OPEN, r'f"', False, code, ("push", "fstr")),
+        (_TEXT, r'\{\{|\}\}|[^{}"]+', False, ["fstr"]),
+        (_LB, r"\{", False, ["fstr"], ("push", "interp")),
+        (_CLOSE, r'"', False, ["fstr"], ("pop",)),
+        (_RB, r"\}", False, ["interp"], ("pop",)),
+    ])
+
+
+class ModeTests(unittest.TestCase):
+    def test_three_tuple_rule_stays_valid(self):
+        # Backward compat: a plain (kind, pattern, skip) rule needs no mode fields.
+        lexer = scilex.Lexer([(0, r"\s+", True), (1, r"[a-z]+", False)])
+        self.assertEqual([t.kind for t in lexer.tokenize("ab cd")], [1, 1])
+
+    def test_canonical_fstring_flow(self):
+        toks = fstring_lexer().tokenize('f"a{x}b"')
+        self.assertEqual([t.kind for t in toks],
+                         [_OPEN, _TEXT, _LB, _IDENT, _RB, _TEXT, _CLOSE])
+        self.assertEqual(toks[3].lexeme, "x")  # x lexed by the SAME code IDENT rule
+
+    def test_nesting_via_the_stack(self):
+        # Same " and { delimiters, disambiguated only by the mode stack.
+        toks = fstring_lexer().tokenize('f"{f"{x}"}"')
+        self.assertEqual([t.kind for t in toks],
+                         [_OPEN, _LB, _OPEN, _LB, _IDENT, _RB, _CLOSE, _RB, _CLOSE])
+
+    def test_escaped_braces_munch_whole(self):
+        toks = fstring_lexer().tokenize('f"{{x}}"')
+        self.assertEqual([(t.kind, t.lexeme) for t in toks],
+                         [(_OPEN, 'f"'), (_TEXT, "{{"), (_TEXT, "x"), (_TEXT, "}}"), (_CLOSE, '"')])
+
+    def test_code_rules_are_shared_with_interpolations(self):
+        # The NUMBER rule (a code rule) lexes inside an interpolation, unduplicated.
+        toks = fstring_lexer().tokenize('f"a{1}b"')
+        self.assertEqual([t.kind for t in toks],
+                         [_OPEN, _TEXT, _LB, _NUM, _RB, _TEXT, _CLOSE])
+
+    def test_unterminated_mode_reports_opening(self):
+        with self.assertRaises(scilex.error) as caught:
+            fstring_lexer().tokenize('f"abc')  # never closed (#3)
+        self.assertEqual(caught.exception.position.offset, 0)
+
+    def test_pop_at_root_raises(self):
+        # A pop active in the default (root) mode has nothing to leave (#2).
+        lexer = scilex.Lexer([(0, r"[a-z]+", False), (1, r"\)", False, [], ("pop",))])
+        with self.assertRaises(scilex.error) as caught:
+            lexer.tokenize("a)")
+        self.assertEqual(caught.exception.position.offset, 1)
+
+    def test_no_rule_in_mode_raises(self):
+        # In 'num' only digits match; a letter there matches no active rule (#1).
+        lexer = scilex.Lexer([(0, r"#", False, [], ("push", "num")),
+                              (1, r"[0-9]+", False, ["num"])])
+        with self.assertRaises(scilex.error) as caught:
+            lexer.tokenize("#a")
+        self.assertEqual(caught.exception.position.offset, 1)
+
+    def test_scan_matches_tokenize_for_modes(self):
+        # The lazy scan path threads the same per-scan mode stack as tokenize.
+        lexer = fstring_lexer()
+        source = 'f"a{x + 1}b"'
+        self.assertEqual([t.kind for t in lexer.scan(source)],
+                         [t.kind for t in lexer.tokenize(source)])
+
+    def test_modal_rules_property_shape(self):
+        lexer = fstring_lexer()
+        self.assertEqual(lexer.rules[_WS][0:3], (_WS, r"\s+", True))
+        self.assertEqual(lexer.rules[7], (_CLOSE, '"', False, ["fstr"], ("pop",)))
+
+    def test_bare_str_in_mode_rejected(self):
+        with self.assertRaises(TypeError):
+            scilex.Lexer([(0, r"a", False, "default")])
+
+    def test_unknown_action_rejected(self):
+        with self.assertRaises(ValueError):
+            scilex.Lexer([(0, r"a", False, ["m"], ("jump", "m"))])
+
+    def test_push_without_target_rejected(self):
+        with self.assertRaises(TypeError):
+            scilex.Lexer([(0, r"a", False, [], ("push",))])
+
+    def test_transition_into_empty_mode_rejected(self):
+        # No rule lives in 'ghost', so the C++ builder refuses the grammar.
+        with self.assertRaises(scilex.error):
+            scilex.Lexer([(0, r"a", False, [], ("push", "ghost"))])
+
+
 if __name__ == "__main__":
     unittest.main()

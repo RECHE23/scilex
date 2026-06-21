@@ -28,7 +28,24 @@ For indentation-significant languages (Python-like), :class:`Layout` turns an
 ``eof=True`` token stream into a layout-aware one, inserting :data:`NEWLINE` /
 :data:`INDENT` / :data:`DEDENT` tokens from each line's leading column.
 
-Earlier rules win ties; the longest match wins overall (maximal munch). Positions
+Rules can opt into *modes* (contextual lexing): a rule may be limited to named
+modes via ``in_mode`` and drive a per-scan mode stack via ``action`` (``("push",
+mode)`` / ``("set", mode)`` / ``("pop",)``), so the same byte lexes differently by
+context — Python f-strings are the canonical case::
+
+    OPEN, TEXT, LB, NAME, RB, CLOSE = range(6)
+    fstr = scilex.Lexer([
+        (NAME, r"[A-Za-z_]\w*", False, ["default", "interp"]),  # code, shared
+        (OPEN, r'f"', False, ["default", "interp"], ("push", "fstr")),
+        (TEXT, r'[^{}"]+', False, ["fstr"]),
+        (LB, r"\{", False, ["fstr"], ("push", "interp")),
+        (CLOSE, r'"', False, ["fstr"], ("pop",)),
+        (RB, r"\}", False, ["interp"], ("pop",)),
+    ])
+    fstr.tokenize(r'f"hi {name}"')   # OPEN, TEXT, LB, NAME, RB, CLOSE
+
+A plain ``(kind, pattern, skip)`` rule uses neither field. Earlier rules win ties;
+the longest match wins overall (maximal munch). Positions
 are byte-based (SciLex's UTF-8 model): ``offset`` is a 0-based byte index,
 ``line``/``column`` are 1-based (a column counts bytes). A position matched by no
 rule raises :class:`scilex.error` (aka :class:`LexerError`) carrying the failure
@@ -169,16 +186,39 @@ def _attach_position(exc, source=None):
     exc.args = (f"no rule matches at line {exc.line}, column {exc.column}: {exc.context}",)
 
 
+def _normalize_action(action, index):
+    """Validate a rule action into ``None`` | ``("push"|"set", mode)`` | ``("pop",)``."""
+    if action is None:
+        return None
+    if not isinstance(action, (tuple, list)) or not action:
+        raise TypeError(
+            f"rule {index}: action must be None or a tuple "
+            "(\"push\", mode) / (\"set\", mode) / (\"pop\",)")
+    op = action[0]
+    if op in ("push", "set"):
+        if len(action) != 2 or not isinstance(action[1], str):
+            raise TypeError(f"rule {index}: {op!r} action needs a target mode: ({op!r}, mode)")
+        return (op, action[1])
+    if op == "pop":
+        return ("pop",)
+    raise ValueError(f"rule {index}: unknown action {op!r} (expected 'push', 'pop' or 'set')")
+
+
 class Lexer:
     """A compiled, reusable set of token rules.
 
     Args:
-        rules (iterable): Items ``(kind, pattern)`` or ``(kind, pattern, skip)``;
+        rules (iterable): Items ``(kind, pattern[, skip[, in_mode[, action]]])``;
             ``kind`` is an int, ``pattern`` a REAL regex string, ``skip`` a bool
             (default ``False``) — when true, matches are consumed but not emitted.
+            ``in_mode`` is a sequence of mode names the rule is active in (empty, the
+            default, means the default mode only); ``action`` drives the per-scan mode
+            stack and is ``None`` or one of ``("push", mode)`` / ``("set", mode)`` /
+            ``("pop",)``. These last two are SciLex's *modes* (contextual lexing); a
+            plain ``(kind, pattern, skip)`` rule needs neither.
 
     Raises:
-        error: If a pattern is an invalid regex.
+        error: If a pattern is an invalid regex, or a transition targets an empty mode.
     """
 
     def __init__(self, rules):
@@ -189,13 +229,29 @@ class Lexer:
             if not isinstance(pattern, str):
                 raise TypeError(
                     f"rule {len(normalized)}: pattern must be str, got {type(pattern).__name__}")
-            normalized.append((int(kind), pattern, skip))
+            in_mode = entry[3] if len(entry) > 3 and entry[3] is not None else ()
+            if isinstance(in_mode, str):
+                raise TypeError(
+                    f"rule {len(normalized)}: in_mode must be a list of mode names, not a bare str")
+            modes = []
+            for mode in in_mode:
+                if not isinstance(mode, str):
+                    raise TypeError(
+                        f"rule {len(normalized)}: in_mode entries must be str, "
+                        f"got {type(mode).__name__}")
+                modes.append(mode)
+            action = _normalize_action(entry[4] if len(entry) > 4 else None, len(normalized))
+            if modes or action is not None:
+                normalized.append((int(kind), pattern, skip, modes, action))
+            else:
+                normalized.append((int(kind), pattern, skip)) # plain rule stays a triple
         self._rules = normalized
         self._handle = _compile(normalized)
 
     @property
     def rules(self):
-        """The normalized ``(kind, pattern, skip)`` rules."""
+        """The normalized rules: ``(kind, pattern, skip)``, or
+        ``(kind, pattern, skip, in_mode, action)`` for rules that use modes."""
         return list(self._rules)
 
     def tokenize(self, text, eof=False):

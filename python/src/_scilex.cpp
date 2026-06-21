@@ -1,7 +1,7 @@
 // SciLex — Python extension module (CPython Limited API, abi3).
 //
 // Exposes the generic maximal-munch lexer:
-//   _scilex.compile(rules) -> capsule        # rules: [(kind:int, pattern:str, skip:bool), …]
+//   _scilex.compile(rules) -> capsule        # [(kind, pattern, skip[, in_mode[, action]]), …]
 //   _scilex.tokenize(handle, text, eof) -> list  # eager [(kind, lexeme, offset, line, column), …]
 //   _scilex.scan_start(handle, text, eof) -> capsule  # a lazy scan cursor
 //   _scilex.scan_next(cursor) -> tuple | None    # the next token, or None at the end
@@ -24,6 +24,7 @@
 
 #include <cstddef>
 #include <exception>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -173,8 +174,86 @@ void scan_capsule_free(PyObject* capsule)
     }
 }
 
-// _scilex.compile(rules) -> capsule wrapping a scilex::lexer built from
-// (kind:int, pattern:str, skip:bool) triples.
+// Parses a rule's optional `in_mode` field into mode names. None/absent -> empty
+// (the rule lives in the default mode only); otherwise a sequence of str. A bare
+// str is rejected (it would silently char-split). Returns 0 on success, -1 (error
+// set) otherwise. `obj` must stay alive for the call (its entries are borrowed).
+int parse_in_mode(PyObject* obj, std::vector<std::string>* out)
+{
+    if (obj == nullptr || obj == Py_None) {
+        return 0;
+    }
+    if (PyUnicode_Check(obj)) {
+        PyErr_SetString(error_type, "in_mode must be a sequence of mode names, not a bare str");
+        return -1;
+    }
+    const Py_ssize_t count = PySequence_Size(obj);
+    if (count < 0) {
+        PyErr_Clear();
+        PyErr_SetString(error_type, "in_mode must be a sequence of str");
+        return -1;
+    }
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        PyObject* name = PySequence_GetItem(obj, i); // new ref
+        if (name == nullptr) {
+            return -1;
+        }
+        Py_ssize_t  length = 0;
+        const char* text   = PyUnicode_AsUTF8AndSize(name, &length);
+        if (text == nullptr) {
+            Py_DECREF(name);
+            PyErr_Clear();
+            PyErr_SetString(error_type, "in_mode entries must be str");
+            return -1;
+        }
+        out->emplace_back(text, static_cast<std::size_t>(length));
+        Py_DECREF(name);
+    }
+    return 0;
+}
+
+// Parses a rule's optional `action` field. None/absent -> no action; otherwise a
+// tuple ("push", mode) / ("set", mode) / ("pop",). Returns 0 on success, -1 (error
+// set) otherwise. `obj` must stay alive for the call (its strings are borrowed).
+int parse_action(PyObject* obj, std::optional<scilex::mode_action>* out)
+{
+    if (obj == nullptr || obj == Py_None) {
+        return 0;
+    }
+    const char* op_text = nullptr;
+    const char* target  = nullptr;
+    if (PyTuple_Check(obj) == 0 || PyArg_ParseTuple(obj, "s|s", &op_text, &target) == 0) {
+        PyErr_Clear();
+        PyErr_SetString(error_type,
+                        R"(action must be None or a tuple ("push", mode) / ("set", mode) / ("pop",))");
+        return -1;
+    }
+    scilex::mode_action action;
+    const std::string   operation {op_text};
+    if (operation == "push" || operation == "set") {
+        if (target == nullptr) {
+            PyErr_Format(error_type, "'%s' action needs a target mode", op_text);
+            return -1;
+        }
+        action.operation = operation == "push" ? scilex::mode_action::op::push
+                                               : scilex::mode_action::op::set;
+        action.target = target;
+    }
+    else if (operation == "pop") {
+        action.operation = scilex::mode_action::op::pop;
+    }
+    else {
+        PyErr_Format(error_type, "unknown action '%s' (expected push, pop or set)", op_text);
+        return -1;
+    }
+    *out = action;
+    return 0;
+}
+
+// _scilex.compile(rules) -> capsule wrapping a scilex::lexer. Each rule is
+// (kind:int, pattern:str, skip:bool) and may carry two optional fields:
+// in_mode (a sequence of mode-name str) and action (a push/pop/set tuple). A bare
+// 3-tuple stays valid (a default-mode rule with no transition).
 PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
 {
     PyObject* rules_obj = nullptr;
@@ -193,18 +272,30 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
             if (item == nullptr) {
                 return nullptr;
             }
-            int         kind    = 0;
-            const char* pattern = nullptr;
-            int         skip    = 0;
-            const int   parsed  = PyArg_ParseTuple(item, "isp", &kind, &pattern, &skip);
-            // `pattern` borrows the item's buffer — copy before releasing it.
-            std::string pattern_copy {parsed != 0 && pattern != nullptr ? pattern : ""};
+            int         kind        = 0;
+            const char* pattern     = nullptr;
+            int         skip        = 0;
+            PyObject*   in_mode_obj = nullptr; // optional 4th field (borrowed)
+            PyObject*   action_obj  = nullptr; // optional 5th field (borrowed)
+            const int   parsed      = PyArg_ParseTuple(item, "isp|OO", &kind, &pattern, &skip,
+                                                       &in_mode_obj, &action_obj);
+            // pattern, in_mode_obj and action_obj all borrow from `item` — read them
+            // (copying through) before releasing it.
+            std::string                        pattern_copy {parsed != 0 && pattern != nullptr ? pattern : ""};
+            std::vector<std::string>           in_mode;
+            std::optional<scilex::mode_action> action;
+            const bool                         extras_ok = parsed != 0
+                                                           && parse_in_mode(in_mode_obj, &in_mode) == 0
+                                                           && parse_action(action_obj, &action) == 0;
             Py_DECREF(item);
-            if (parsed == 0) {
-                return nullptr; // not an (int, str, bool) triple
+            if (parsed == 0 || !extras_ok) {
+                return nullptr; // PyArg / parse_in_mode / parse_action set the error
             }
             try {
-                rules.push_back(scilex::rule {kind, real::regex(pattern_copy), skip != 0});
+                scilex::rule built {kind, real::regex(pattern_copy), skip != 0};
+                built.in_mode = std::move(in_mode);
+                built.action  = action;
+                rules.push_back(std::move(built));
             }
             catch (const real::regex_error& error) {
                 // what() already reads "regex_error at <offset>: <cause>"; prefix the rule.
@@ -449,13 +540,16 @@ PyObject* scilex_layout(PyObject* /*self*/, PyObject* args)
 PyMethodDef module_methods[] = {
     {"compile", scilex_compile, METH_VARARGS,
      "compile(rules)\n"
-     "Compile an ordered list of (kind, pattern, skip) rules into a lexer handle.\n\n"
+     "Compile an ordered list of rules into a lexer handle.\n\n"
      "Args:\n"
-     "    rules (sequence): Triples (kind:int, pattern:str, skip:bool).\n\n"
+     "    rules (sequence): Each rule is (kind:int, pattern:str, skip:bool) and may\n"
+     "        carry two optional fields: in_mode (a sequence of mode-name str; empty\n"
+     "        means the default mode) and action (None, or a transition tuple\n"
+     "        (\"push\", mode) / (\"set\", mode) / (\"pop\",)).\n\n"
      "Returns:\n"
      "    capsule: An opaque compiled-lexer handle for tokenize()/scan_start().\n\n"
      "Raises:\n"
-     "    error: If a pattern is an invalid regex."},
+     "    error: If a pattern is an invalid regex, or a transition targets an empty mode."},
     {"tokenize", scilex_tokenize, METH_VARARGS,
      "tokenize(handle, text, eof=False)\n"
      "Eagerly tokenize text with a compiled-lexer handle.\n\n"

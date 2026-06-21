@@ -19,8 +19,20 @@ class error(Exception):
 
 LexerError = error
 
-#: A rule is (kind, pattern) or (kind, pattern, skip).
-_Rule = tuple[int, str] | tuple[int, str, bool]
+#: A mode transition: ("push", mode), ("set", mode), or ("pop",).
+_Action = tuple[str, str] | tuple[str]
+
+#: A rule: (kind, pattern[, skip[, in_mode[, action]]]). in_mode is a sequence of
+#: mode names the rule is active in; action drives the mode stack (or None).
+_Rule = (
+    tuple[int, str]
+    | tuple[int, str, bool]
+    | tuple[int, str, bool, Iterable[str]]
+    | tuple[int, str, bool, Iterable[str], _Action | None]
+)
+
+#: A rule as normalized by Lexer.rules: a plain triple, or the modal 5-tuple.
+_NormRule = tuple[int, str, bool] | tuple[int, str, bool, list[str], _Action | None]
 
 class Position:
     offset: int
@@ -49,7 +61,7 @@ class Token:
 class Lexer:
     def __init__(self, rules: Iterable[_Rule]) -> None: ...
     @property
-    def rules(self) -> list[tuple[int, str, bool]]: ...
+    def rules(self) -> list[_NormRule]: ...
     def tokenize(self, text: str | bytes, eof: bool = ...) -> list[Token]: ...
     def scan(self, text: str | bytes, eof: bool = ...) -> Iterator[Token]: ...
 
