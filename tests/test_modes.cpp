@@ -252,39 +252,6 @@ TEST(apply_transition_is_a_pure_stack_operation)
                 scilex::lex_error);
 }
 
-// --- Layout Awareness: a characterization of the current model's limit ----------
-
-TEST(flow_multiline_produces_spurious_indent_with_current_layout)
-{
-  // CHARACTERIZATION (a limit, not a capability): layout() is positional and
-  // mode-blind, so a multi-line flow collection picks up INDENT/DEDENT from its
-  // inner lines' columns. This is the EXPECTED behaviour of the current decoupled
-  // model; Layout Awareness Level A (flow = insignificant) will remove these and
-  // this test will then be updated. See examples/yaml.hpp + include/scilex/layout.hpp.
-  std::vector<scilex::rule> rules;
-  rules.push_back(with_action(mode_rule(1, R"([{\[])", {"default", "flow"}), push_to("flow")));
-  rules.push_back(with_action(mode_rule(2, R"([}\]])", {"flow"}), pop_mode()));
-  rules.push_back(mode_rule(0, R"(\s+)", {"default", "flow"}, /*skip=*/ true));
-  rules.push_back(mode_rule(3, ":", {"flow"}));
-  rules.push_back(mode_rule(4, ",", {"flow"}));
-  rules.push_back(mode_rule(5, R"([^\s:,{}\[\]]+)", {"flow"}));
-  const scilex::lexer              lexer(std::move(rules));
-  const std::vector<scilex::token> flat    {lexer.tokenize("{\n a: 1,\n b: 2\n}", scilex::eof_policy::append)};
-  const std::vector<scilex::token> laid    {scilex::layout(flat)};
-  int                              indents {0};
-  int                              dedents {0};
-  for (const scilex::token& tok : laid) {
-    if (tok.kind == scilex::indent) {
-      ++indents;
-    }
-    else if (tok.kind == scilex::dedent) {
-      ++dedents;
-    }
-  }
-  EXPECT(indents > 0); // spurious: the flow body's inner lines look like a block
-  EXPECT_EQ(indents, dedents);
-}
-
 // --- Layout Awareness Level A: the machine ---------------------------------------
 
 namespace {
@@ -308,6 +275,26 @@ namespace {
     return count;
   }
 } // namespace
+
+TEST(flow_multiline_emits_no_layout_structure)
+{
+  // Was the characterization of the pre-Level-A limit: a multi-line flow collection
+  // picked up spurious INDENT/DEDENT from its inner lines' columns. Layout Awareness
+  // Level A lifts it — with "flow" insignificant, the same multi-line flow body now
+  // emits NO layout structure. See examples/yaml.hpp + include/scilex/layout.hpp.
+  std::vector<scilex::rule> rules;
+  rules.push_back(with_action(mode_rule(1, R"([{\[])", {"default", "flow"}), push_to("flow")));
+  rules.push_back(with_action(mode_rule(2, R"([}\]])", {"flow"}), pop_mode()));
+  rules.push_back(mode_rule(0, R"(\s+)", {"default", "flow"}, /*skip=*/ true));
+  rules.push_back(mode_rule(3, ":", {"flow"}));
+  rules.push_back(mode_rule(4, ",", {"flow"}));
+  rules.push_back(mode_rule(5, R"([^\s:,{}\[\]]+)", {"flow"}));
+  const scilex::lexer              lexer(std::move(rules), {"flow"}); // flow is insignificant
+  const std::vector<scilex::token> laid                    {
+    scilex::layout(lexer.tokenize("{\n a: 1,\n b: 2\n}", scilex::eof_policy::append),
+                   lexer.mode_significant())};
+  EXPECT_EQ(indent_dedent_count(laid), 0); // the multi-line flow body adds no structure
+}
 
 TEST(layout_awareness_suppresses_an_insignificant_mode)
 {

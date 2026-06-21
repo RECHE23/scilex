@@ -122,7 +122,8 @@ namespace {
                        };
     if (layout) {
       const std::vector<scilex::token> flat {lex.tokenize(source, scilex::eof_policy::append)};
-      for (const scilex::token& tok : scilex::layout(flat)) {
+      // Policy-aware: an insignificant mode (e.g. YAML flow) adds no layout structure.
+      for (const scilex::token& tok : scilex::layout(flat, lex.mode_significant())) {
         print(tok);
       }
     }

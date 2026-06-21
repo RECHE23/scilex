@@ -8,37 +8,27 @@
  * by `{` or `[` (from block OR a flow, so flow collections nest) and left by `}` /
  * `]`. Block indentation is recovered by the layout pass from token positions.
  *
- * Modes & Layout: what the decoupling costs
- *   layout() is purely positional and mode-blind BY DESIGN, and it cannot be
- *   silenced in indentation-insignificant regions. Three real cases share that one
- *   root cause — a multi-line flow collection, block scalars `|` / `>`, and (in
- *   Python) implicit line continuation inside brackets. Handling them is the
- *   Layout Awareness arc, a dedicated design-first evolution, not a field added in
- *   passing:
- *     - Level A — layout() becomes mode-aware (each token carries its mode; a
- *       per-mode policy marks a mode significant|insignificant) → multi-line flow
- *       and continuation, without touching the scan. A large step, but NOT "the
- *       universal lexer solved".
- *     - Level B — a reference indent in the frame, with inline pop on dedent →
- *       block scalars / heredocs. A deeper change; cases will remain even after A.
- *   Two invariants are locked for that arc: (1) with no active mode (or a mode
- *   whose policy is significant) the result is byte-for-byte today's layout() —
- *   zero-cost; (2) the MODE is the single source of truth for the policy, which
- *   FORBIDS any per-rule flag (e.g. an `ignore_layout` on a rule): the policy is
- *   derived from the mode, never set beside it. See include/scilex/layout.hpp.
+ * Modes & Layout: the decoupling, and Level A
+ *   layout() is positional; by default it is mode-blind. Layout Awareness Level A
+ *   makes it opt-in mode-aware (each token carries its mode; a per-mode policy
+ *   marks a mode significant|insignificant), and THIS grammar uses it: `flow` is
+ *   insignificant, so a multi-line flow collection adds no INDENT/DEDENT — without
+ *   touching the scan. Block scalars `|` / `>` are deeper (a reference indent in
+ *   the frame) — Layout Awareness Level B, still to come. Two invariants hold: (1)
+ *   no policy ⇒ byte-for-byte the positional pass, zero-cost; (2) the MODE is the
+ *   single source of truth for the policy — no per-rule flag. See
+ *   include/scilex/layout.hpp.
  *
  * What this grammar covers
  *   - mappings `key: value`, block sequences `- item`;
- *   - single-line flow collections `{…}` / `[…]` (nesting via the stack);
+ *   - flow collections `{…}` / `[…]`, single- or multi-line (nesting via the
+ *     stack; multi-line adds no spurious layout, via Level A);
  *   - comments `#…`, anchors `&a` / aliases `*a` / tags `!t` (simple);
  *   - strings `"…"` (with `\`-escapes) and `'…'` (with `''` escapes);
  *   - plain scalars (pragmatic — see below) and block indentation via layout().
  *
- * Not handled by the current decoupled model → lifted by Layout Awareness:
- *   - multi-line flow collections (Level A — they get spurious INDENT/DEDENT
- *     today; see the named characterization test in tests/test_modes.cpp);
- *   - block scalars `|` / `>` (Level B);
- *   - implicit line continuation.
+ * Not yet handled (Layout Awareness Level B):
+ *   - block scalars `|` / `>` (they need a reference indent in the frame).
  *
  * YAML complexity beyond this sample (realism, not the model — none excluded):
  *   - fine scalar context-sensitivity (a `:` inside a value, multi-word scalars,
@@ -160,7 +150,9 @@ namespace scilex::examples::yaml {
   //! \brief Builds the lexer from its rule list (see \ref make_rules).
   inline scilex::lexer make_lexer()
   {
-    return scilex::lexer(make_rules());
+    // "flow" is layout-insignificant (Layout Awareness Level A): a multi-line flow
+    // collection adds no INDENT/DEDENT. Block indentation stays significant.
+    return scilex::lexer(make_rules(), {"flow"});
   }
 
   //! \brief A small configuration document exercising every covered context.
@@ -204,7 +196,8 @@ nested:
   {
     int indents {0};
     int dedents {0};
-    for (const scilex::token& tok : scilex::layout(lex.tokenize(src, scilex::eof_policy::append))) {
+    for (const scilex::token& tok : scilex::layout(lex.tokenize(src, scilex::eof_policy::append),
+                                                   lex.mode_significant())) {
       indents += static_cast<int>(tok.kind == scilex::indent);
       dedents += static_cast<int>(tok.kind == scilex::dedent);
     }
@@ -240,6 +233,11 @@ nested:
     }
     if (indent_dedent(lex, "[1, 2, 3]") != std::pair<int, int> {0, 0}) {
       return false; // single line -> no indent/dedent
+    }
+    // A MULTI-line flow collection also adds no layout structure (Layout Awareness
+    // Level A: "flow" is insignificant), where the positional pass would not.
+    if (indent_dedent(lex, "[\n  1,\n  2\n]") != std::pair<int, int> {0, 0}) {
+      return false;
     }
     // (4) a comment is skipped.
     if (!kinds_are(lex.tokenize("v # tail\n"), {scalar})) {
