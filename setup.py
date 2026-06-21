@@ -22,7 +22,7 @@ def real_include():
     try:
         import real
         return real.get_include()
-    except Exception:  # pragma: no cover - fallback for a source checkout
+    except (ImportError, AttributeError):  # pragma: no cover - fallback for a source checkout
         # Try common clone directory names for https://github.com/RECHE23/real-regex
         for name in ("real-regex", "real", "real-v1"):
             p = os.path.normpath(os.path.join(HERE, os.pardir, name, "include"))

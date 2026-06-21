@@ -46,7 +46,9 @@ set(SCILEX_REAL_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../real-v1/include"
     CACHE PATH "Path to REAL's include directory (maintainer's default; override for your layout)")
 set(SCILEX_REAL_REPO "${CMAKE_CURRENT_SOURCE_DIR}/../real-v1"
     CACHE STRING "REAL git repository (path or URL) when fetching")
-set(SCILEX_REAL_TAG "main" CACHE STRING "REAL git tag when fetching")
+# Default to REAL's released tag so a FetchContent build is reproducible (override
+# with -DSCILEX_REAL_TAG=main to track the latest during co-development).
+set(SCILEX_REAL_TAG "v2026.6.8" CACHE STRING "REAL git tag when fetching")
 
 if(SCILEX_FETCH_DEPS)
     include(FetchContent)
