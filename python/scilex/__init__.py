@@ -160,7 +160,7 @@ def _attach_position(exc, source=None):
     exc.position = Position(offset, exc.line, exc.column)
     if source is None:
         return
-    data = source.encode("utf-8")
+    data = source if isinstance(source, bytes) else source.encode("utf-8")
     window = 8
     before = data[max(0, offset - window):offset].decode("utf-8", "replace")
     here = data[offset:offset + 1].decode("utf-8", "replace")
@@ -199,7 +199,8 @@ class Lexer:
         """Tokenize ``text`` eagerly into a list.
 
         Args:
-            text (str): The source to tokenize.
+            text (str | bytes): The source to tokenize; each :class:`Token`'s lexeme
+                is a ``str`` when ``text`` is ``str``, ``bytes`` when it is ``bytes``.
             eof (bool): Append a terminal :data:`END_OF_INPUT` token at the end.
 
         Returns:
@@ -224,7 +225,8 @@ class Lexer:
         before it has been yielded.
 
         Args:
-            text (str): The source to scan.
+            text (str | bytes): The source to scan; each :class:`Token`'s lexeme is a
+                ``str`` when ``text`` is ``str``, ``bytes`` when it is ``bytes``.
             eof (bool): Yield a terminal :data:`END_OF_INPUT` token at the end.
 
         Yields:

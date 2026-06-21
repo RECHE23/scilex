@@ -45,7 +45,7 @@ package-dir = { "" = "python" }
 packages = ["scilex"]
 
 [tool.setuptools.package-data]
-scilex = ["*.so", "*.pyd"]
+scilex = ["*.so", "*.pyd", "py.typed", "*.pyi"]
 
 # Build one abi3 wheel per platform (cp310 → works on CPython 3.10+).
 [tool.cibuildwheel]

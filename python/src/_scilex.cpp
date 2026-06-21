@@ -60,15 +60,73 @@ void set_positioned_error(const char* message, scilex::position where)
     Py_DECREF(exc);
 }
 
-// Builds the (kind, lexeme, offset, line, column) tuple for one token (lexeme
-// decoded from UTF-8 bytes back to str). Returns a new reference, or null on error.
-PyObject* token_tuple(const scilex::token& token)
+// Releases the GIL for a scope (RAII): restored on EVERY exit, including a C++
+// exception — unlike the bare Py_BEGIN/END_ALLOW_THREADS macros, whose END is
+// skipped on a throw, leaving the GIL released (undefined behaviour afterwards).
+struct GilRelease
+{
+    PyThreadState* saved;
+    GilRelease() : saved(PyEval_SaveThread()) {}
+    ~GilRelease() { PyEval_RestoreThread(saved); }
+    GilRelease(const GilRelease&)            = delete;
+    GilRelease& operator=(const GilRelease&) = delete;
+};
+
+// Releasing the GIL costs a thread-state save/restore (plus re-acquire contention)
+// that only pays off once the pure-C++ scan outlasts it. tokenize then builds
+// O(tokens) Python objects under the GIL — the same serial-tail shape as REAL's
+// findall — so it reuses REAL's measured 4 KB collect threshold (see BENCHMARKS.md):
+// below it the toggle would dwarf a sub-millisecond call and regress multithreading.
+constexpr Py_ssize_t gil_release_collect_min_bytes = 4096;
+
+// Borrows the source bytes of a str or bytes object WITHOUT copying: for bytes, its
+// buffer; for str, its cached UTF-8 (SciLex lexes UTF-8, so offsets stay byte
+// indices). The buffer stays valid while `obj` is alive — both types are immutable,
+// so it is stable even with the GIL released. `is_bytes` records the input type so
+// the output lexemes can match it. Returns 0 on success, -1 (TypeError set) otherwise.
+int read_source(PyObject* obj, const char** data, Py_ssize_t* len, bool* is_bytes)
+{
+    if (PyBytes_Check(obj)) {
+        char*      buffer = nullptr;
+        Py_ssize_t size   = 0;
+        if (PyBytes_AsStringAndSize(obj, &buffer, &size) < 0) {
+            return -1;
+        }
+        *data     = buffer;
+        *len      = size;
+        *is_bytes = true;
+        return 0;
+    }
+    if (PyUnicode_Check(obj)) {
+        Py_ssize_t  size   = 0;
+        const char* buffer = PyUnicode_AsUTF8AndSize(obj, &size);
+        if (buffer == nullptr) {
+            return -1;
+        }
+        *data     = buffer;
+        *len      = size;
+        *is_bytes = false;
+        return 0;
+    }
+    PyErr_SetString(PyExc_TypeError, "expected str or bytes");
+    return -1;
+}
+
+// Builds the (kind, lexeme, offset, line, column) tuple for one token. The lexeme is
+// a str (decoded from the UTF-8 bytes) when the source was str, or bytes when it was
+// bytes — matching the input type. Returns a new reference, or null on error.
+PyObject* token_tuple(const scilex::token& token, bool is_bytes)
 {
     // A synthetic token (newline/indent/dedent) carries a default, null-data view;
-    // "s#" maps a null pointer to None, so use "" to keep an empty lexeme an empty str.
-    const char* data = token.lexeme.data() != nullptr ? token.lexeme.data() : "";
-    return Py_BuildValue("(is#nnn)", token.kind, data,
-                         static_cast<Py_ssize_t>(token.lexeme.size()),
+    // use "" so an empty lexeme becomes an empty str/bytes rather than tripping on null.
+    const char*      data   = token.lexeme.data() != nullptr ? token.lexeme.data() : "";
+    const Py_ssize_t size   = static_cast<Py_ssize_t>(token.lexeme.size());
+    PyObject*        lexeme = is_bytes ? PyBytes_FromStringAndSize(data, size)
+                                       : PyUnicode_FromStringAndSize(data, size);
+    if (lexeme == nullptr) {
+        return nullptr;
+    }
+    return Py_BuildValue("(iNnnn)", token.kind, lexeme, // N steals the lexeme ref
                          static_cast<Py_ssize_t>(token.start.offset),
                          static_cast<Py_ssize_t>(token.start.line),
                          static_cast<Py_ssize_t>(token.start.column));
@@ -88,19 +146,30 @@ void capsule_free(PyObject* capsule)
 struct scan_state
 {
     PyObject*              lexer_capsule {nullptr}; // owned ref, keeps the lexer alive
-    std::string            source;                  // owned UTF-8 copy (tokens view into it)
-    scilex::token_iterator it;                      // current position (views into source)
+    PyObject*              source_obj    {nullptr}; // owned ref to the str/bytes; its buffer is borrowed
+    bool                   is_bytes      {false};   // output lexeme type follows the input
+    scilex::token_iterator it;                      // current position (views into source_obj's buffer)
     scilex::token_iterator end;                     // the end sentinel
     bool                   needs_advance {false};   // advance before the next read?
 };
+
+// Frees a scan_state: destroy the cursor (its iterators borrow source_obj's buffer)
+// FIRST, then release the borrowed refs — the lifetime order REAL's binding uses too.
+void free_scan_state(scan_state* state)
+{
+    PyObject* source_obj    = state->source_obj;
+    PyObject* lexer_capsule = state->lexer_capsule;
+    delete state;
+    Py_XDECREF(source_obj);
+    Py_XDECREF(lexer_capsule);
+}
 
 // Capsule destructor: releases the lexer reference and frees the cursor.
 void scan_capsule_free(PyObject* capsule)
 {
     auto* state = static_cast<scan_state*>(PyCapsule_GetPointer(capsule, SCAN_CAPSULE_NAME));
     if (state != nullptr) {
-        Py_XDECREF(state->lexer_capsule);
-        delete state;
+        free_scan_state(state);
     }
 }
 
@@ -134,7 +203,14 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
             if (parsed == 0) {
                 return nullptr; // not an (int, str, bool) triple
             }
-            rules.push_back(scilex::rule {kind, real::regex(pattern_copy), skip != 0});
+            try {
+                rules.push_back(scilex::rule {kind, real::regex(pattern_copy), skip != 0});
+            }
+            catch (const real::regex_error& error) {
+                // what() already reads "regex_error at <offset>: <cause>"; prefix the rule.
+                PyErr_Format(error_type, "rule %zd: %s", i, error.what());
+                return nullptr;
+            }
         }
         auto* lexer = new scilex::lexer(std::move(rules));
         PyObject* capsule = PyCapsule_New(lexer, CAPSULE_NAME, capsule_free);
@@ -157,32 +233,40 @@ PyObject* scilex_tokenize(PyObject* /*self*/, PyObject* args)
     PyObject* capsule  = nullptr;
     PyObject* text_obj = nullptr;
     int       eof      = 0;
-    if (PyArg_ParseTuple(args, "OU|p", &capsule, &text_obj, &eof) == 0) {
+    if (PyArg_ParseTuple(args, "OO|p", &capsule, &text_obj, &eof) == 0) {
         return nullptr;
     }
     auto* lexer = static_cast<scilex::lexer*>(PyCapsule_GetPointer(capsule, CAPSULE_NAME));
     if (lexer == nullptr) {
         return nullptr; // wrong capsule (error already set)
     }
-    PyObject* utf8 = PyUnicode_AsUTF8String(text_obj); // new ref (bytes)
-    if (utf8 == nullptr) {
-        return nullptr;
+    const char* data     = nullptr;
+    Py_ssize_t  size     = 0;
+    bool        is_bytes = false;
+    if (read_source(text_obj, &data, &size, &is_bytes) < 0) {
+        return nullptr; // not str/bytes (TypeError set)
     }
-    char*      data = nullptr;
-    Py_ssize_t size = 0;
-    if (PyBytes_AsStringAndSize(utf8, &data, &size) < 0) {
-        Py_DECREF(utf8);
-        return nullptr;
-    }
-    PyObject* result = nullptr;
+    // text_obj is a borrowed argument — alive for the whole call and immutable, so
+    // its buffer is stable even while the GIL is released below.
+    const std::string_view   text {data, static_cast<std::size_t>(size)};
+    const scilex::eof_policy  policy {eof != 0 ? scilex::eof_policy::append : scilex::eof_policy::omit};
+    PyObject*                result = nullptr;
     try {
-        const std::string      text {data, static_cast<std::size_t>(size)};
-        const scilex::eof_policy policy {eof != 0 ? scilex::eof_policy::append : scilex::eof_policy::omit};
-        const std::vector<scilex::token> tokens {lexer->tokenize(text, policy)};
+        // Phase 1 — scan (GIL released past the threshold; the tokens' lexeme views
+        // point into `text`, i.e. text_obj's stable buffer). Phase 2 — build the
+        // Python list under the GIL.
+        std::vector<scilex::token> tokens;
+        if (size >= gil_release_collect_min_bytes) {
+            const GilRelease unlocked;
+            tokens = lexer->tokenize(text, policy);
+        }
+        else {
+            tokens = lexer->tokenize(text, policy);
+        }
         result = PyList_New(static_cast<Py_ssize_t>(tokens.size()));
         if (result != nullptr) {
             for (std::size_t i = 0; i < tokens.size(); ++i) {
-                PyObject* tuple {token_tuple(tokens[i])};
+                PyObject* tuple {token_tuple(tokens[i], is_bytes)};
                 if (tuple == nullptr) {
                     Py_CLEAR(result);
                     break;
@@ -199,7 +283,6 @@ PyObject* scilex_tokenize(PyObject* /*self*/, PyObject* args)
         PyErr_SetString(error_type, error.what());
         result = nullptr;
     }
-    Py_DECREF(utf8);
     return result;
 }
 
@@ -211,50 +294,43 @@ PyObject* scilex_scan_start(PyObject* /*self*/, PyObject* args)
     PyObject* capsule  = nullptr;
     PyObject* text_obj = nullptr;
     int       eof      = 0;
-    if (PyArg_ParseTuple(args, "OU|p", &capsule, &text_obj, &eof) == 0) {
+    if (PyArg_ParseTuple(args, "OO|p", &capsule, &text_obj, &eof) == 0) {
         return nullptr;
     }
     auto* lexer = static_cast<scilex::lexer*>(PyCapsule_GetPointer(capsule, CAPSULE_NAME));
     if (lexer == nullptr) {
         return nullptr; // wrong capsule (error already set)
     }
-    PyObject* utf8 = PyUnicode_AsUTF8String(text_obj); // new ref (bytes)
-    if (utf8 == nullptr) {
-        return nullptr;
-    }
-    char*      data = nullptr;
-    Py_ssize_t size = 0;
-    if (PyBytes_AsStringAndSize(utf8, &data, &size) < 0) {
-        Py_DECREF(utf8);
-        return nullptr;
+    const char* data     = nullptr;
+    Py_ssize_t  size     = 0;
+    bool        is_bytes = false;
+    if (read_source(text_obj, &data, &size, &is_bytes) < 0) {
+        return nullptr; // not str/bytes (TypeError set)
     }
     auto* state = new scan_state;
+    // Keep refs to the lexer (its rules) and the source (its borrowed buffer backs
+    // the iterator and every token's lexeme view); both must outlive the cursor.
+    state->lexer_capsule = Py_NewRef(capsule);
+    state->source_obj    = Py_NewRef(text_obj);
+    state->is_bytes      = is_bytes;
     try {
-        state->lexer_capsule = Py_NewRef(capsule);
-        state->source.assign(data, static_cast<std::size_t>(size));
         const scilex::eof_policy policy {eof != 0 ? scilex::eof_policy::append : scilex::eof_policy::omit};
-        // Construct the iterator over the owned source — runs the first advance (may throw).
-        state->it = scilex::token_iterator(*lexer, std::string_view(state->source), policy);
+        // Construct the iterator over the borrowed source — runs the first advance (may throw).
+        state->it = scilex::token_iterator(*lexer, std::string_view(data, static_cast<std::size_t>(size)), policy);
     }
     catch (const scilex::lex_error& error) {
-        Py_DECREF(utf8);
-        Py_XDECREF(state->lexer_capsule);
-        delete state;
+        free_scan_state(state);
         set_positioned_error(error.what(), error.where());
         return nullptr;
     }
     catch (const std::exception& error) {
-        Py_DECREF(utf8);
-        Py_XDECREF(state->lexer_capsule);
-        delete state;
+        free_scan_state(state);
         PyErr_SetString(error_type, error.what());
         return nullptr;
     }
-    Py_DECREF(utf8);
     PyObject* cursor = PyCapsule_New(state, SCAN_CAPSULE_NAME, scan_capsule_free);
     if (cursor == nullptr) {
-        Py_XDECREF(state->lexer_capsule);
-        delete state;
+        free_scan_state(state);
         return nullptr;
     }
     return cursor;
@@ -295,7 +371,7 @@ PyObject* scilex_scan_next(PyObject* /*self*/, PyObject* args)
         }
     }
     state->needs_advance = true;
-    return token_tuple(*state->it);
+    return token_tuple(*state->it, state->is_bytes);
 }
 
 // _scilex.layout(tokens) -> list. Rewrites an end_of_input-terminated sequence of
@@ -348,7 +424,9 @@ PyObject* scilex_layout(PyObject* /*self*/, PyObject* args)
         result = PyList_New(static_cast<Py_ssize_t>(out.size()));
         if (result != nullptr) {
             for (std::size_t i = 0; i < out.size(); ++i) {
-                PyObject* tuple {token_tuple(out[i])};
+                // Layout is a str/indentation pass (its input lexemes parse via "s#"),
+                // so its synthetic and re-emitted tokens are str lexemes.
+                PyObject* tuple {token_tuple(out[i], /*is_bytes=*/false)};
                 if (tuple == nullptr) {
                     Py_CLEAR(result);
                     break;

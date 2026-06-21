@@ -4,4 +4,5 @@
 graft include
 recursive-include python/src *.cpp
 recursive-include python/tests *.py
+include python/scilex/py.typed python/scilex/__init__.pyi
 include README.md LICENSE BENCHMARKS.md

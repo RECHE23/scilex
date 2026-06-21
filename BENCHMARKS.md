@@ -29,7 +29,7 @@ the difference that matters for a lexer fed untrusted or machine-generated input
 
 | input | winner | why |
 | --- | --- | --- |
-| benign token soup | `re` (~5×, see B1) | a mature C backtracking engine; SciLex runs REAL's NFA per position, through the binding, and builds rich `Token`s |
+| benign token soup | `re` (~2×, see B1) | a mature C backtracking engine; SciLex runs REAL's NFA per position and builds rich `Token`s (the gap narrowed to ~2× with the zero-copy binding + exact dispatch) |
 | adversarial / ReDoS (B2) | **SciLex** (linear vs exponential) | REAL is linear-time and ReDoS-safe; `re` backtracks catastrophically |
 | untrusted / machine-generated | **SciLex** | the linear bound holds on *every* input — no pathological cliff |
 
@@ -103,7 +103,7 @@ compile-time `static_lexer`, grown in when a workload demands it.
 | Machine | Apple Silicon (`arm64`), Darwin 23.6.0 |
 | Binding | abi3 CPython extension as built by `setup.py` (`Py_LIMITED_API` 3.10) |
 | Method | best-of-5 timed runs, **minimum** reported |
-| As of | 2026-06-20 — C++ engine table reflects exact first-byte dispatch (REAL's first-byte API); binding rows B1–B3 are from v2026.6.1 and predate it |
+| As of | 2026-06-20 — C++ engine table = exact first-byte dispatch; B1 re-measured after the binding's zero-copy source + GIL release (str/bytes); B2/B3 predate those |
 
 ## Binding baseline (versus `re`)
 
@@ -116,13 +116,13 @@ tokenizer (`(?P<NUM>…)|(?P<ID>…)|…` + `finditer`).
 
 | tokenizer | time | vs `re` |
 | --- | ---: | ---: |
-| `scilex.Lexer.tokenize` | ~7.4 ms | ~5.2× |
-| `re.finditer` (master pattern) | ~1.4 ms | 1.0× (baseline) |
+| `scilex.Lexer.tokenize` | ~3.9 ms | ~2.0× |
+| `re.finditer` (master pattern) | ~1.9 ms | 1.0× (baseline) |
 
-**Reading.** `re` is ~5× faster here. That is expected and reported plainly: the cost
-buys SciLex's linear guarantee and its ordered maximal-munch semantics, not a speed
-record on benign input. Tightening the per-position scan is a known lever, pursued
-when a real workload makes it the bottleneck.
+**Reading.** `re` is ~2× faster here — down from ~5× before the binding's zero-copy
+source path (it no longer re-encodes and copies the text) and the exact first-byte
+dispatch (see the C++ engine table). The remaining gap buys SciLex's linear guarantee
+and its ordered maximal-munch semantics, not a speed record on benign input.
 
 ### B2. Pathological input (the linearity guarantee — SciLex wins decisively)
 

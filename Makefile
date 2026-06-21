@@ -161,10 +161,11 @@ format:
 	uncrustify -c uncrustify.cfg --replace --no-backup $(FORMAT_FILES)
 
 # Python binding: an abi3 CPython extension (Limited API) over the C++ lexer.
-# REAL's headers are located via the installed real package, or the sibling
-# checkout (see setup.py); the C++ library itself stays header-only.
+# Build against $(REAL_INCLUDE) (the sibling by default) via SCILEX_REAL_INCLUDE, so
+# local co-development uses the current REAL headers — not a stale installed package.
+# A wheel/pip build (no env set) resolves REAL through setup.py instead.
 python:
-	$(PYTHON) setup.py -q build_ext --inplace
+	SCILEX_REAL_INCLUDE=$(REAL_INCLUDE) $(PYTHON) setup.py -q build_ext --inplace
 
 python-test: python
 	$(PYRUN) -m unittest discover -s python/tests

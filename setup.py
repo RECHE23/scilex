@@ -18,7 +18,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 def real_include():
-    """REAL's header directory: from the installed package, else a sibling checkout."""
+    """REAL's header directory: an explicit ``SCILEX_REAL_INCLUDE`` override (used for
+    co-development against a sibling checkout), else the installed package, else a
+    sibling checkout located by name."""
+    override = os.environ.get("SCILEX_REAL_INCLUDE")
+    if override:
+        return override
     try:
         import real
         return real.get_include()
