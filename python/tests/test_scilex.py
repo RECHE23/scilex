@@ -490,5 +490,77 @@ class XmlModeTests(unittest.TestCase):
         self.assertEqual(caught.exception.position.offset, 0)
 
 
+# YAML grammar kinds (mirrors examples/yaml.hpp): block is the default mode.
+(_Y_WS, _Y_COMMENT, _Y_ANCHOR, _Y_ALIAS, _Y_TAG, _Y_DQ, _Y_SQ, _Y_SCALAR,
+ _Y_COLON, _Y_DASH, _Y_COMMA, _Y_FOPEN, _Y_FCLOSE) = range(13)
+
+
+def yaml_lexer():
+    """A YAML-ish block/flow lexer; block is the default (root) mode."""
+    both = ["default", "flow"]  # active in block AND flow (the "default" name = root)
+    return scilex.Lexer([
+        (_Y_WS, r"\s+", True, both),
+        (_Y_FOPEN, r"[{[]", False, both, ("push", "flow")),
+        (_Y_DQ, r'"(\\.|[^"\\])*"', False, both),
+        (_Y_SQ, r"'([^']|'')*'", False, both),
+        (_Y_COLON, r":", False, both),
+        (_Y_COMMENT, r"#.*", True),
+        (_Y_ANCHOR, r"&[A-Za-z0-9_-]+", False),
+        (_Y_ALIAS, r"\*[A-Za-z0-9_-]+", False),
+        (_Y_TAG, r"![A-Za-z0-9_/-]*", False),
+        (_Y_DASH, r"-", False),
+        (_Y_SCALAR, r"[^\s#&*!\"'{\[:][^\s#:{\[]*", False),
+        (_Y_FCLOSE, r"[}\]]", False, ["flow"], ("pop",)),
+        (_Y_COMMA, r",", False, ["flow"]),
+        (_Y_SCALAR, r"[^\s#&*!\"'{}\[\]:,][^\s#:{}\[\],]*", False, ["flow"]),
+    ])
+
+
+class YamlModeTests(unittest.TestCase):
+    def test_mapping(self):
+        self.assertEqual([t.kind for t in yaml_lexer().tokenize("key: value")],
+                         [_Y_SCALAR, _Y_COLON, _Y_SCALAR])
+
+    def test_flow_sequence(self):
+        self.assertEqual([t.kind for t in yaml_lexer().tokenize("[1, 2, 3]")],
+                         [_Y_FOPEN, _Y_SCALAR, _Y_COMMA, _Y_SCALAR, _Y_COMMA, _Y_SCALAR, _Y_FCLOSE])
+
+    def test_flow_nests_via_the_stack(self):
+        self.assertEqual([t.kind for t in yaml_lexer().tokenize("{a: [1, 2]}")],
+                         [_Y_FOPEN, _Y_SCALAR, _Y_COLON, _Y_FOPEN, _Y_SCALAR, _Y_COMMA, _Y_SCALAR,
+                          _Y_FCLOSE, _Y_FCLOSE])
+
+    def test_comment_skipped(self):
+        self.assertEqual([t.kind for t in yaml_lexer().tokenize("v # tail")], [_Y_SCALAR])
+
+    def test_anchor_and_alias(self):
+        self.assertEqual([t.kind for t in yaml_lexer().tokenize("&a x")], [_Y_ANCHOR, _Y_SCALAR])
+        self.assertEqual([t.kind for t in yaml_lexer().tokenize("*a")], [_Y_ALIAS])
+
+    def test_single_quote_escape(self):
+        toks = yaml_lexer().tokenize("'it''s'")
+        self.assertEqual(len(toks), 1)
+        self.assertEqual(toks[0].kind, _Y_SQ)
+        self.assertEqual(toks[0].lexeme, "'it''s'")
+
+    def test_dash_munch_approximation(self):
+        # REAL has no lookahead: '- x' is a sequence dash + item, '-5' is a scalar
+        # (munch beats the dash), '-' alone is a dash. The documented approximation.
+        self.assertEqual([t.kind for t in yaml_lexer().tokenize("- x")], [_Y_DASH, _Y_SCALAR])
+        self.assertEqual([t.kind for t in yaml_lexer().tokenize("-5")], [_Y_SCALAR])
+        self.assertEqual([t.kind for t in yaml_lexer().tokenize("-")], [_Y_DASH])
+
+    def test_block_layout_is_balanced(self):
+        # A nested block mapping yields balanced INDENT/DEDENT via the layout pass.
+        laid = scilex.layout(yaml_lexer().tokenize("a:\n  b: 1\n", eof=True))
+        depth = 0
+        indents = 0
+        for tok in laid:
+            depth += (tok.kind == scilex.INDENT) - (tok.kind == scilex.DEDENT)
+            indents += tok.kind == scilex.INDENT
+        self.assertGreater(indents, 0)
+        self.assertEqual(depth, 0)
+
+
 if __name__ == "__main__":
     unittest.main()

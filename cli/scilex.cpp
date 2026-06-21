@@ -22,7 +22,7 @@
  * The CLI parses them straight into `scilex::rule`. The library itself stays
  * plain C++ rule lists; no spec language is embedded — this format lives only in
  * the tool. Built-in grammars reuse the `examples/<lang>.hpp` registry, so the
- * eight showcase languages are defined exactly once.
+ * nine showcase languages are defined exactly once.
  */
 #include <cstddef>
 #include <fstream>
@@ -46,6 +46,7 @@
 #include "python.hpp"
 #include "sql.hpp"
 #include "xml.hpp"
+#include "yaml.hpp"
 
 namespace {
 
@@ -86,6 +87,9 @@ namespace {
     {"xml",
      &scilex::examples::xml::make_lexer, &scilex::examples::xml::kind_name,
      scilex::examples::xml::sample, &scilex::examples::xml::self_check, false},
+    {"yaml",
+     &scilex::examples::yaml::make_lexer, &scilex::examples::yaml::kind_name,
+     scilex::examples::yaml::sample, &scilex::examples::yaml::self_check, true},
   };
 
   //! \brief Names a layout / end-of-input kind, or nullptr when \p kind is an

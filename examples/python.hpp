@@ -22,7 +22,8 @@
  * What it does not cover (a realistic *example of modes*, not a full Python lexer
  * — none of these is excluded in principle, they are just beyond this sample):
  *   - implicit line continuation inside `()` `[]` `{}` (the layout pass treats
- *     every newline as significant);
+ *     every newline as significant — the same Layout Awareness gap as YAML's
+ *     multi-line flow; see include/scilex/layout.hpp);
  *   - triple-quoted / multi-line f-strings;
  *   - f-string format specs: the `:fmt` tail of `{value:fmt}` lexes as code
  *     (colon + tokens), not as a literal spec;

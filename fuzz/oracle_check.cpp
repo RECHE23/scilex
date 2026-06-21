@@ -2,7 +2,7 @@
  * \file oracle_check.cpp
  * \brief Deterministic, seeded gate over the fuzzing oracle (\ref reference.hpp).
  *
- * Runs every property invariant for each of the eight example grammars across a
+ * Runs every property invariant for each of the nine example grammars across a
  * fixed adversarial input set — the sample, every prefix of it (truncations cut
  * tokens mid-stream), and shared hostile strings (empty, NUL/control/high bytes,
  * invalid UTF-8, unmatched delimiters, an unterminated string, long runs). This
@@ -25,6 +25,7 @@
 #include "python.hpp"
 #include "sql.hpp"
 #include "xml.hpp"
+#include "yaml.hpp"
 
 namespace {
 
@@ -55,6 +56,8 @@ namespace {
      scilex::examples::math::sample, false},
     {"xml", &scilex::examples::xml::make_rules, &scilex::examples::xml::make_lexer,
      scilex::examples::xml::sample, false},
+    {"yaml", &scilex::examples::yaml::make_rules, &scilex::examples::yaml::make_lexer,
+     scilex::examples::yaml::sample, true},
   };
 
   // A fixed, hostile input set shared across grammars (deterministic).
@@ -244,7 +247,7 @@ namespace {
       }
     }
     if (failures == 0) {
-      std::cout << "fuzz-check: " << cases << " cases (8 grammars x sample/truncations/adversarial + 5 multi-mode grammars) — all invariants hold\n";
+      std::cout << "fuzz-check: " << cases << " cases (9 grammars x sample/truncations/adversarial + 5 multi-mode grammars) — all invariants hold\n";
       return 0;
     }
     std::cerr << "fuzz-check: " << failures << " invariant violation(s)\n";

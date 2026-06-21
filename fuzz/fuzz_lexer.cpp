@@ -8,14 +8,14 @@
  * checked against an independent brute-force reference scanner, so a *wrong*
  * (not just crashing) tokenization is a finding. Three modes per input:
  *
- *   (a) every real example grammar (JSON, Python, C++, SQL, CSS, Lisp, math, XML)
- *       — all applicable invariants including indentation layout, and (for Python's
- *       f-strings and XML's content/tag) the per-mode dispatch over real multi-mode
- *       grammars;
+ *   (a) every real example grammar (JSON, Python, C++, SQL, CSS, Lisp, math, XML,
+ *       YAML) — all applicable invariants including indentation layout, and (for
+ *       Python's f-strings, XML's content/tag, and YAML's block/flow) the per-mode
+ *       dispatch over real multi-mode grammars;
  *   (b) a rule-set assembled from a palette of REAL patterns, seeded by the
  *       input itself — structural invariants only (no layout). This is where
  *       the first-byte dispatch meets rule orderings and bucket splits the
- *       eight fixed grammars never produce — exactly the dispatch's blind spots;
+ *       nine fixed grammars never produce — exactly the dispatch's blind spots;
  *   (c) a multi-mode rule-set seeded by the input (push/pop/set, nesting,
  *       skip-transitions) — exercises the per-mode dispatch and the mode stack,
  *       which the mono-mode grammars (a)/(b) never reach.
@@ -42,6 +42,7 @@
 #include "python.hpp"
 #include "sql.hpp"
 #include "xml.hpp"
+#include "yaml.hpp"
 
 namespace {
 
@@ -63,6 +64,7 @@ namespace {
     {"lisp", &scilex::examples::lisp::make_rules, &scilex::examples::lisp::make_lexer, false},
     {"math", &scilex::examples::math::make_rules, &scilex::examples::math::make_lexer, false},
     {"xml", &scilex::examples::xml::make_rules, &scilex::examples::xml::make_lexer, false},
+    {"yaml", &scilex::examples::yaml::make_rules, &scilex::examples::yaml::make_lexer, true},
   };
 
   // A palette of valid REAL patterns for mode (b)'s random rule-sets. The mix

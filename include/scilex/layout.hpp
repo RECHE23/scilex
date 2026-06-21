@@ -16,6 +16,19 @@
  * each count as one column; it does not police mixed tabs/spaces, and there is
  * no implicit line continuation inside brackets).
  *
+ * This pass is positional and **mode-blind by design**. It therefore cannot stay
+ * silent in indentation-insignificant regions — a multi-line flow collection
+ * (`examples/yaml.hpp`), a block scalar `|` / `>`, or implicit line continuation
+ * inside brackets (`examples/python.hpp`) each get structure they should not. That
+ * is an assumed architectural limitation, not a temporary gap: lifting it is the
+ * Layout Awareness arc, a design-first evolution (Level A makes the pass
+ * mode-aware with a per-mode significant|insignificant policy; Level B carries a
+ * reference indent for block scalars). Two invariants bound that arc: (1) with no
+ * active mode — or a mode whose policy is significant — the output is byte-for-byte
+ * this pass, at zero cost; (2) the **mode** is the single source of truth for the
+ * policy, which forbids any per-rule flag (e.g. an `ignore_layout` on a rule): the
+ * policy is derived from the mode, never set beside it.
+ *
  * Input must be an end-of-input-terminated token sequence (the lexer's
  * `eof_policy::append`); the terminal \ref scilex::end_of_input is preserved.
  */
