@@ -3,7 +3,7 @@
  * \brief Per-grammar C++ throughput baseline for the SciLex engine (MB/s).
  *
  * Complements \c benchmarks/bench.py (which times the Python binding against
- * \c re): this measures the pure C++ lexer directly, on each of the seven
+ * \c re): this measures the pure C++ lexer directly, on each of the eight
  * example grammars, over realistic steady-state inputs built by scaling the
  * grammar's own sample. It reports MB/s for two paths:
  *
@@ -39,6 +39,7 @@
 #include "math.hpp"
 #include "python.hpp"
 #include "sql.hpp"
+#include "xml.hpp"
 
 namespace {
 
@@ -135,6 +136,7 @@ int main()
     measure("css", &scilex::examples::css::make_lexer, scilex::examples::css::sample),
     measure("lisp", &scilex::examples::lisp::make_lexer, scilex::examples::lisp::sample),
     measure("math", &scilex::examples::math::make_lexer, scilex::examples::math::sample),
+    measure("xml", &scilex::examples::xml::make_lexer, scilex::examples::xml::sample),
   };
   for (const row& entry : rows) {
     std::printf("  %-8s %8zu %9zu %13.2f %13.2f\n",

@@ -433,5 +433,62 @@ class ModeTests(unittest.TestCase):
             scilex.Lexer([(0, r"a", False, [], ("push", "ghost"))])
 
 
+# XML grammar kinds (mirrors examples/xml.hpp): content is the default mode.
+(_X_TEXT, _X_ENTITY, _X_COMMENT, _X_CDATA, _X_TAGOPEN, _X_CLOSEOPEN,
+ _X_NAME, _X_EQ, _X_ATTR, _X_TAGCLOSE, _X_SELFCLOSE, _X_WS) = range(12)
+
+
+def xml_lexer():
+    """A shallow content<->tag XML lexer; content is the default (root) mode."""
+    return scilex.Lexer([
+        (_X_COMMENT, r"(?s)<!--.*?-->", False),                       # one token (inner < literal)
+        (_X_CDATA, r"(?s)<!\[CDATA\[.*?\]\]>", False),                # one token (inner < & literal)
+        (_X_CLOSEOPEN, r"</", False, [], ("push", "tag")),
+        (_X_TAGOPEN, r"<", False, [], ("push", "tag")),
+        (_X_ENTITY, r"&[A-Za-z#][A-Za-z0-9]*;", False),
+        (_X_TEXT, r"[^<&]+", False),
+        (_X_WS, r"\s+", True, ["tag"]),
+        (_X_NAME, r"[A-Za-z_:][A-Za-z0-9_:.-]*", False, ["tag"]),
+        (_X_EQ, r"=", False, ["tag"]),
+        (_X_ATTR, r'"[^"]*"', False, ["tag"]),
+        (_X_SELFCLOSE, r"/>", False, ["tag"], ("pop",)),
+        (_X_TAGCLOSE, r">", False, ["tag"], ("pop",)),
+    ])
+
+
+class XmlModeTests(unittest.TestCase):
+    def test_element_attr_content(self):
+        toks = xml_lexer().tokenize('<a x="1">hi</a>')
+        self.assertEqual([t.kind for t in toks],
+                         [_X_TAGOPEN, _X_NAME, _X_NAME, _X_EQ, _X_ATTR, _X_TAGCLOSE,
+                          _X_TEXT, _X_CLOSEOPEN, _X_NAME, _X_TAGCLOSE])
+
+    def test_cdata_is_one_opaque_token(self):
+        # The inner <raw>, &, </x> are all swallowed — not a tag, not an entity.
+        toks = xml_lexer().tokenize('<![CDATA[ <raw> & </x> ]]>')
+        self.assertEqual(len(toks), 1)
+        self.assertEqual(toks[0].kind, _X_CDATA)
+        self.assertIn("<raw>", toks[0].lexeme)
+
+    def test_comment_is_one_token(self):
+        self.assertEqual([t.kind for t in xml_lexer().tokenize("<!-- hi -->")], [_X_COMMENT])
+
+    def test_entity_between_text(self):
+        self.assertEqual([t.kind for t in xml_lexer().tokenize("a &amp; b")],
+                         [_X_TEXT, _X_ENTITY, _X_TEXT])
+
+    def test_nesting_cycles_content_and_tag(self):
+        # Shallow modes: element nesting is content<->tag cycles, not stack depth.
+        toks = xml_lexer().tokenize("<a><b/></a>")
+        self.assertEqual([t.kind for t in toks],
+                         [_X_TAGOPEN, _X_NAME, _X_TAGCLOSE, _X_TAGOPEN, _X_NAME, _X_SELFCLOSE,
+                          _X_CLOSEOPEN, _X_NAME, _X_TAGCLOSE])
+
+    def test_unterminated_tag_reports_opening(self):
+        with self.assertRaises(scilex.error) as caught:
+            xml_lexer().tokenize("<a")
+        self.assertEqual(caught.exception.position.offset, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
