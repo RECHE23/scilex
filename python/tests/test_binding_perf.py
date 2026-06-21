@@ -102,5 +102,14 @@ class ConcurrencyTests(unittest.TestCase):
         self.assertTrue(all(snapshot == expected for snapshot in results))
 
 
+class GuardTests(unittest.TestCase):
+    def test_layout_rejects_bytes_lexemes(self):
+        # layout is a str/indentation pass; a bytes-lexeme stream (from a bytes
+        # source) is a clear TypeError, not a cryptic failure deep in the C layer.
+        tokens = sample_lexer().tokenize(b"foo 42", eof=True)
+        with self.assertRaises(TypeError):
+            scilex.Layout().apply(tokens)
+
+
 if __name__ == "__main__":
     unittest.main()

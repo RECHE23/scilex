@@ -291,7 +291,12 @@ class Layout:
                 carrying ``.position`` (but no ``.context`` snippet: ``apply`` receives
                 tokens, not the source text, so there is nothing to slice).
         """
-        fields = [(t.kind, t.lexeme, t.offset, t.line, t.column) for t in tokens]
+        fields = []
+        for t in tokens:
+            if not isinstance(t.lexeme, str):
+                raise TypeError("layout operates on str tokens; got a bytes lexeme — "
+                                "tokenize a str source before applying layout")
+            fields.append((t.kind, t.lexeme, t.offset, t.line, t.column))
         try:
             raw = _layout(fields)
         except error as exc:
