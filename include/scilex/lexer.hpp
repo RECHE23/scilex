@@ -119,6 +119,49 @@ namespace scilex {
   };
 
   /*!
+   * \brief One entry on the per-scan mode stack: the active mode and where it was
+   *        entered (the entry position feeds the unterminated/diagnostic messages).
+   */
+  struct frame
+  {
+    std::size_t mode_id;   //!< Id of the active mode.
+    position    entry_pos; //!< Where this mode was entered.
+  };
+
+  /*!
+   * \brief Applies rule \p r's mode transition (if any) to \p stack — the per-scan
+   *        mode-stack mutation, kept pure so the lexer and the fuzz oracle share it
+   *        verbatim.
+   *
+   * Depends only on \p r's action, the token start \p start, the \p stack, and the
+   * \p mode_id name→id map; it mutates only \p stack. push enters the target
+   * (remembering \p start), pop leaves the current mode, set replaces it in place.
+   *
+   * \throws lex_error On a pop while the stack is at its root (nothing to leave).
+   */
+  inline void apply_transition(const rule&                               r,
+                               position                                  start,
+                               std::vector<frame>&                       stack,
+                               const std::map<std::string, std::size_t>& mode_id)
+  {
+    if (!r.action) {
+      return;
+    }
+    if (r.action->operation == mode_action::op::push) {
+      stack.push_back(frame {.mode_id = mode_id.at(r.action->target), .entry_pos = start});
+    }
+    else if (r.action->operation == mode_action::op::pop) {
+      if (stack.size() == 1) {
+        throw lex_error("cannot pop the mode stack: already at the root mode", start);
+      }
+      stack.pop_back();
+    }
+    else { // set: replace the active mode in place (depth unchanged)
+      stack.back().mode_id = mode_id.at(r.action->target);
+    }
+  }
+
+  /*!
    * \brief A lexer built from an ordered list of rules.
    *
    * Order matters only as a tie-breaker between rules whose matches have equal
@@ -157,8 +200,9 @@ namespace scilex {
     {
       std::vector<token> out;
       position           cursor {0, 1, 1};
+      std::vector<frame> stack {frame {.mode_id = 0, .entry_pos = cursor}}; // start in "default"
       token              next   {};
-      while (scan_next(source, cursor, next)) {
+      while (scan_next(source, cursor, stack, next)) {
         out.push_back(next);
       }
       if (policy == eof_policy::append) {
@@ -192,36 +236,46 @@ namespace scilex {
 
     friend class token_iterator;
 
+    //! \brief Formats a position as "line:column" for diagnostics.
+    static std::string position_label(position where)
+    {
+      return std::to_string(where.line) + ":" + std::to_string(where.column);
+    }
+
     /*!
-     * \brief Advances \p cursor to and past the next non-skipped token.
+     * \brief Advances \p cursor to and past the next non-skipped token in the active
+     *        mode, applying the winning rule's mode transition (if any).
      *
-     * Skips over skip-rule matches, then fills \p out with the next emitted
-     * token, advancing \p cursor (offset, line, byte column) past it. The
-     * single source of scanning truth shared by \ref tokenize and the lazy
+     * Skips over skip-rule matches, then fills \p out with the next emitted token,
+     * advancing \p cursor (offset, line, byte column) and the mode \p stack past it.
+     * The single source of scanning truth shared by \ref tokenize and the lazy
      * \ref token_iterator.
      *
      * \param[in]     source The text being scanned.
      * \param[in,out] cursor Current position; advanced past the consumed bytes.
+     * \param[in,out] stack  The mode stack (its top is the active mode); a winning
+     *                rule's transition mutates it. Never empty.
      * \param[out]    out    Receives the next non-skipped token on success.
      * \return `true` if a token was produced, `false` at end of input.
-     * \throws lex_error If \p cursor sits on input no rule matches.
+     * \throws lex_error If a position matches no rule in the active mode (#1), a rule
+     *         pops at the stack root (#2), or input ends inside a pushed mode (#3).
      */
-    bool scan_next(std::string_view source,
-                   position&        cursor,
-                   token&           out) const
+    bool scan_next(std::string_view    source,
+                   position&           cursor,
+                   std::vector<frame>& stack,
+                   token&              out) const
     {
       while (cursor.offset < source.size()) {
         const std::string_view rest     {source.substr(cursor.offset)};
+        const std::size_t      mode     {stack.back().mode_id};
         std::size_t            best_len {0};
         std::size_t            best_idx {0};
         bool                   have     {false};
 
-        // First-byte dispatch: only rules whose possible-first-byte set contains the
-        // byte at the cursor (its bucket) plus the general rules (nullable patterns,
-        // which can match the empty string and so never narrow the position) are tried
-        // here — every other rule provably cannot match, per REAL's first-byte API. The
-        // longest match wins; on a tie the earlier rule in rules_ wins (lowest index),
-        // so priority order is preserved no matter which list is scanned first.
+        // First-byte dispatch within the active mode: only rules whose possible-first-
+        // byte set contains the cursor byte (its bucket) plus that mode's general
+        // (nullable) rules are tried, per REAL's first-byte API. Longest match wins;
+        // ties go to the earlier rule (lowest index), preserving rule priority.
         const auto consider = [&](std::size_t idx) {
                                 const auto matched {rules_[idx].pattern.match(rest)};
                                 if (matched && matched.end() > 0
@@ -232,7 +286,7 @@ namespace scilex {
                                   have     = true;
                                 }
                               };
-        const dispatch& active {per_mode_[0]}; // mono-mode for now (the mode stack arrives next)
+        const dispatch& active {per_mode_[mode]};
         for (const std::size_t idx : active.first_byte_index[static_cast<unsigned char>(source[cursor.offset])]) {
           consider(idx);
         }
@@ -241,7 +295,8 @@ namespace scilex {
         }
 
         if (!have) {
-          throw lex_error("no rule matches the input", cursor);
+          throw lex_error("no rule matches in mode '" + mode_names_[mode] + "' (entered at "
+                          + position_label(stack.back().entry_pos) + ")", cursor); // #1
         }
 
         const position start {cursor};
@@ -257,11 +312,17 @@ namespace scilex {
         }
         cursor.offset += best_len;
 
+        apply_transition(rules_[best_idx], start, stack, mode_id_); // advances, then transitions (#2 on a bad pop)
+
         if (!rules_[best_idx].skip) {
           out = token {rules_[best_idx].kind, source.substr(start.offset, best_len), start};
           return true;
         }
-        // Skip rule: keep scanning for the next emitted token.
+        // Skip rule: keep scanning for the next emitted token (possibly in a new mode).
+      }
+      if (stack.size() > 1) {
+        throw lex_error("unterminated mode '" + mode_names_[stack.back().mode_id] + "' (entered at "
+                        + position_label(stack.back().entry_pos) + ")", stack.back().entry_pos); // #3
       }
       return false;
     }
@@ -459,13 +520,14 @@ namespace scilex {
 
   private:
 
-    const lexer*     owner_    {nullptr};          //!< Rules provider (not owned).
-    std::string_view source_;                      //!< Text being scanned.
-    position         cursor_   {0, 1, 1};          //!< Current scan position.
-    token            current_  {};                 //!< The current token.
-    eof_policy       policy_   {eof_policy::omit}; //!< End-of-input policy.
-    bool             eof_done_ {false};            //!< End-of-input token already yielded.
-    bool             done_     {true};             //!< True once exhausted (end sentinel).
+    const lexer*       owner_  {nullptr};                                               //!< Rules provider (not owned).
+    std::string_view   source_;                                                         //!< Text being scanned.
+    position           cursor_ {0, 1, 1};                                               //!< Current scan position.
+    std::vector<frame> stack_  {frame {.mode_id = 0, .entry_pos = position {0, 1, 1}}}; //!< Mode stack (top = active).
+    token              current_  {};                                                    //!< The current token.
+    eof_policy         policy_   {eof_policy::omit};                                    //!< End-of-input policy.
+    bool               eof_done_ {false};                                               //!< End-of-input token already yielded.
+    bool               done_     {true};                                                //!< True once exhausted (end sentinel).
 
     //! \brief Produces the next token, or marks the iterator exhausted.
     void advance()
@@ -473,7 +535,7 @@ namespace scilex {
       if (done_) {
         return;
       }
-      if (owner_->scan_next(source_, cursor_, current_)) {
+      if (owner_->scan_next(source_, cursor_, stack_, current_)) {
         return;
       }
       // Input exhausted: yield one end-of-input token if requested, else stop.
