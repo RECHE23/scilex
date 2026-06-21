@@ -110,6 +110,12 @@ class GuardTests(unittest.TestCase):
         with self.assertRaises(TypeError):
             scilex.Layout().apply(tokens)
 
+    def test_non_str_pattern_is_rejected(self):
+        # A bytes (or other non-str) pattern is a clear TypeError, not a silent
+        # str(b"abc") == "b'abc'" that would compile a nonsense regex.
+        with self.assertRaises(TypeError):
+            scilex.Lexer([(0, b"abc", False)])
+
 
 if __name__ == "__main__":
     unittest.main()

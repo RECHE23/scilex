@@ -186,7 +186,10 @@ class Lexer:
         for entry in rules:
             kind, pattern = entry[0], entry[1]
             skip = bool(entry[2]) if len(entry) > 2 else False
-            normalized.append((int(kind), str(pattern), skip))
+            if not isinstance(pattern, str):
+                raise TypeError(
+                    f"rule {len(normalized)}: pattern must be str, got {type(pattern).__name__}")
+            normalized.append((int(kind), pattern, skip))
         self._rules = normalized
         self._handle = _compile(normalized)
 
