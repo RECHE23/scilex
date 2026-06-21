@@ -16,6 +16,11 @@ order breaking ties. A rule can also opt into **modes** (contextual lexing), so 
 same byte lexes differently by context. Because it is a thin layer over REAL,
 tokenization is linear and ReDoS-safe by construction.
 
+What that covers today: significant indentation, plus contexts like f-strings, YAML
+flow collections, and bracket continuation (modes + **Layout Awareness Level A**).
+Cases that need a deeper lexing↔indentation coupling — YAML block scalars `|` / `>`,
+heredocs — are **Level B**: documented, not in this version.
+
 This follows the same design principles as REAL: purity, simplicity, and
 measured optimality.
 
@@ -31,6 +36,10 @@ measured optimality.
 - Positioned errors with a context snippet
 - Linear-time / ReDoS-safe (via REAL)
 - Nine example grammars — three of them modal (f-strings, XML, YAML)
+
+The three modal grammars differ in shape and each documents its own scope; modes
+resolve the contexts above, but the one contextual case still outside the model —
+lexing steered by *indentation* (block scalars, heredocs) — is Level B.
 
 **Not yet:** block scalars / heredocs (Layout Awareness Level B), a compile-time
 `static_lexer`, codepoint columns.
@@ -129,7 +138,7 @@ fstr = scilex.Lexer([
     (NAME, r"[a-z]+", False, ["default", "interp"]),               # code, shared
     (OPEN, r'f"', False, ["default", "interp"], ("push", "fstr")),
     (TEXT, r'[^{}"]+', False, ["fstr"]),
-    (LB, r"\{", False, ["fstr", "interp"], ("push", "interp")),
+    (LB, r"\{", False, ["fstr"], ("push", "interp")),         # "{" opens it from the body
     (CLOSE, r'"', False, ["fstr"], ("pop",)),
     (RB, r"\}", False, ["interp"], ("pop",)),
 ])

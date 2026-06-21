@@ -27,10 +27,14 @@ honest — here is what it does, and what is deliberately left for Level B.
 - Python implicit line continuation inside `()` `[]` `{}` is no longer read as a new
   block.
 
-### Deferred (honest scope)
-- **Block scalars** (`|` / `>`) and heredocs need a reference indent carried in the
-  mode frame — that is **Layout Awareness Level B**, designed but not built.
-- A compile-time `static_lexer` (on REAL's `static_regex`) — not yet warranted.
+### Known limitations (Level B)
+- **Block scalars** (`|` / `>`) and **heredocs** need a reference indent carried in
+  the mode frame — that is **Layout Awareness Level B**, designed but not built.
+  (Multi-line flow collections and implicit line continuation are *not* limitations
+  — Layout Awareness Level A lifts both, this release.)
+
+### Not yet
+- A compile-time `static_lexer` (on REAL's `static_regex`) — grows in on demand.
 
 ### API
 - `scilex::rule` gains `in_mode` (a set of mode names) and `action` (a `mode_action`:
