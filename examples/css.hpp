@@ -95,9 +95,13 @@ namespace scilex::examples::css {
   }
 
   //! \brief Builds the lexer from its rule list (see \ref make_rules).
+  //!
+  //! This grammar is mono-mode, greedy and assertion-free, so "default" is opted into
+  //! the DFA fast path: one DFA pass replaces the per-rule dispatch (~20×), with the
+  //! Pike engine as the floor and an identical token stream (see \ref scilex::lexer).
   inline scilex::lexer make_lexer()
   {
-    return scilex::lexer(make_rules());
+    return scilex::lexer(make_rules(), {}, {"default"});
   }
 
   //! \brief A stylesheet exercising a hash colour, a dimension and a percentage.
@@ -113,7 +117,8 @@ namespace scilex::examples::css {
 )css"};
 
   //! \brief Self-check (so `make example` gates): the distinctive invariants —
-  //!        `#1a2b3c` is one HASH, `12px` one DIMENSION, `50%` one PERCENTAGE.
+  //!        `#1a2b3c` is one HASH, `12px` one DIMENSION, `50%` one PERCENTAGE, and
+  //!        "default" is actually DFA-accelerated (not silently fallen back to Pike).
   //!        \return `true` on success.
   inline bool self_check()
   {
@@ -127,7 +132,11 @@ namespace scilex::examples::css {
       dim = dim || (tok.kind == dimension && tok.lexeme == "12px");
       pct = pct || (tok.kind == percentage && tok.lexeme == "50%");
     }
-    return hex && dim && pct;
+    bool dfa_active {false};
+    for (const std::string& mode : lex.dfa_modes_active()) {
+      dfa_active = dfa_active || (mode == "default");
+    }
+    return hex && dim && pct && dfa_active;
   }
 } // namespace scilex::examples::css
 

@@ -5,6 +5,18 @@ patch resetting each month; PEP 440 drops leading zeros). The project holds the
 SciLang-stack gate: 100%-4D coverage of `include/`, dual-compiler, sanitizers, and a
 fuzz oracle.
 
+## Unreleased
+
+### Added
+- **DFA fast path (opt-in).** `lexer(rules, insignificant_modes={}, dfa_modes={})` plus
+  `dfa_modes_active()`; the Python `Lexer(rules, insignificant_modes=(), dfa_modes=())`
+  with `dfa_modes` / `dfa_modes_active` properties. A named mode is accelerated by a
+  `real::dfa` — one maximal-munch pass replacing the per-rule dispatch (~20× on the full
+  token path for DFA-able modes). Additive and invisible: the Pike engine stays the
+  floor, a mode whose rules need an assertion no DFA can represent or whose DFA fails a
+  build-time audit (a lazy quantifier) silently falls back to Pike, and the token stream
+  is byte-identical either way. The `sql` and `css` example grammars opt in.
+
 ## 2026.6.5
 
 The contextual-lexing release: **modes** and **Layout Awareness**. Ambitious but

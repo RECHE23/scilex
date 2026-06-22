@@ -29,6 +29,7 @@ measured optimality.
 - Ordered token rules: `(kind, real::regex, skip)`
 - Maximal-munch matching (longest match wins, rule order for ties)
 - **Contextual lexing (modes)** — per-rule `in_mode` + a push / pop / set mode stack
+- **DFA fast path (opt-in)** — `dfa_modes` accelerates DFA-able modes ~20× with one `real::dfa` pass; best-effort (Pike is the floor, with fallback), identical token stream
 - **Layout Awareness** — mode-aware indentation (NEWLINE / INDENT / DEDENT)
 - Source positions (byte offset, line, column); each token carries its mode
 - Eager (`tokenize`) and lazy (`scan`) APIs
@@ -42,7 +43,8 @@ resolve the contexts above, but the one contextual case still outside the model 
 lexing steered by *indentation* (block scalars, heredocs) — is Level B.
 
 **Not yet:** block scalars / heredocs (Layout Awareness Level B), a compile-time
-`static_lexer`, codepoint columns.
+`static_lexer` (a baked DFA — the Phase-0 spike found this wants build-time codegen,
+not constexpr), codepoint columns.
 
 See the [guided tour](docs/design.dox) for details.
 
@@ -59,6 +61,8 @@ std::vector<scilex::rule> rules = {
 };
 
 scilex::lexer lexer(std::move(rules));
+// Opt a mode into the DFA fast path (best-effort; ~20× on DFA-able modes):
+//   scilex::lexer lexer(std::move(rules), /*insignificant=*/ {}, /*dfa_modes=*/ {"default"});
 
 // Eager
 for (const auto& tok : lexer.tokenize("if x + 42")) { ... }
@@ -81,6 +85,8 @@ lx = scilex.Lexer([
     (1, r"[0-9]+", False),             # number
     (2, r"[A-Za-z_][A-Za-z0-9_]*", False),
 ])
+# Opt a mode into the DFA fast path (best-effort; ~20× on DFA-able modes):
+#   lx = scilex.Lexer([...], dfa_modes=("default",))   # lx.dfa_modes_active -> the modes accelerated
 
 # Eager
 tokens = lx.tokenize("foo 42", eof=True)
@@ -149,6 +155,25 @@ An action is `None` | `("push", mode)` | `("set", mode)` | `("pop",)`; a plain
 `(kind, pattern, skip)` rule needs neither field, so existing grammars are
 unaffected. See `examples/python.hpp`, `examples/xml.hpp`, `examples/yaml.hpp` for
 the three modal profiles in full.
+
+## DFA fast path (opt-in)
+
+A mode can be accelerated by a `real::dfa`: instead of trying each candidate rule at
+every position, one DFA pass recognizes the winning rule — the same maximal munch,
+with the order tie-break baked into the automaton. On a mode where many rules share
+leading bytes that is **~20× the regular path** on the full token path.
+
+```cpp
+scilex::lexer lexer(std::move(rules), /*insignificant=*/ {}, /*dfa_modes=*/ {"default"});
+lexer.dfa_modes_active();   // the modes actually accelerated
+```
+
+It is **best-effort and invisible**: a mode whose rules need a zero-width assertion no
+DFA can represent, or whose DFA fails a build-time audit (a lazy quantifier — its match
+is the *shortest* span while a DFA takes the *longest*), silently stays on the regular
+Pike engine, absent from `dfa_modes_active()`. Either way the **token stream is byte
+identical** (Pike is the floor) and `layout` is unchanged. The DFA is built once, in the
+constructor. The `sql` and `css` example grammars ship with it on.
 
 ## Layout Awareness (Level A)
 

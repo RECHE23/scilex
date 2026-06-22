@@ -155,8 +155,18 @@ lay = scilex.Lexer([(0, r"\s+", True), (1, r"\w+", False), (2, r":", False)])
 - **Modes (contextual lexing).** A rule may carry `in_mode` (the modes it is active
   in) and an `action` (push/pop/set), so the lexer runs maximal munch + the exact
   first-byte dispatch *per mode* — f-strings, XML content/tag, YAML block/flow. The
-  mode stack is per-scan, so the lexer stays immutable and shareable. A compile-time
-  `static_lexer` (on REAL's `static_regex`) is **not yet** — it grows in on demand.
+  mode stack is per-scan, so the lexer stays immutable and shareable.
+- **DFA fast path (opt-in).** A mode opted into `dfa_modes` is recognized by a single
+  \c real::dfa pass (a capture-free maximal-munch DFA over the mode's rules) instead of
+  the per-rule scan — ≈20× on the full token path where many rules share leading bytes.
+  Best-effort: at construction each opted mode's DFA is built and **audited** against the
+  Pike munch on bounded deterministic probes; a rule needing a zero-width assertion (no
+  DFA) or a lazy quantifier (the audit catches the shortest-vs-longest divergence) leaves
+  that mode on the per-rule scan + first-byte dispatch — which stays the floor, with an
+  identical token stream. Observable via \ref scilex::lexer::dfa_modes_active. A
+  compile-time `static_lexer` would bake the DFA: the Phase-0 spike found constexpr
+  construction off-budget at the compilers' default step limits, so it is **build-time
+  codegen** (the re2c / flex model), **not yet** built.
 - **Layout Awareness (Level A).** Each token carries the mode it was lexed in, and a
   mode can be marked *insignificant* (`lexer(rules, insignificant_modes)`), so
   \ref scilex::layout passes its tokens through: multi-line flow collections and

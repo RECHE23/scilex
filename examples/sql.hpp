@@ -75,9 +75,13 @@ namespace scilex::examples::sql {
   }
 
   //! \brief Builds the lexer from its rule list (see \ref make_rules).
+  //!
+  //! This grammar is mono-mode, greedy and assertion-free, so "default" is opted into
+  //! the DFA fast path: one DFA pass replaces the per-rule dispatch (~20×), with the
+  //! Pike engine as the floor and an identical token stream (see \ref scilex::lexer).
   inline scilex::lexer make_lexer()
   {
-    return scilex::lexer(make_rules());
+    return scilex::lexer(make_rules(), {}, {"default"});
   }
 
   //! \brief A query with a mixed-case keyword and a doubled-quote escape.
@@ -90,8 +94,9 @@ WHERE id >= 10 AND name <> 'x';
 
   //! \brief Self-check (so `make example` gates): the distinctive invariants —
   //!        a mixed-case keyword (`SeLeCt`) is recognized as a KEYWORD via the
-  //!        `icase` flag, and a doubled-quote string (`'it''s'`) munches into a
-  //!        single STRING token. \return `true` on success.
+  //!        `icase` flag, a doubled-quote string (`'it''s'`) munches into a single
+  //!        STRING token, and "default" is actually DFA-accelerated (not silently
+  //!        fallen back to Pike). \return `true` on success.
   inline bool self_check()
   {
     const scilex::lexer              lex           {make_lexer()};
@@ -102,7 +107,11 @@ WHERE id >= 10 AND name <> 'x';
       icase_keyword = icase_keyword || (tok.kind == keyword && tok.lexeme == "SeLeCt");
       doubled_quote = doubled_quote || (tok.kind == str && tok.lexeme == "'it''s'");
     }
-    return icase_keyword && doubled_quote;
+    bool dfa_active {false};
+    for (const std::string& mode : lex.dfa_modes_active()) {
+      dfa_active = dfa_active || (mode == "default");
+    }
+    return icase_keyword && doubled_quote && dfa_active;
   }
 } // namespace scilex::examples::sql
 
