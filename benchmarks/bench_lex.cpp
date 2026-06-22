@@ -99,13 +99,17 @@ namespace {
     double      lazy_mbps;
   };
 
-  //! \brief Measures eager and lazy throughput of \p make's lexer on \p sample.
-  row measure(const char     * name,
-              scilex::lexer (* make)(),
-              std::string_view sample)
+  //! \brief Measures eager and lazy throughput of the Pike engine on \p sample, built
+  //!        from \p make_rules (NOT make_lexer): the per-grammar table is one engine
+  //!        across all nine grammars — apples-to-apples, and the first-byte-dispatch
+  //!        story holds. The DFA opt-in (which sql/css's make_lexer turns on) is the
+  //!        separate "DFA modes" section below.
+  row measure(const char                 * name,
+              std::vector<scilex::rule> (* make_rules)(),
+              std::string_view             sample)
   {
     const std::string   source {scale(sample, target_bytes)};
-    const scilex::lexer lex    {make()};
+    const scilex::lexer lex    {make_rules()};
     const std::size_t   tokens {lex.tokenize(source).size()};
 
     const double eager         {min_seconds([&] {
@@ -124,21 +128,22 @@ namespace {
 
 int main()
 {
-  std::printf("SciLex C++ engine throughput — per grammar (min-of-%d, %d warmup, -O2)\n", reps, warmup);
-  std::printf("steady-state input: each grammar's sample scaled to >= %zu KiB\n\n", target_bytes / 1024);
+  std::printf("SciLex C++ engine throughput — per grammar, PIKE engine (min-of-%d, %d warmup, -O2)\n", reps, warmup);
+  std::printf("steady-state input: each grammar's sample scaled to >= %zu KiB\n", target_bytes / 1024);
+  std::printf("(the Pike per-rule + first-byte-dispatch engine across all grammars; the DFA opt-in is below)\n\n");
   std::printf("  %-8s %8s %9s %13s %13s\n", "grammar", "KiB", "tokens", "eager MB/s", "lazy MB/s");
   std::printf("  %-8s %8s %9s %13s %13s\n", "-------", "---", "------", "----------", "---------");
 
   const row rows[] {
-    measure("json", &scilex::examples::json::make_lexer, scilex::examples::json::sample),
-    measure("python", &scilex::examples::python::make_lexer, scilex::examples::python::sample),
-    measure("cpp", &scilex::examples::cpp::make_lexer, scilex::examples::cpp::sample),
-    measure("sql", &scilex::examples::sql::make_lexer, scilex::examples::sql::sample),
-    measure("css", &scilex::examples::css::make_lexer, scilex::examples::css::sample),
-    measure("lisp", &scilex::examples::lisp::make_lexer, scilex::examples::lisp::sample),
-    measure("math", &scilex::examples::math::make_lexer, scilex::examples::math::sample),
-    measure("xml", &scilex::examples::xml::make_lexer, scilex::examples::xml::sample),
-    measure("yaml", &scilex::examples::yaml::make_lexer, scilex::examples::yaml::sample),
+    measure("json", &scilex::examples::json::make_rules, scilex::examples::json::sample),
+    measure("python", &scilex::examples::python::make_rules, scilex::examples::python::sample),
+    measure("cpp", &scilex::examples::cpp::make_rules, scilex::examples::cpp::sample),
+    measure("sql", &scilex::examples::sql::make_rules, scilex::examples::sql::sample),
+    measure("css", &scilex::examples::css::make_rules, scilex::examples::css::sample),
+    measure("lisp", &scilex::examples::lisp::make_rules, scilex::examples::lisp::sample),
+    measure("math", &scilex::examples::math::make_rules, scilex::examples::math::sample),
+    measure("xml", &scilex::examples::xml::make_rules, scilex::examples::xml::sample),
+    measure("yaml", &scilex::examples::yaml::make_rules, scilex::examples::yaml::sample),
   };
   for (const row& entry : rows) {
     std::printf("  %-8s %8zu %9zu %13.2f %13.2f\n",

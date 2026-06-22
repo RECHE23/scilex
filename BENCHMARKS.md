@@ -42,17 +42,22 @@ interpreter in the path. `make bench-lex` lexes each of the nine example grammar
 reporting MB/s for `tokenize()` (eager, full token vector) and `scan()` (lazy, O(1)
 memory — the parser path).
 
+All nine rows are the **Pike engine** (the per-rule scan + first-byte dispatch) for one
+apples-to-apples baseline. `sql` and `css`, being DFA-able, additionally ship the **DFA
+fast path** on — their `make_lexer` opts `"default"` in — for the ~20× shown in the *DFA
+fast path* section below; that is an opt-in over this engine floor, not a change to it.
+
 | grammar | rules | tokens | eager MB/s | lazy MB/s |
 | --- | ---: | ---: | ---: | ---: |
-| xml    | 12 | 65 588  | 9.23 | 9.74 |
-| cpp    | 41 | 52 228  | 8.10 | 8.30 |
-| json   | 12 | 58 793  | 8.06 | 8.24 |
-| sql    | 39 | 38 760  | 7.71 | 7.87 |
-| yaml   | 14 | 56 829  | 7.42 | 7.58 |
-| python | 65 | 53 960  | 7.35 | 7.52 |
-| lisp   |  8 | 96 600  | 6.78 | 6.98 |
-| css    | 17 | 64 224  | 6.68 | 6.66 |
-| math   | 12 | 123 376 | 5.70 | 5.94 |
+| xml    | 12 | 65 588  | 9.04 | 9.36 |
+| cpp    | 41 | 52 228  | 7.90 | 8.04 |
+| json   | 12 | 58 793  | 7.82 | 8.11 |
+| sql    | 39 | 38 760  | 7.60 | 7.71 |
+| yaml   | 14 | 56 829  | 7.26 | 7.38 |
+| python | 65 | 53 960  | 7.22 | 7.32 |
+| lisp   |  8 | 96 600  | 6.58 | 6.80 |
+| css    | 17 | 64 224  | 6.41 | 6.54 |
+| math   | 12 | 123 376 | 5.55 | 5.73 |
 
 Three of the nine are **modal** (contextual lexing): `python` (f-strings — five
 modes), `xml` (content ↔ tag), `yaml` (block ↔ flow). They sit in the same band as
@@ -62,7 +67,9 @@ holds ~7.35 MB/s: the first-byte dispatch keeps it rule-count-independent.
 
 Method: lexer built once, warmup then **min of 9** timed passes, `-O2`, every result
 consumed through a volatile sink. Sizes are KiB (1024 B), throughput is MB/s (10⁶ B/s),
-same machine as the conditions below. Reproduce with `make bench-lex`.
+same machine as the conditions below. Reproduce with `make bench-lex`. (Re-measured
+2026.6 — when `sql`/`css` opted into the DFA fast path — so this stays a single-engine
+Pike table.)
 
 **Reading — what sets the pace.** Dispatch is **exact**: the lexer builds a 256-bucket
 first-byte index from REAL's first-byte API (`has_first_byte_set` / `unique_first_byte` /
@@ -72,7 +79,8 @@ density** — the cost is paid per token (one maximal-munch decision each): `mat
 (123 k tokens) and slowest (5.70), while `xml` / `cpp` / `json` (fewer tokens per byte) top
 the table (8–9). `sql` — 31 *case-insensitive* keyword rules — is **no longer the outlier**:
 REAL reports an icase literal's both-case first bytes (`{s, S}`), so the dispatch buckets
-those keywords by case instead of trying all 31 at every byte.
+those keywords by case instead of trying all 31 at every byte. `sql` and `css` go further
+still — being DFA-able, they opt the **DFA fast path**, ≈20× over this Pike row (below).
 
 This exact dispatch replaced an earlier *textual* heuristic that conservatively dumped any
 class, alternation, or flagged literal into a general list tried everywhere. Switching to
@@ -90,10 +98,10 @@ inputs:
 
 | KiB | eager MB/s |
 | ---: | ---: |
-| 64  | 8.06 |
-| 128 | 8.10 |
-| 256 | 8.11 |
-| 512 | 8.07 |
+| 64  | 8.08 |
+| 128 | 7.80 |
+| 256 | 7.83 |
+| 512 | 7.80 |
 
 Flat MB/s means time scales **linearly** with input — REAL's linear, ReDoS-safe bound
 holds for the lexer too, not only for the pathological `re` contrast in B2 below.
@@ -102,17 +110,36 @@ holds for the lexer too, not only for the pathological `re` contrast in B2 below
 construction (the dispatch runs per mode). `make bench-lex` also contrasts the modal
 `python` grammar with a mono-mode baseline — the same code rules with the f-string
 modes stripped, so an f-string lexes as a name + one opaque string — on the same
-sample: **modal 7.41 vs mono-mode 7.88 MB/s** (~6%), and the modal path does
+sample: **modal 7.28 vs mono-mode 7.59 MB/s** (~4%), and the modal path does
 materially more work (53 960 vs 44 872 tokens — full f-string structure, not an
 opaque string). The mode stack is per-scan; Layout Awareness reads each token's mode
 but adds nothing when no mode is insignificant (invariant 1: an empty policy is
 byte-for-byte the positional pass). Both are informational, never gated.
 
-**The honest position.** ~5.7–8.2 MB/s is still **slower** than `re` or `flex` (tens to
-hundreds of MB/s) on benign input — the price of running a real NFA at every position and
-building ordered maximal-munch `Token`s, in exchange for the linear guarantee. Now that the
-first-byte dispatch is exact (REAL's set, not a textual guess), the remaining lever is a
-compile-time `static_lexer`, grown in when a workload demands it.
+**The honest position.** This Pike baseline is ~5.6–9.0 MB/s — still **slower** than `re`
+or `flex` (tens to hundreds of MB/s) on benign input — the price of running a real NFA at
+every position and building ordered maximal-munch `Token`s, in exchange for the linear
+guarantee. The next lever has now landed: the **DFA fast path** (below) takes a DFA-able
+mode to ≈20× this baseline. A compile-time `static_lexer` (a *baked* DFA) is the step
+beyond — the Phase-0 spike found constexpr construction off-budget at the compilers'
+default limits, so it would be **build-time codegen** (the re2c / flex model), grown in
+when a workload demands it.
+
+**DFA fast path (opt-in).** A DFA-able mode (mono-mode, greedy, assertion- and lazy-free)
+opts into a `real::dfa`: one automaton pass replaces the per-rule scan. On the full token
+path (`tokenize`), DFA versus the Pike row above:
+
+| grammar | Pike MB/s | DFA MB/s | speedup |
+| --- | ---: | ---: | ---: |
+| sql | 7.61 | 158.11 | **20.8×** |
+| css | 6.46 | 134.86 | **20.9×** |
+| python\* | 7.21 | 7.20 | 1.0× |
+
+`python\*` is the **0-regression control**: its `default` mode has a lazy rule, so it
+fails the build-time audit and stays on Pike — proof the `if (per_mode_dfa_[mode])` check
+is free. The DFA is built once in the constructor (≈2.6–4.3 ms one-time — a vigilance
+point only on very short inputs). `sql` and `css` ship with it on; reproduce with
+`make bench-lex`.
 
 ## Conditions of this baseline
 
@@ -121,7 +148,7 @@ compile-time `static_lexer`, grown in when a workload demands it.
 | Machine | Apple Silicon (`arm64`), Darwin 23.6.0 |
 | Binding | abi3 CPython extension as built by `setup.py` (`Py_LIMITED_API` 3.10) |
 | Method | best-of-5 timed runs, **minimum** reported |
-| As of | 2026-06-21 — C++ engine table re-measured for the nine grammars (three modal: python/xml/yaml) + the modal-vs-mono overhead, on the exact first-byte dispatch; B1 reflects the binding's zero-copy source + GIL release (str/bytes); B2/B3 predate those |
+| As of | 2026-06-22 — C++ engine table re-measured on the **Pike engine** for the nine grammars (three modal: python/xml/yaml) + the modal-vs-mono overhead + the new **DFA fast-path** opt-in (after `sql`/`css` adopted it); B1 reflects the binding's zero-copy source + GIL release (str/bytes); B2/B3 predate those |
 
 ## Binding baseline (versus `re`)
 
