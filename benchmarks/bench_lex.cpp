@@ -193,6 +193,54 @@ int main()
     std::printf("  %-10s %8zu %9zu %13.2f\n", "mono-mode", pysrc.size() / 1024, toks, mbps(pysrc.size(), secs));
   }
 
+  // DFA modes: a DFA-able mono-mode grammar (SQL, CSS) on the FULL token path
+  // (tokenize materializes the vector) with the per-mode DFA fast path vs the Pike
+  // path. The DFA is built ONCE in the ctor (build_dfa_modes + audit) — reported as a
+  // one-time cost; the per-tokenize speedup is the steady-state win. A non-DFA grammar
+  // (python, whose default falls back) is the 0-regression control.
+  std::printf("\nDFA modes — full token path (tokenize), DFA-accelerated vs Pike:\n");
+  std::printf("  %-6s %8s %9s %13s %13s %9s %11s %7s\n",
+              "gram", "KiB", "tokens", "Pike MB/s", "DFA MB/s", "speedup", "build us", "active");
+  struct dfa_bench
+  {
+    const char              * name;
+    std::vector<scilex::rule> (* rules)();
+    std::string_view          sample;
+  };
+  const dfa_bench dfa_grammars[] {
+    {.name = "sql", .rules = &scilex::examples::sql::make_rules, .sample = scilex::examples::sql::sample},
+    {.name = "css", .rules = &scilex::examples::css::make_rules, .sample = scilex::examples::css::sample},
+  };
+  for (const dfa_bench& grammar : dfa_grammars) {
+    const std::string   source      {scale(grammar.sample, target_bytes)};
+    const scilex::lexer pike        {grammar.rules()};
+    const scilex::lexer dfa         {grammar.rules(), {}, {"default"}};
+    const bool          accelerated {!dfa.dfa_modes_active().empty()};
+    const double        build       {min_seconds([&] {
+                                                   const scilex::lexer once {grammar.rules(), {}, {"default"}};
+                                                   g_sink += once.dfa_modes_active().size();
+                                                 })};
+    const std::size_t   toks   {pike.tokenize(source).size()};
+    const double        pike_s {min_seconds([&] { g_sink += pike.tokenize(source).size(); })};
+    const double        dfa_s  {min_seconds([&] { g_sink += dfa.tokenize(source).size(); })};
+    std::printf("  %-6s %8zu %9zu %13.2f %13.2f %8.1fx %11.1f %7s\n",
+                grammar.name, source.size() / 1024, toks, mbps(source.size(), pike_s),
+                mbps(source.size(), dfa_s), pike_s / dfa_s, build * 1e6, accelerated ? "yes" : "NO");
+  }
+  // 0-regression control: python's default falls back to Pike (lazy tstr), so DFA-on
+  // and DFA-off tokenize at the same rate — the if(per_mode_dfa_) check is free.
+  {
+    const std::string   source {scale(py::sample, target_bytes)};
+    const scilex::lexer off    {py::make_rules()};
+    const scilex::lexer on     {py::make_rules(), {}, {"default"}}; // default rejected (lazy) → Pike
+    const double        off_s  {min_seconds([&] { g_sink += off.tokenize(source).size(); })};
+    const double        on_s   {min_seconds([&] { g_sink += on.tokenize(source).size(); })};
+    std::printf("  %-6s %8zu %9zu %13.2f %13.2f %8.1fx %11s %7s\n",
+                "py*", source.size() / 1024, off.tokenize(source).size(),
+                mbps(source.size(), off_s), mbps(source.size(), on_s), off_s / on_s, "-",
+                on.dfa_modes_active().empty() ? "fallbk" : "?");
+  }
+
   (void)g_sink;
   return 0;
 }

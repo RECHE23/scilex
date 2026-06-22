@@ -21,14 +21,19 @@
 #include <array>
 #include <iterator>
 #include <map>
+#include <memory>
 #include <optional>
+#include <random>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <unordered_set>
 #include <utility>
 #include <vector>
 
+#include <real/dfa.hpp>
 #include <real/real.hpp>
 
 #include "token.hpp"
@@ -180,15 +185,24 @@ namespace scilex {
      *            (Layout Awareness Level A — see \ref scilex::layout). Each name
      *            must be a mode the rules use; empty (the default) leaves every mode
      *            significant, so \ref mode_significant has no effect.
+     * \param[in] dfa_modes Modes to accelerate with a \c real::dfa fast path (one
+     *            DFA pass replaces the per-rule Pike dispatch). Each name must be a
+     *            mode the rules use. Opt-in is best-effort: a mode whose rules cannot
+     *            be a DFA (a zero-width assertion) or whose DFA fails the build-time
+     *            audit (a lazy quantifier) silently stays on Pike — see
+     *            \ref dfa_modes_active. The token stream is identical either way.
      * \throws std::invalid_argument If a transition rule is malformed (empty
-     *         pattern or target), or \p insignificant_modes names an unknown mode.
+     *         pattern or target), or \p insignificant_modes / \p dfa_modes names an
+     *         unknown mode.
      */
     explicit lexer(std::vector<rule>               rules,
-                   std::unordered_set<std::string> insignificant_modes = {})
+                   std::unordered_set<std::string> insignificant_modes = {},
+                   std::unordered_set<std::string> dfa_modes           = {})
       : rules_(std::move(rules))
     {
       build_dispatch();
       build_significance(insignificant_modes);
+      build_dfa_modes(dfa_modes);
     }
 
     /*!
@@ -255,6 +269,24 @@ namespace scilex {
       return mode_names_[id];
     }
 
+    //! \brief The modes actually accelerated by a DFA fast path.
+    //!
+    //! A mode passed in `dfa_modes` but rejected — its rules need an assertion no DFA
+    //! can represent (\c real::dfa_error), or its DFA failed the build-time audit (a
+    //! lazy quantifier) — is **absent** here: it fell back to the Pike path, lexing the
+    //! same tokens. So `dfa_modes` is an optimizer, not a guarantee; the rejected set is
+    //! `dfa_modes − dfa_modes_active()`.
+    [[nodiscard]] std::vector<std::string> dfa_modes_active() const
+    {
+      std::vector<std::string> active;
+      for (std::size_t m {0}; m < per_mode_dfa_.size(); ++m) {
+        if (per_mode_dfa_[m]) {
+          active.push_back(mode_names_[m]);
+        }
+      }
+      return active;
+    }
+
   private:
 
     friend class token_iterator;
@@ -295,26 +327,23 @@ namespace scilex {
         std::size_t            best_idx {0};
         bool                   have     {false};
 
-        // First-byte dispatch within the active mode: only rules whose possible-first-
-        // byte set contains the cursor byte (its bucket) plus that mode's general
-        // (nullable) rules are tried, per REAL's first-byte API. Longest match wins;
-        // ties go to the earlier rule (lowest index), preserving rule priority.
-        const auto consider = [&](std::size_t idx) {
-                                const auto matched {rules_[idx].pattern.match(rest)};
-                                if (matched && matched.end() > 0
-                                    && (!have || matched.end() > best_len
-                                        || (matched.end() == best_len && idx < best_idx))) {
-                                  best_len = matched.end();
-                                  best_idx = idx;
-                                  have     = true;
-                                }
-                              };
-        const dispatch& active {per_mode_[mode]};
-        for (const std::size_t idx : active.first_byte_index[static_cast<unsigned char>(source[cursor.offset])]) {
-          consider(idx);
+        // Accelerated path: if this mode has an adopted DFA, one pass recognizes the
+        // winning rule (maximal munch, with the order tie-break baked into the accept
+        // tags), mapping the DFA's local rule index back to the global rules_ index.
+        // Otherwise the per-rule Pike + first-byte-dispatch munch (shared with the audit).
+        if (per_mode_dfa_[mode]) {
+          if (const std::optional<real::dfa_match> matched {per_mode_dfa_[mode]->dfa.match(rest)}) {
+            best_idx = per_mode_dfa_[mode]->to_global[matched->rule_index];
+            best_len = matched->length;
+            have     = true;
+          }
         }
-        for (const std::size_t idx : active.general) {
-          consider(idx);
+        else {
+          const munch_result munched {
+            pike_munch_in_mode(mode, rest, static_cast<unsigned char>(source[cursor.offset]))};
+          have     = munched.have;
+          best_idx = munched.idx;
+          best_len = munched.len;
         }
 
         if (!have) {
@@ -467,6 +496,195 @@ namespace scilex {
       }
     }
 
+    //! \brief An adopted per-mode DFA: the automaton plus its local→global rule map.
+    struct mode_dfa
+    {
+      real::dfa                dfa;       //!< Recognizes the mode's rules in one pass.
+      std::vector<std::size_t> to_global; //!< DFA local rule index -> global rules_ index.
+    };
+
+    //! \brief A munch decision: whether a rule matched, which (global index), how many
+    //!        bytes — the small value scan_next's Pike branch and the audit share.
+    struct munch_result
+    {
+      bool        have {false};
+      std::size_t idx  {0};
+      std::size_t len  {0};
+    };
+
+    //! \brief The per-rule Pike + first-byte-dispatch munch in \p mode at the start of
+    //!        \p rest (\p lead is rest's first byte). Extracted verbatim from the
+    //!        historical scan_next loop — zero allocation, the Pike path unchanged — and
+    //!        shared by scan_next's Pike branch and the DFA audit.
+    munch_result pike_munch_in_mode(std::size_t      mode,
+                                    std::string_view rest,
+                                    unsigned char    lead) const
+    {
+      std::size_t best_len {0};
+      std::size_t best_idx {0};
+      bool        have     {false};
+      const auto  consider {[&](std::size_t idx) {
+                              // idx comes from this mode's first-byte dispatch, populated
+                              // in build_dispatch() from rules_ indices, so it is always in
+                              // range. The analyzer cannot prove that cross-vector invariant
+                              // once this munch is a standalone shared method; a bounds guard
+                              // would be an unreachable branch the 100%-4D gate rejects, so the
+                              // proven false positive is suppressed here (see REPORT note).
+                              // NOLINTNEXTLINE(clang-analyzer-core.NonNullParamChecker)
+                              const auto matched {rules_[idx].pattern.match(rest)};
+                              if (matched && matched.end() > 0
+                                  && (!have || matched.end() > best_len
+                                      || (matched.end() == best_len && idx < best_idx))) {
+                                best_len = matched.end();
+                                best_idx = idx;
+                                have     = true;
+                              }
+                            }};
+      const dispatch& active {per_mode_[mode]};
+      for (const std::size_t idx : active.first_byte_index[lead]) {
+        consider(idx);
+      }
+      for (const std::size_t idx : active.general) {
+        consider(idx);
+      }
+      return {.have = have, .idx = best_idx, .len = best_len};
+    }
+
+    //! \brief Whether rule \p idx is active in mode \p mode (mirrors \ref build_dispatch,
+    //!        an empty in_mode is the default mode only; otherwise the listed modes).
+    [[nodiscard]] bool rule_active_in_mode(std::size_t idx,
+                                           std::size_t mode) const
+    {
+      const std::vector<std::string>& modes {rules_[idx].in_mode};
+      if (modes.empty()) {
+        return mode == 0;
+      }
+      for (const std::string& name : modes) {
+        if (mode_id_.at(name) == mode) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    //! \brief The bounded, deterministic probe inputs for the audit: every active rule's
+    //!        possible first bytes ∪ structural bytes, as singletons and short repeats
+    //!        (repeats expose lazy delimiters and quantifier boundaries — the hard cases),
+    //!        then fixed-seed random strings. At most 512 inputs, each ≤ 48 bytes.
+    std::vector<std::string> audit_probes(const std::vector<std::size_t>& to_global) const
+    {
+      std::array<bool, 256>      seen {};
+      std::vector<unsigned char> alpha;
+      const auto                 add {[&](unsigned char b) {
+                                        if (!seen[b]) {
+                                          seen[b] = true;
+                                          alpha.push_back(b);
+                                        }
+                                      }};
+      for (const std::size_t g : to_global) {
+        for (int b {0}; b < 256; ++b) {
+          if (rules_[g].pattern.may_start_with(static_cast<unsigned char>(b))) {
+            add(static_cast<unsigned char>(b));
+          }
+        }
+      }
+      for (const char structural : std::string_view {" \t\n\"'/*-+=<>()[]{};.:,aAz09_"}) {
+        add(static_cast<unsigned char>(structural));
+      }
+
+      // alpha is always non-empty (the structural bytes above are unconditional), so
+      // the probe count is O(alphabet) + a fixed random batch — deterministic, bounded,
+      // and free of cap branches. Singletons + short repeats expose lazy delimiters and
+      // quantifier boundaries (the hard cases); the random batch broadens coverage.
+      std::vector<std::string> probes;
+      for (const unsigned char b : alpha) {
+        for (const std::size_t n : std::array<std::size_t, 5> {1, 2, 3, 6, 8}) {
+          probes.emplace_back(n, static_cast<char>(b));
+        }
+      }
+      std::mt19937                               rng   {0x5C11EFU}; // fixed seed: the audit is reproducible
+      std::uniform_int_distribution<std::size_t> len_d {1, 48};
+      std::uniform_int_distribution<std::size_t> sym_d {0, alpha.size() - 1};
+      for (int batch {0}; batch < 256; ++batch) {
+        std::string       input;
+        const std::size_t len {len_d(rng)};
+        for (std::size_t i {0}; i < len; ++i) {
+          input.push_back(static_cast<char>(alpha[sym_d(rng)]));
+        }
+        probes.push_back(std::move(input));
+      }
+      return probes;
+    }
+
+    //! \brief The candidate DFA must reproduce the Pike munch on every probe: catches
+    //!        divergences the bytecode cannot reveal — chiefly a lazy quantifier, whose
+    //!        match() is the shortest span while the DFA takes the longest.
+    [[nodiscard]] bool audit_passes(const real::dfa&                candidate,
+                                    const std::vector<std::size_t>& to_global,
+                                    std::size_t                     mode) const
+    {
+      const std::vector<std::string> probes {audit_probes(to_global)};
+      for (const std::string& probe : probes) {
+        const std::string_view               rest    {probe}; // probes always have length >= 1
+        const std::optional<real::dfa_match> hit     {candidate.match(rest)};
+        const munch_result                   pike    {pike_munch_in_mode(mode, rest, static_cast<unsigned char>(rest[0]))};
+        std::size_t                          dfa_idx {0};
+        std::size_t                          dfa_len {0};
+        if (hit.has_value()) {
+          dfa_idx = to_global[hit->rule_index];
+          dfa_len = hit->length;
+        }
+        // One comparison — the tuple's element-wise short-circuit lives in <tuple>, not
+        // here — so any divergence (chiefly a lazy rule's shortest-vs-longest) rejects.
+        if (std::tuple {hit.has_value(), dfa_idx, dfa_len} != std::tuple {pike.have, pike.idx, pike.len}) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    //! \brief Opts the named \p dfa_modes into the DFA fast path (called once, after
+    //!        \ref build_dispatch). For each, builds a \c real::dfa from the mode's
+    //!        active rules in ascending global index (= priority); an un-DFA-able
+    //!        assertion (\c real::dfa_error) or a failed \ref audit_passes leaves the
+    //!        mode on Pike (nullptr). Best-effort — see \ref dfa_modes_active.
+    //! \param[in] dfa_modes The opted-in mode names. The build-time equivalence audit
+    //!            always runs; its outcome is observable via \ref dfa_modes_active.
+    //! \throws std::invalid_argument If \p dfa_modes names an unknown mode.
+    void build_dfa_modes(const std::unordered_set<std::string>& dfa_modes)
+    {
+      per_mode_dfa_.assign(mode_names_.size(), nullptr);
+      for (const std::string& name : dfa_modes) {
+        const auto found {mode_id_.find(name)};
+        if (found == mode_id_.end()) {
+          throw std::invalid_argument("dfa_modes names an unknown mode: " + name);
+        }
+        const std::size_t        mode {found->second};
+        std::vector<std::size_t> to_global;
+        for (std::size_t idx {0}; idx < rules_.size(); ++idx) {
+          if (rule_active_in_mode(idx, mode)) {
+            to_global.push_back(idx);
+          }
+        }
+        std::vector<real::detail::program_view> programs;
+        programs.reserve(to_global.size());
+        for (const std::size_t g : to_global) {
+          programs.push_back(rules_[g].pattern.raw_program());
+        }
+        try {
+          real::dfa candidate {std::span<const real::detail::program_view>(programs)};
+          if (!audit_passes(candidate, to_global, mode)) {
+            continue; // a divergence (e.g. a lazy rule) → keep this mode on Pike
+          }
+          per_mode_dfa_[mode] = std::make_shared<const mode_dfa>(
+            mode_dfa {.dfa    = std::move(candidate), .to_global = std::move(to_global)});
+        }
+        catch (const real::dfa_error&) {
+          // An un-DFA-able assertion ($, \b, multiline ^/$): keep this mode on Pike.
+        }
+      }
+    }
+
     //! \brief Per-mode dispatch index: the ⑤ first-byte buckets scoped to one mode.
     struct dispatch
     {
@@ -474,11 +692,12 @@ namespace scilex {
       std::vector<std::size_t>                  general;          //!< Nullable rules (tried everywhere).
     };
 
-    std::vector<rule>                  rules_;            //!< The ordered token rules.
-    std::vector<std::string>           mode_names_;       //!< Mode id -> name ("default" is id 0).
-    std::map<std::string, std::size_t> mode_id_;          //!< Mode name -> id.
-    std::vector<dispatch>              per_mode_;         //!< Dispatch index, one per mode (by id).
-    std::vector<bool>                  mode_significant_; //!< Layout policy (empty = all significant).
+    std::vector<rule>                            rules_;            //!< The ordered token rules.
+    std::vector<std::string>                     mode_names_;       //!< Mode id -> name ("default" is id 0).
+    std::map<std::string, std::size_t>           mode_id_;          //!< Mode name -> id.
+    std::vector<dispatch>                        per_mode_;         //!< Dispatch index, one per mode (by id).
+    std::vector<std::shared_ptr<const mode_dfa>> per_mode_dfa_;     //!< Per-mode DFA fast path (nullptr = Pike).
+    std::vector<bool>                            mode_significant_; //!< Layout policy (empty = all significant).
   };
 
   /*!

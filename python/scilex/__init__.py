@@ -55,6 +55,7 @@ import os
 
 from scilex._scilex import (
     compile as _compile,
+    dfa_modes_active as _dfa_modes_active,
     error,
     layout as _layout,
     scan_next as _scan_next,
@@ -222,13 +223,19 @@ class Lexer:
             structure (Layout Awareness Level A — see :meth:`layout`): code spanning
             lines in such a mode is treated as continuation. Each must be a mode the
             rules use.
+        dfa_modes (iterable): Mode names to accelerate with a DFA fast path (one DFA
+            pass replaces the per-rule dispatch). Best-effort and invisible: a mode
+            whose rules need an assertion no DFA can represent, or whose DFA fails the
+            build-time audit (a lazy quantifier), silently stays on the regular engine
+            — see :attr:`dfa_modes_active`. The token stream is identical either way.
 
     Raises:
-        error: If a pattern is an invalid regex, or a transition targets an empty mode.
+        error: If a pattern is an invalid regex, a transition targets an empty mode, or
+            ``dfa_modes`` names an unknown mode.
         ValueError: If ``insignificant_modes`` names a mode the rules do not use.
     """
 
-    def __init__(self, rules, insignificant_modes=()):
+    def __init__(self, rules, insignificant_modes=(), dfa_modes=()):
         normalized = []
         for entry in rules:
             kind, pattern = entry[0], entry[1]
@@ -253,7 +260,10 @@ class Lexer:
             else:
                 normalized.append((int(kind), pattern, skip)) # plain rule stays a triple
         self._rules = normalized
-        self._handle = _compile(normalized)
+        self._dfa_modes = [str(mode) for mode in dfa_modes]
+        # The C++ ctor validates dfa_modes against the interned modes (raising error on
+        # an unknown one) and builds the per-mode DFA fast path.
+        self._handle = _compile(normalized, self._dfa_modes)
         known = {"default"}
         for entry in normalized:
             if len(entry) > 3:
@@ -274,6 +284,22 @@ class Lexer:
     def insignificant_modes(self):
         """The mode names whose tokens carry no layout structure (Level A)."""
         return list(self._insignificant)
+
+    @property
+    def dfa_modes(self):
+        """The mode names requested for DFA acceleration (see :attr:`dfa_modes_active`)."""
+        return list(self._dfa_modes)
+
+    @property
+    def dfa_modes_active(self):
+        """The modes actually accelerated by a DFA fast path.
+
+        A mode requested in ``dfa_modes`` but rejected — its rules need an assertion no
+        DFA can represent, or its DFA failed the build-time audit (a lazy quantifier) —
+        is absent: it fell back to the regular engine, lexing the same tokens. So the
+        rejected set is ``set(dfa_modes) - set(dfa_modes_active)``.
+        """
+        return list(_dfa_modes_active(self._handle))
 
     def layout(self, tokens):
         """Insert NEWLINE / INDENT / DEDENT from indentation, mode-aware.

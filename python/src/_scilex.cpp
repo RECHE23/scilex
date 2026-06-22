@@ -29,6 +29,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -255,15 +256,23 @@ int parse_action(PyObject* obj, std::optional<scilex::mode_action>* out)
     return 0;
 }
 
-// _scilex.compile(rules) -> capsule wrapping a scilex::lexer. Each rule is
-// (kind:int, pattern:str, skip:bool) and may carry two optional fields:
-// in_mode (a sequence of mode-name str) and action (a push/pop/set tuple). A bare
-// 3-tuple stays valid (a default-mode rule with no transition).
+// _scilex.compile(rules, dfa_modes=()) -> capsule wrapping a scilex::lexer. Each rule
+// is (kind:int, pattern:str, skip:bool) and may carry two optional fields: in_mode (a
+// sequence of mode-name str) and action (a push/pop/set tuple). A bare 3-tuple stays
+// valid (a default-mode rule with no transition). dfa_modes is a sequence of mode names
+// to accelerate with a real::dfa fast path (best-effort: an un-DFA-able mode silently
+// stays on Pike — see dfa_modes_active). insignificant_modes is NOT passed here: layout
+// significance is applied Python-side in _scilex.layout, unchanged.
 PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
 {
-    PyObject* rules_obj = nullptr;
-    if (PyArg_ParseTuple(args, "O", &rules_obj) == 0) {
+    PyObject* rules_obj     = nullptr;
+    PyObject* dfa_modes_obj = nullptr; // optional sequence of mode names (borrowed)
+    if (PyArg_ParseTuple(args, "O|O", &rules_obj, &dfa_modes_obj) == 0) {
         return nullptr;
+    }
+    std::vector<std::string> dfa_modes;
+    if (parse_in_mode(dfa_modes_obj, &dfa_modes) < 0) {
+        return nullptr; // not a sequence of names (error set)
     }
     const Py_ssize_t count = PySequence_Size(rules_obj);
     if (count < 0) {
@@ -308,7 +317,8 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
                 return nullptr;
             }
         }
-        auto* lexer = new scilex::lexer(std::move(rules));
+        auto* lexer = new scilex::lexer(std::move(rules), {},
+                                        std::unordered_set<std::string>(dfa_modes.begin(), dfa_modes.end()));
         PyObject* capsule = PyCapsule_New(lexer, CAPSULE_NAME, capsule_free);
         if (capsule == nullptr) {
             delete lexer;
@@ -320,6 +330,35 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
         PyErr_SetString(error_type, error.what());
         return nullptr;
     }
+}
+
+// _scilex.dfa_modes_active(handle) -> tuple of the mode names actually accelerated by a
+// DFA fast path. A mode requested in compile()'s dfa_modes but rejected (an un-DFA-able
+// assertion, or a failed build-time audit) is absent — it fell back to Pike.
+PyObject* scilex_dfa_modes_active(PyObject* /*self*/, PyObject* args)
+{
+    PyObject* capsule = nullptr;
+    if (PyArg_ParseTuple(args, "O", &capsule) == 0) {
+        return nullptr;
+    }
+    auto* lexer = static_cast<scilex::lexer*>(PyCapsule_GetPointer(capsule, CAPSULE_NAME));
+    if (lexer == nullptr) {
+        return nullptr;
+    }
+    const std::vector<std::string> active {lexer->dfa_modes_active()};
+    PyObject*                      tuple {PyTuple_New(static_cast<Py_ssize_t>(active.size()))};
+    if (tuple == nullptr) {
+        return nullptr;
+    }
+    for (std::size_t i = 0; i < active.size(); ++i) {
+        PyObject* name {PyUnicode_FromStringAndSize(active[i].data(), static_cast<Py_ssize_t>(active[i].size()))};
+        if (name == nullptr) {
+            Py_DECREF(tuple);
+            return nullptr;
+        }
+        PyTuple_SetItem(tuple, static_cast<Py_ssize_t>(i), name); // steals the reference
+    }
+    return tuple;
 }
 
 // _scilex.tokenize(handle, text, eof=False) -> list of (kind, lexeme, offset, line,
@@ -572,17 +611,24 @@ PyObject* scilex_layout(PyObject* /*self*/, PyObject* args)
 
 PyMethodDef module_methods[] = {
     {"compile", scilex_compile, METH_VARARGS,
-     "compile(rules)\n"
+     "compile(rules, dfa_modes=())\n"
      "Compile an ordered list of rules into a lexer handle.\n\n"
      "Args:\n"
      "    rules (sequence): Each rule is (kind:int, pattern:str, skip:bool) and may\n"
      "        carry two optional fields: in_mode (a sequence of mode-name str; empty\n"
      "        means the default mode) and action (None, or a transition tuple\n"
-     "        (\"push\", mode) / (\"set\", mode) / (\"pop\",)).\n\n"
+     "        (\"push\", mode) / (\"set\", mode) / (\"pop\",)).\n"
+     "    dfa_modes (sequence): Mode names to accelerate with a DFA fast path. Best-\n"
+     "        effort: an un-DFA-able mode silently stays on Pike (see dfa_modes_active).\n\n"
      "Returns:\n"
      "    capsule: An opaque compiled-lexer handle for tokenize()/scan_start().\n\n"
      "Raises:\n"
-     "    error: If a pattern is an invalid regex, or a transition targets an empty mode."},
+     "    error: If a pattern is an invalid regex, a transition targets an empty mode,\n"
+     "        or dfa_modes names an unknown mode."},
+    {"dfa_modes_active", scilex_dfa_modes_active, METH_VARARGS,
+     "dfa_modes_active(handle) -> tuple[str]\n"
+     "The mode names actually accelerated by a DFA (a requested mode that fell back\n"
+     "to Pike — an un-DFA-able assertion or a failed audit — is absent)."},
     {"tokenize", scilex_tokenize, METH_VARARGS,
      "tokenize(handle, text, eof=False)\n"
      "Eagerly tokenize text with a compiled-lexer handle.\n\n"
