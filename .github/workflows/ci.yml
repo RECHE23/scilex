@@ -64,6 +64,11 @@ jobs:
         with:
           repository: RECHE23/real-regex
           path: real-v1
+      - uses: actions/checkout@v6
+        with:
+          repository: RECHE23/sciforge
+          ref: v2026.6.0
+          path: sciforge-v1
       - name: Test
         run: make -C scilex-v1 test CXX=${{ matrix.cxx }}
       - name: Sanitizers (ASan + UBSan)
@@ -89,6 +94,11 @@ jobs:
         with:
           repository: RECHE23/real-regex
           path: real-v1
+      - uses: actions/checkout@v6
+        with:
+          repository: RECHE23/sciforge
+          ref: v2026.6.0
+          path: sciforge-v1
       # One bash script across all three OSes (bash ships on the Windows runner);
       # --config/-C Release cover the multi-config MSVC generator and no-op on
       # the single-config Linux ones.
