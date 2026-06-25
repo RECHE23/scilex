@@ -39,6 +39,9 @@ CXXSTD       := -std=c++20
 # REAL is a dependency: include it as a system header so the linters analyze
 # SciLex's own code only (REAL passes its own gates).
 INCLUDES     := -Iinclude -isystem $(REAL_INCLUDE)
+# The test harness (framework.hpp) is owned by SciForge; the test TUs include
+# it as <sciforge/test/framework.hpp>. clang-tidy (make lint) needs that path too.
+SCIFORGE_INCLUDE ?= ../sciforge-v1/include
 FORMAT_FILES := $(shell find include tests examples fuzz benchmarks cli -name '*.hpp' -o -name '*.cpp')
 
 .PHONY: all build test sanitize coverage coverage-build coverage-html \
@@ -136,7 +139,7 @@ coverage-html:
 # --- QA tools (wrappers; no compilation policy here) ----------------------
 
 lint:
-	@ls tests/*.cpp | xargs -P $(JOBS) -I{} clang-tidy {} -- $(CXXSTD) $(INCLUDES)
+	@ls tests/*.cpp | xargs -P $(JOBS) -I{} clang-tidy {} -- $(CXXSTD) $(INCLUDES) -I$(SCIFORGE_INCLUDE)
 
 misra:
 	mkdir -p $(BUILD)

@@ -3,7 +3,7 @@
 #include <string_view>
 #include <vector>
 
-#include "framework.hpp"
+#include <sciforge/test/framework.hpp>
 #include "scilex/scilex.hpp"
 
 using namespace std::string_view_literals;
