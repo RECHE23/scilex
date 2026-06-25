@@ -264,7 +264,7 @@ pip.
 For CI or a reproducible build — where no on-disk layout can be assumed — fetch
 REAL with CMake FetchContent instead (`make build FETCH=1`, or
 `-DSCILEX_FETCH_DEPS=ON`); point it at a remote and pin a tag with
-`-DSCILEX_REAL_REPO=https://… -DSCILEX_REAL_TAG=v2026.6.9`.
+`-DSCILEX_REAL_REPO=https://… -DSCILEX_REAL_TAG=v2026.6.14`.
 
 ## Development
 
