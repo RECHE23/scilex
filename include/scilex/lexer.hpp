@@ -458,8 +458,9 @@ namespace scilex {
         for (const std::string& name : candidate.in_mode) {
           intern_mode(name);
         }
-        if (candidate.action && candidate.action->operation != mode_action::op::pop) {
-          intern_mode(candidate.action->target);
+        if (const std::optional<mode_action> action {candidate.action};
+            action.has_value() && action->operation != mode_action::op::pop) {
+          intern_mode(action->target);
         }
       }
       per_mode_.resize(mode_names_.size());
@@ -602,6 +603,10 @@ namespace scilex {
           probes.emplace_back(n, static_cast<char>(b));
         }
       }
+      // Fixed seed by design: this RNG only generates local probe strings for the
+      // build-time DFA equivalence audit, which must be reproducible. No security
+      // role (no tokens, crypto or identifiers) — a constant seed is correct here.
+      // NOLINTNEXTLINE(bugprone-random-generator-seed,cert-msc32-c,cert-msc51-cpp)
       std::mt19937                               rng   {0x5C11EFU}; // fixed seed: the audit is reproducible
       std::uniform_int_distribution<std::size_t> len_d {1, 48};
       std::uniform_int_distribution<std::size_t> sym_d {0, alpha.size() - 1};
@@ -643,6 +648,35 @@ namespace scilex {
       return true;
     }
 
+    //! \brief Builds the \ref mode_dfa for one mode, or \c std::nullopt if the mode
+    //!        cannot take the DFA fast path. Two non-error reasons return nullopt:
+    //!        the rules contain an un-DFA-able assertion (\c real::dfa throws
+    //!        \c real::dfa_error — caught here, turned into nullopt), or the DFA
+    //!        fails the build-time equivalence audit (a lazy quantifier). Both leave
+    //!        the mode on Pike. Returning the outcome instead of throwing past the
+    //!        caller keeps the fast-path decision explicit at the call site.
+    //! \param[in] to_global The mode's active rules, ascending global index (priority).
+    //! \param[in] mode      The mode id (for the audit).
+    std::optional<mode_dfa> try_build_mode_dfa(std::vector<std::size_t> to_global,
+                                               std::size_t              mode)
+    {
+      std::vector<real::detail::program_view> programs;
+      programs.reserve(to_global.size());
+      for (const std::size_t g : to_global) {
+        programs.push_back(rules_[g].pattern.raw_program());
+      }
+      try {
+        real::dfa candidate {std::span<const real::detail::program_view>(programs)};
+        if (!audit_passes(candidate, to_global, mode)) {
+          return std::nullopt; // a divergence (e.g. a lazy rule) → keep this mode on Pike
+        }
+        return mode_dfa {.dfa = std::move(candidate), .to_global = std::move(to_global)};
+      }
+      catch (const real::dfa_error&) {
+        return std::nullopt; // un-DFA-able assertion ($, \b, multiline ^/$): keep on Pike
+      }
+    }
+
     //! \brief Opts the named \p dfa_modes into the DFA fast path (called once, after
     //!        \ref build_dispatch). For each, builds a \c real::dfa from the mode's
     //!        active rules in ascending global index (= priority); an un-DFA-able
@@ -666,21 +700,8 @@ namespace scilex {
             to_global.push_back(idx);
           }
         }
-        std::vector<real::detail::program_view> programs;
-        programs.reserve(to_global.size());
-        for (const std::size_t g : to_global) {
-          programs.push_back(rules_[g].pattern.raw_program());
-        }
-        try {
-          real::dfa candidate {std::span<const real::detail::program_view>(programs)};
-          if (!audit_passes(candidate, to_global, mode)) {
-            continue; // a divergence (e.g. a lazy rule) → keep this mode on Pike
-          }
-          per_mode_dfa_[mode] = std::make_shared<const mode_dfa>(
-            mode_dfa {.dfa    = std::move(candidate), .to_global = std::move(to_global)});
-        }
-        catch (const real::dfa_error&) {
-          // An un-DFA-able assertion ($, \b, multiline ^/$): keep this mode on Pike.
+        if (auto built {try_build_mode_dfa(std::move(to_global), mode)}) {
+          per_mode_dfa_[mode] = std::make_shared<const mode_dfa>(std::move(*built));
         }
       }
     }

@@ -1,6 +1,7 @@
-# MISRA C++:2023-oriented analysis profile for include/real/.
-# clang-tidy covers a material subset of MISRA through the cppcoreguidelines,
-# cert, bugprone and hicpp modules. Run with `make misra`.
+# MISRA C++:2023-oriented analysis profile. clang-tidy covers a material subset
+# of MISRA through the cppcoreguidelines, cert, bugprone and hicpp modules. The
+# header scope is supplied on the command line (--header-filter in `make misra`),
+# so this profile is project-agnostic. Run with `make misra`.
 #
 # Disabled checks below are documented, justified deviations — see MISRA.md.
 Checks: >
@@ -28,4 +29,3 @@ Checks: >
   -bugprone-easily-swappable-parameters,
   -cppcoreguidelines-avoid-const-or-ref-data-members
 WarningsAsErrors: '*'
-HeaderFilterRegex: 'include/real/.*'

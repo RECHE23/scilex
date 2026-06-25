@@ -143,9 +143,9 @@ lint:
 
 misra:
 	mkdir -p $(BUILD)
-	printf '#include <scilex/scilex.hpp>\nint main(){ const scilex::lexer l({{0, real::regex("a")}}); return l.tokenize("a").size() == 1 ? 0 : 1; }\n' > $(BUILD)/misra_tu.cpp
+	printf '#include <scilex/scilex.hpp>\nint main(){ try { const scilex::lexer l({{0, real::regex("a")}}); return l.tokenize("a").size() == 1 ? 0 : 1; } catch (...) { return 2; } }\n' > $(BUILD)/misra_tu.cpp
 	clang-tidy --config-file=.clang-tidy-misra \
-	    --line-filter='[{"name":"misra_tu.cpp","lines":[[1,1]]}]' \
+	    --header-filter='include/scilex/.*' \
 	    $(BUILD)/misra_tu.cpp -- $(CXXSTD) $(INCLUDES)
 
 doc: coverage-html
