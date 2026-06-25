@@ -29,12 +29,12 @@ def real_include():
         return real.get_include()
     except (ImportError, AttributeError):  # pragma: no cover - fallback for a source checkout
         # Try common clone directory names for https://github.com/RECHE23/real-regex
-        for name in ("real-regex", "real", "real-v1"):
+        for name in ("real-regex", "real"):
             p = os.path.normpath(os.path.join(HERE, os.pardir, name, "include"))
             if os.path.isdir(p):
                 return p
         # Maintainer's local default
-        return os.path.normpath(os.path.join(HERE, os.pardir, "real-v1", "include"))
+        return os.path.normpath(os.path.join(HERE, os.pardir, "real-regex", "include"))
 
 
 class build_py_with_headers(build_py):

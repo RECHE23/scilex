@@ -66,17 +66,17 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          path: scilex-v1
+          path: scilex
       - uses: actions/checkout@v6
         with:
           repository: RECHE23/real-regex
-          path: real-v1
+          path: real-regex
       - name: Install Doxygen, Graphviz, Clang and LLVM coverage tools
         run: sudo apt-get update && sudo apt-get install -y doxygen graphviz clang llvm
       - name: Build the API reference (Doxygen + embedded coverage + guided tour)
-        run: make -C scilex-v1 doc
+        run: make -C scilex doc
       - name: Package the HTML
-        run: tar -czf scilex-doc.tar.gz -C scilex-v1/build/doc html
+        run: tar -czf scilex-doc.tar.gz -C scilex/build/doc html
       - uses: actions/upload-artifact@v7
         with:
           name: docs

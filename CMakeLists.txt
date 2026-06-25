@@ -3,7 +3,7 @@
 # The root Makefile is a thin orchestrator over these targets.
 #
 # SciLex is header-only and depends on REAL's headers. By default it looks for
-# them in a sibling checkout (the maintainer's local layout uses ../real-v1);
+# them in a sibling checkout (the maintainer's local layout uses ../real-regex);
 # override with cmake -DSCILEX_REAL_INCLUDE=...
 # (e.g. the path printed by `python -c "import real; print(real.get_include())"`).
 cmake_minimum_required(VERSION 3.16)
@@ -42,9 +42,9 @@ option(SCILEX_COVERAGE "Build the tests with LLVM source-based coverage instrume
 #      -DSCILEX_FETCH_DEPS=ON -DSCILEX_REAL_REPO=https://… -DSCILEX_REAL_TAG=v2026.6.14
 option(SCILEX_FETCH_DEPS "Fetch the dependencies with FetchContent" OFF)
 
-set(SCILEX_REAL_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../real-v1/include"
+set(SCILEX_REAL_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../real-regex/include"
     CACHE PATH "Path to REAL's include directory (maintainer's default; override for your layout)")
-set(SCILEX_REAL_REPO "${CMAKE_CURRENT_SOURCE_DIR}/../real-v1"
+set(SCILEX_REAL_REPO "${CMAKE_CURRENT_SOURCE_DIR}/../real-regex"
     CACHE STRING "REAL git repository (path or URL) when fetching")
 # Default to REAL's released tag so a FetchContent build is reproducible (override
 # with -DSCILEX_REAL_TAG=main to track the latest during co-development).
@@ -116,14 +116,14 @@ enable_testing()
 # infrastructure repository — and is never carried as a local copy. Resolution
 # mirrors how this project finds its other sibling dependencies, two modes:
 #  * Default (local development): a sibling checkout, used live. The maintainer's
-#    layout uses ../sciforge-v1; override with -DSCIFORGE_INCLUDE_DIR=/path.
+#    layout uses ../sciforge; override with -DSCIFORGE_INCLUDE_DIR=/path.
 #  * CI / reproducible builds: -DSCILEX_FETCH_SCIFORGE=ON fetches SciForge with
 #    FetchContent from a configurable repository + tag. Prepared but inert by
 #    default; once SciForge publishes a CalVer tag, pin SCIFORGE_TAG to it.
 option(SCILEX_FETCH_SCIFORGE "Fetch SciForge (test harness) with FetchContent" OFF)
-set(SCIFORGE_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../sciforge-v1/include"
+set(SCIFORGE_INCLUDE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../sciforge/include"
     CACHE PATH "Path to SciForge's include directory (maintainer's default; override for your layout)")
-set(SCIFORGE_REPO "${CMAKE_CURRENT_SOURCE_DIR}/../sciforge-v1"
+set(SCIFORGE_REPO "${CMAKE_CURRENT_SOURCE_DIR}/../sciforge"
     CACHE STRING "SciForge git repository (path or URL) when fetching")
 set(SCIFORGE_TAG "v2026.6.0" CACHE STRING "SciForge git tag when fetching (pin to a CalVer tag once released)")
 

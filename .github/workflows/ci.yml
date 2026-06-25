@@ -1,7 +1,7 @@
 name: CI
 
 # SciLex depends on REAL's headers. CI checks out REAL (public) as a sibling so
-# the Makefile's default resolution (../real-v1/include) finds it — no secret needed.
+# the Makefile's default resolution (../real-regex/include) finds it — no secret needed.
 #
 # Actions-minute economy (this is a private repo, so minutes are billed, and macOS
 # runners bill 10x): macOS is the maintainer's local development platform — every gate
@@ -59,20 +59,20 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          path: scilex-v1
+          path: scilex
       - uses: actions/checkout@v6
         with:
           repository: RECHE23/real-regex
-          path: real-v1
+          path: real-regex
       - uses: actions/checkout@v6
         with:
           repository: RECHE23/sciforge
           ref: v2026.6.0
-          path: sciforge-v1
+          path: sciforge
       - name: Test
-        run: make -C scilex-v1 test CXX=${{ matrix.cxx }}
+        run: make -C scilex test CXX=${{ matrix.cxx }}
       - name: Sanitizers (ASan + UBSan)
-        run: make -C scilex-v1 sanitize CXX=${{ matrix.cxx }}
+        run: make -C scilex sanitize CXX=${{ matrix.cxx }}
 
   # Portable build entry: Windows/MSVC and native ARM, through CMake — plus a
   # find_package smoke proving the installed config package and its transitive
@@ -89,16 +89,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          path: scilex-v1
+          path: scilex
       - uses: actions/checkout@v6
         with:
           repository: RECHE23/real-regex
-          path: real-v1
+          path: real-regex
       - uses: actions/checkout@v6
         with:
           repository: RECHE23/sciforge
           ref: v2026.6.0
-          path: sciforge-v1
+          path: sciforge
       # One bash script across all three OSes (bash ships on the Windows runner);
       # --config/-C Release cover the multi-config MSVC generator and no-op on
       # the single-config Linux ones.
@@ -108,32 +108,32 @@ jobs:
           set -e
           STAGE="${{ github.workspace }}/_stage"
           # Install REAL first so find_package(scilex) resolves real:: transitively.
-          cmake -S real-v1 -B real-v1/build -DCMAKE_BUILD_TYPE=Release
-          cmake --install real-v1/build --config Release --prefix "$STAGE"
+          cmake -S real-regex -B real-regex/build -DCMAKE_BUILD_TYPE=Release
+          cmake --install real-regex/build --config Release --prefix "$STAGE"
           # Build, test and install SciLex itself (configure uses the sibling path).
-          cmake -S scilex-v1 -B scilex-v1/build -DCMAKE_BUILD_TYPE=Release
-          cmake --build scilex-v1/build --config Release
-          ctest --test-dir scilex-v1/build -C Release --output-on-failure
-          cmake --install scilex-v1/build --config Release --prefix "$STAGE"
+          cmake -S scilex -B scilex/build -DCMAKE_BUILD_TYPE=Release
+          cmake --build scilex/build --config Release
+          ctest --test-dir scilex/build -C Release --output-on-failure
+          cmake --install scilex/build --config Release --prefix "$STAGE"
           # Downstream consumer: locate SciLex purely via find_package.
-          cmake -S scilex-v1/cmake/smoke -B scilex-v1/build-smoke -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$STAGE"
-          cmake --build scilex-v1/build-smoke --config Release
-          ctest --test-dir scilex-v1/build-smoke -C Release --output-on-failure
+          cmake -S scilex/cmake/smoke -B scilex/build-smoke -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$STAGE"
+          cmake --build scilex/build-smoke --config Release
+          ctest --test-dir scilex/build-smoke -C Release --output-on-failure
 
   misra:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
-          path: scilex-v1
+          path: scilex
       - uses: actions/checkout@v6
         with:
           repository: RECHE23/real-regex
-          path: real-v1
+          path: real-regex
       - name: Install clang-tidy
         run: sudo apt-get update && sudo apt-get install -y clang-tidy
       - name: MISRA C++:2023-oriented analysis
-        run: make -C scilex-v1 misra
+        run: make -C scilex misra
 
   python:
     strategy:
@@ -145,16 +145,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          path: scilex-v1
+          path: scilex
       - uses: actions/checkout@v6
         with:
           repository: RECHE23/real-regex
-          path: real-v1
+          path: real-regex
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
       - name: Build the binding and run the suite
-        working-directory: scilex-v1
+        working-directory: scilex
         run: |
           python -m pip install --upgrade pip setuptools wheel
           python -m pip install -e .

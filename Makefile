@@ -23,7 +23,7 @@ BINDIR ?= $(PREFIX)/bin
 # Parallelism: detected core count (override with JOBS=N).
 JOBS   ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
-REAL_INCLUDE ?= $(CURDIR)/../real-v1/include  # common names: real-regex, real, real-v1
+REAL_INCLUDE ?= $(CURDIR)/../real-regex/include  # common names: real-regex, real, real-regex
 
 ifeq ($(origin CXX),command line)
 CMAKE_CXX := -DCMAKE_CXX_COMPILER=$(CXX)
@@ -41,7 +41,7 @@ CXXSTD       := -std=c++20
 INCLUDES     := -Iinclude -isystem $(REAL_INCLUDE)
 # The test harness (framework.hpp) is owned by SciForge; the test TUs include
 # it as <sciforge/test/framework.hpp>. clang-tidy (make lint) needs that path too.
-SCIFORGE_INCLUDE ?= ../sciforge-v1/include
+SCIFORGE_INCLUDE ?= ../sciforge/include
 FORMAT_FILES := $(shell find include tests examples fuzz benchmarks cli -name '*.hpp' -o -name '*.cpp')
 
 .PHONY: all build test sanitize coverage coverage-build coverage-html \
