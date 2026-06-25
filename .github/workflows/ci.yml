@@ -23,6 +23,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          path: scilex
+      # uncrustify.cfg is owned by SciForge; check it out as a sibling so the
+      # Makefile's default (../sciforge/lint) finds it.
+      - uses: actions/checkout@v6
+        with:
+          repository: RECHE23/sciforge
+          ref: v2026.6.1
+          path: sciforge
       # The pinned Uncrustify binary never changes, so cache it (keyed by version)
       # and rebuild from source only on a cache miss — saving the ~3-minute build
       # on every subsequent run.
@@ -45,7 +54,7 @@ jobs:
       - name: Check formatting
         run: |
           export PATH="$HOME/.local/bin:$PATH"
-          make format-check
+          make -C scilex format-check
 
   # POSIX developer workflow: the Makefile, both compilers, plus sanitizers.
   posix:
@@ -67,7 +76,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: RECHE23/sciforge
-          ref: v2026.6.0
+          ref: v2026.6.1
           path: sciforge
       - name: Test
         run: make -C scilex test CXX=${{ matrix.cxx }}
@@ -97,7 +106,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: RECHE23/sciforge
-          ref: v2026.6.0
+          ref: v2026.6.1
           path: sciforge
       # One bash script across all three OSes (bash ships on the Windows runner);
       # --config/-C Release cover the multi-config MSVC generator and no-op on
@@ -130,6 +139,12 @@ jobs:
         with:
           repository: RECHE23/real-regex
           path: real-regex
+      # The MISRA profile (lint/clang-tidy-misra) is owned by SciForge.
+      - uses: actions/checkout@v6
+        with:
+          repository: RECHE23/sciforge
+          ref: v2026.6.1
+          path: sciforge
       - name: Install clang-tidy
         run: sudo apt-get update && sudo apt-get install -y clang-tidy
       - name: MISRA C++:2023-oriented analysis

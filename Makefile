@@ -42,6 +42,9 @@ INCLUDES     := -Iinclude -isystem $(REAL_INCLUDE)
 # The test harness (framework.hpp) is owned by SciForge; the test TUs include
 # it as <sciforge/test/framework.hpp>. clang-tidy (make lint) needs that path too.
 SCIFORGE_INCLUDE ?= ../sciforge/include
+# SciForge also owns the shared lint config (the MISRA base + uncrustify.cfg), in
+# its lint/ dir. Same sibling default; CI checks SciForge out alongside as ../sciforge.
+SCIFORGE_LINT ?= ../sciforge/lint
 FORMAT_FILES := $(shell find include tests examples fuzz benchmarks cli -name '*.hpp' -o -name '*.cpp')
 
 .PHONY: all build test sanitize coverage coverage-build coverage-html \
@@ -144,7 +147,7 @@ lint:
 misra:
 	mkdir -p $(BUILD)
 	printf '#include <scilex/scilex.hpp>\nint main(){ try { const scilex::lexer l({{0, real::regex("a")}}); return l.tokenize("a").size() == 1 ? 0 : 1; } catch (...) { return 2; } }\n' > $(BUILD)/misra_tu.cpp
-	clang-tidy --config-file=.clang-tidy-misra \
+	clang-tidy --config-file=$(SCIFORGE_LINT)/clang-tidy-misra \
 	    --header-filter='include/scilex/.*' \
 	    $(BUILD)/misra_tu.cpp -- $(CXXSTD) $(INCLUDES)
 
@@ -161,7 +164,7 @@ doc-no-coverage:
 	@echo "API reference: $(BUILD)/doc/html/index.html"
 
 format:
-	uncrustify -c uncrustify.cfg --replace --no-backup $(FORMAT_FILES)
+	uncrustify -c $(SCIFORGE_LINT)/uncrustify.cfg --replace --no-backup $(FORMAT_FILES)
 
 # Python binding: an abi3 CPython extension (Limited API) over the C++ lexer.
 # Build against $(REAL_INCLUDE) (the sibling by default) via SCILEX_REAL_INCLUDE, so
@@ -261,7 +264,7 @@ full-local-gate:
 	@echo "full-local-gate: ALL gates green (clang + g++-14, sanitize, MISRA, lint, doc, python, example, fuzz-check, version-check, 100% coverage)"
 
 format-check:
-	uncrustify -c uncrustify.cfg --check $(FORMAT_FILES)
+	uncrustify -c $(SCIFORGE_LINT)/uncrustify.cfg --check $(FORMAT_FILES)
 
 install:
 	$(PYTHON) -m pip install .
