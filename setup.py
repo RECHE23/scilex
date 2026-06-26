@@ -6,7 +6,6 @@ import os
 import shutil
 import sys
 
-import sciforge_build
 from setuptools import Extension, setup
 from setuptools.command.build_py import build_py
 
@@ -14,6 +13,26 @@ try:  # setuptools >= 70.1 vendors bdist_wheel; older installs get it from wheel
     from setuptools.command.bdist_wheel import bdist_wheel
 except ImportError:  # pragma: no cover
     from wheel.bdist_wheel import bdist_wheel
+
+
+def _sciforge_include():
+    """Locate SciForge's binding headers: an explicit SCIFORGE_INCLUDE override, then a
+    sibling checkout (local dev wins over a possibly stale pip-installed package), then the
+    sciforge-build package."""
+    header = os.path.join("sciforge", "binding", "error.hpp")
+    env = os.environ.get("SCIFORGE_INCLUDE")
+    if env and os.path.exists(os.path.join(env, header)):
+        return env
+    sibling = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "sciforge", "include")
+    if os.path.exists(os.path.join(sibling, header)):
+        return sibling
+    try:
+        import sciforge_build
+        return sciforge_build.get_include()
+    except ImportError:
+        raise SystemExit("sciforge headers introuvables : checkout RECHE23/sciforge en sibling, "
+                         "ou pip install sciforge-build, ou définir SCIFORGE_INCLUDE")
+
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -71,7 +90,7 @@ setup(
         Extension(
             "scilex._scilex",
             sources=["python/src/_scilex.cpp"],
-            include_dirs=["include", real_include(), sciforge_build.get_include()],
+            include_dirs=["include", real_include(), _sciforge_include()],
             extra_compile_args=compile_args,
             define_macros=[("Py_LIMITED_API", "0x030A0000")],
             py_limited_api=True,

@@ -171,7 +171,7 @@ format:
 # local co-development uses the current REAL headers — not a stale installed package.
 # A wheel/pip build (no env set) resolves REAL through setup.py instead.
 python:
-	SCILEX_REAL_INCLUDE=$(REAL_INCLUDE) $(PYTHON) setup.py -q build_ext --inplace
+	SCIFORGE_INCLUDE=$(SCIFORGE_INCLUDE) SCILEX_REAL_INCLUDE=$(REAL_INCLUDE) $(PYTHON) setup.py -q build_ext --inplace
 
 python-test: python
 	$(PYRUN) -m unittest discover -s python/tests
