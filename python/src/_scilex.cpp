@@ -21,6 +21,8 @@
 
 #include <scilex/scilex.hpp>
 #include <scilex/layout.hpp> // opt-in: not pulled in by scilex.hpp
+#include <sciforge/binding/error.hpp>
+#include <sciforge/binding/gil.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -36,6 +38,10 @@
 namespace {
 
 PyObject* error_type = nullptr; // scilex.error
+
+// Bridge the in-flight C++ exception to a Python error via the shared substrate:
+// bad_alloc -> MemoryError, other std::exception -> scilex.error, else internal error.
+PyObject* set_cpp_error() { return sciforge::binding::set_cpp_error(error_type); }
 
 constexpr const char* CAPSULE_NAME      = "scilex.lexer";
 constexpr const char* SCAN_CAPSULE_NAME = "scilex.scan";
@@ -64,17 +70,9 @@ void set_positioned_error(const char* message, scilex::position where)
     Py_DECREF(exc);
 }
 
-// Releases the GIL for a scope (RAII): restored on EVERY exit, including a C++
-// exception — unlike the bare Py_BEGIN/END_ALLOW_THREADS macros, whose END is
-// skipped on a throw, leaving the GIL released (undefined behaviour afterwards).
-struct GilRelease
-{
-    PyThreadState* saved;
-    GilRelease() : saved(PyEval_SaveThread()) {}
-    ~GilRelease() { PyEval_RestoreThread(saved); }
-    GilRelease(const GilRelease&)            = delete;
-    GilRelease& operator=(const GilRelease&) = delete;
-};
+// RAII GIL release (restores on every exit, including a throw): the shared
+// sciforge::binding::gil_release, kept under the local name the call site uses.
+using GilRelease = sciforge::binding::gil_release;
 
 // Releasing the GIL costs a thread-state save/restore (plus re-acquire contention)
 // that only pays off once the pure-C++ scan outlasts it. tokenize then builds
@@ -326,9 +324,8 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
         }
         return capsule;
     }
-    catch (const std::exception& error) {
-        PyErr_SetString(error_type, error.what());
-        return nullptr;
+    catch (...) {
+        return set_cpp_error();
     }
 }
 
@@ -414,9 +411,8 @@ PyObject* scilex_tokenize(PyObject* /*self*/, PyObject* args)
         set_positioned_error(error.what(), error.where());
         result = nullptr;
     }
-    catch (const std::exception& error) {
-        PyErr_SetString(error_type, error.what());
-        result = nullptr;
+    catch (...) {
+        result = set_cpp_error();
     }
     return result;
 }
@@ -459,10 +455,9 @@ PyObject* scilex_scan_start(PyObject* /*self*/, PyObject* args)
         set_positioned_error(error.what(), error.where());
         return nullptr;
     }
-    catch (const std::exception& error) {
+    catch (...) {
         free_scan_state(state);
-        PyErr_SetString(error_type, error.what());
-        return nullptr;
+        return set_cpp_error();
     }
     PyObject* cursor = PyCapsule_New(state, SCAN_CAPSULE_NAME, scan_capsule_free);
     if (cursor == nullptr) {
@@ -497,10 +492,9 @@ PyObject* scilex_scan_next(PyObject* /*self*/, PyObject* args)
             set_positioned_error(error.what(), error.where());
             return nullptr;
         }
-        catch (const std::exception& error) {
+        catch (...) {
             state->it = state->end;
-            PyErr_SetString(error_type, error.what());
-            return nullptr;
+            return set_cpp_error();
         }
         if (state->it == state->end) {
             Py_RETURN_NONE;
@@ -602,9 +596,8 @@ PyObject* scilex_layout(PyObject* /*self*/, PyObject* args)
         set_positioned_error(error.what(), error.where());
         result = nullptr;
     }
-    catch (const std::exception& error) {
-        PyErr_SetString(error_type, error.what());
-        result = nullptr;
+    catch (...) {
+        result = set_cpp_error();
     }
     return result;
 }

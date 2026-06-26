@@ -6,6 +6,7 @@ import os
 import shutil
 import sys
 
+import sciforge_build
 from setuptools import Extension, setup
 from setuptools.command.build_py import build_py
 
@@ -70,7 +71,7 @@ setup(
         Extension(
             "scilex._scilex",
             sources=["python/src/_scilex.cpp"],
-            include_dirs=["include", real_include()],
+            include_dirs=["include", real_include(), sciforge_build.get_include()],
             extra_compile_args=compile_args,
             define_macros=[("Py_LIMITED_API", "0x030A0000")],
             py_limited_api=True,
