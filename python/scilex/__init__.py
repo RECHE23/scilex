@@ -68,7 +68,7 @@ __all__ = [
     "LexerError", "END_OF_INPUT", "NEWLINE", "INDENT", "DEDENT", "get_include", "get_config",
 ]
 
-__version__ = "2026.6.7"
+__version__ = "2026.6.8"
 
 #: Reserved kind of SciLex's synthetic end-of-input token
 #: (``std::numeric_limits<int>::min()``); user kinds must avoid it.
