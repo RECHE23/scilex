@@ -36,6 +36,14 @@ jobs:
         with:
           repository: RECHE23/real-regex
           path: real-regex
+      # The coverage build that `make doc` runs needs the SciForge test harness
+      # (<sciforge/test/framework.hpp>), resolved as the ../sciforge sibling —
+      # mirroring docs.yml in REAL. (Without it the configure step fails.)
+      - uses: actions/checkout@v6
+        with:
+          repository: RECHE23/sciforge
+          ref: v2026.6.7
+          path: sciforge
       - name: Install Doxygen, Graphviz, Clang and LLVM coverage tools
         run: sudo apt-get update && sudo apt-get install -y doxygen graphviz clang llvm
       - name: Build the API reference (Doxygen + embedded coverage + guided tour)
