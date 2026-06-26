@@ -42,27 +42,14 @@ jobs:
       enable-windows-msvc: true
       enable-arm: true
 
+  # Python binding (abi3) build + unittest via SciForge's reusable spine. The lexer
+  # binding has no platform-specific interop, so Linux suffices (matching the prior
+  # coverage: linux x {3.10, 3.14}). It compiles against REAL's headers, passed as a
+  # dependency sibling (public, so no ci-pat).
   python:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest] # the lexer binding has no platform-specific interop, so one platform suffices
-        python: ['3.10', '3.14']
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          path: scilex
-      - uses: actions/checkout@v6
-        with:
-          repository: RECHE23/real-regex
-          path: real-regex
-      - uses: actions/setup-python@v6
-        with:
-          python-version: ${{ matrix.python }}
-      - name: Build the binding and run the suite
-        working-directory: scilex
-        run: |
-          python -m pip install --upgrade pip setuptools wheel
-          python -m pip install -e .
-          python -m unittest discover -s python/tests
+    uses: RECHE23/sciforge/.github/workflows/python-cpp.yml@v2026.6.6
+    with:
+      python-versions: '["3.10","3.14"]'
+      sciforge-ref: v2026.6.6
+      deps: '[{"repo":"RECHE23/real-regex","path":"real-regex"}]'
+      runner-mode: hosted
