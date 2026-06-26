@@ -22,90 +22,31 @@ jobs:
   # this repo's make format-check / misra against the shared lint/ config. SciLex's
   # MISRA TU needs REAL's headers, so real-regex is checked out as a dep sibling.
   lint:
-    uses: RECHE23/sciforge/.github/workflows/lint-cpp.yml@v2026.6.2
+    uses: RECHE23/sciforge/.github/workflows/lint-cpp.yml@v2026.6.5
     with:
       deps: '[{"repo":"RECHE23/real-regex","path":"real-regex"}]'
-      sciforge-ref: v2026.6.2
+      sciforge-ref: v2026.6.5
       runner-mode: hosted
 
-  # POSIX developer workflow: the Makefile, both compilers, plus sanitizers.
-  posix:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - { os: ubuntu-latest, cxx: g++-14 }
-          - { os: ubuntu-latest, cxx: clang++ }
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          path: scilex
-      - uses: actions/checkout@v6
-        with:
-          repository: RECHE23/real-regex
-          path: real-regex
-      - uses: actions/checkout@v6
-        with:
-          repository: RECHE23/sciforge
-          ref: v2026.6.2
-          path: sciforge
-      - name: Test
-        run: make -C scilex test CXX=${{ matrix.cxx }}
-      - name: Sanitizers (ASan + UBSan)
-        run: make -C scilex sanitize CXX=${{ matrix.cxx }}
-
-  # Portable build entry: Windows/MSVC and native ARM, through CMake — plus a
-  # find_package smoke proving the installed config package and its transitive
-  # REAL dependency. Mirrors posix's sibling checkout so configure resolves deps.
-  cmake:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest    # MSVC
-          - os: ubuntu-24.04-arm  # native AArch64
-          - os: ubuntu-latest     # x86-64, sanity for the CMake path
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          path: scilex
-      - uses: actions/checkout@v6
-        with:
-          repository: RECHE23/real-regex
-          path: real-regex
-      - uses: actions/checkout@v6
-        with:
-          repository: RECHE23/sciforge
-          ref: v2026.6.2
-          path: sciforge
-      # One bash script across all three OSes (bash ships on the Windows runner);
-      # --config/-C Release cover the multi-config MSVC generator and no-op on
-      # the single-config Linux ones.
-      - name: Configure, build, test, install and find_package smoke
-        shell: bash
-        run: |
-          set -e
-          STAGE="${{ github.workspace }}/_stage"
-          # Install REAL first so find_package(scilex) resolves real:: transitively.
-          cmake -S real-regex -B real-regex/build -DCMAKE_BUILD_TYPE=Release
-          cmake --install real-regex/build --config Release --prefix "$STAGE"
-          # Build, test and install SciLex itself (configure uses the sibling path).
-          cmake -S scilex -B scilex/build -DCMAKE_BUILD_TYPE=Release
-          cmake --build scilex/build --config Release
-          ctest --test-dir scilex/build -C Release --output-on-failure
-          cmake --install scilex/build --config Release --prefix "$STAGE"
-          # Downstream consumer: locate SciLex purely via find_package.
-          cmake -S scilex/cmake/smoke -B scilex/build-smoke -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$STAGE"
-          cmake --build scilex/build-smoke --config Release
-          ctest --test-dir scilex/build-smoke -C Release --output-on-failure
+  # POSIX + CMake build via SciForge's reusable build spine: the Makefile under
+  # g++-14 + clang++ with sanitizers (Linux baseline), and CMake configure/build/
+  # test/install + find_package smoke across linux-x64, Windows/MSVC and native ARM
+  # — matching SciLex's prior coverage exactly. The single REAL dependency (public,
+  # so no ci-pat) is installed first so find_package(scilex) resolves real::.
+  build:
+    uses: RECHE23/sciforge/.github/workflows/build-cpp.yml@v2026.6.5
+    with:
+      deps: '[{"repo":"RECHE23/real-regex","path":"real-regex"}]'
+      sciforge-ref: v2026.6.5
+      runner-mode: hosted
+      enable-windows-msvc: true
+      enable-arm: true
 
   python:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest] # macOS dropped (local platform); the lexer binding has no platform-specific interop
+        os: [ubuntu-latest] # the lexer binding has no platform-specific interop, so one platform suffices
         python: ['3.10', '3.14']
     runs-on: ${{ matrix.os }}
     steps:
