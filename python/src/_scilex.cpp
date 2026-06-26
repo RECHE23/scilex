@@ -21,8 +21,11 @@
 
 #include <scilex/scilex.hpp>
 #include <scilex/layout.hpp> // opt-in: not pulled in by scilex.hpp
+#include <sciforge/binding/convert.hpp>
+#include <sciforge/binding/dispatch.hpp>
 #include <sciforge/binding/error.hpp>
 #include <sciforge/binding/gil.hpp>
+#include <sciforge/binding/module.hpp>
 
 #include <algorithm>
 #include <cstddef>
@@ -35,13 +38,17 @@
 #include <utility>
 #include <vector>
 
+// The module error type (scilex.error) is created by SCIFORGE_MODULE at the bottom and
+// reached through this fixed-name getter; the helpers below build positioned errors on it.
+SCIFORGE_BINDING_ERROR_GETTER;
+
 namespace {
 
-PyObject* error_type = nullptr; // scilex.error
+namespace sb = sciforge::binding;
 
 // Bridge the in-flight C++ exception to a Python error via the shared substrate:
 // bad_alloc -> MemoryError, other std::exception -> scilex.error, else internal error.
-PyObject* set_cpp_error() { return sciforge::binding::set_cpp_error(error_type); }
+PyObject* set_cpp_error() { return sb::set_cpp_error(sciforge_module_error()); }
 
 constexpr const char* CAPSULE_NAME      = "scilex.lexer";
 constexpr const char* SCAN_CAPSULE_NAME = "scilex.scan";
@@ -50,9 +57,9 @@ constexpr const char* SCAN_CAPSULE_NAME = "scilex.scan";
 // instance attributes .offset/.line/.column (the wrapper turns them into .position).
 void set_positioned_error(const char* message, scilex::position where)
 {
-    PyObject* exc = PyObject_CallFunction(error_type, "s", message);
+    PyObject* exc = PyObject_CallFunction(sciforge_module_error(), "s", message);
     if (exc == nullptr) {
-        PyErr_SetString(error_type, message); // fallback: message only, no position
+        PyErr_SetString(sciforge_module_error(), message); // fallback: message only, no position
         return;
     }
     PyObject* offset = PyLong_FromSsize_t(static_cast<Py_ssize_t>(where.offset));
@@ -66,7 +73,7 @@ void set_positioned_error(const char* message, scilex::position where)
     Py_XDECREF(offset);
     Py_XDECREF(line);
     Py_XDECREF(column);
-    PyErr_SetObject(error_type, exc);
+    PyErr_SetObject(sciforge_module_error(), exc);
     Py_DECREF(exc);
 }
 
@@ -188,13 +195,13 @@ int parse_in_mode(PyObject* obj, std::vector<std::string>* out)
         return 0;
     }
     if (PyUnicode_Check(obj)) {
-        PyErr_SetString(error_type, "in_mode must be a sequence of mode names, not a bare str");
+        PyErr_SetString(sciforge_module_error(), "in_mode must be a sequence of mode names, not a bare str");
         return -1;
     }
     const Py_ssize_t count = PySequence_Size(obj);
     if (count < 0) {
         PyErr_Clear();
-        PyErr_SetString(error_type, "in_mode must be a sequence of str");
+        PyErr_SetString(sciforge_module_error(), "in_mode must be a sequence of str");
         return -1;
     }
     for (Py_ssize_t i = 0; i < count; ++i) {
@@ -207,7 +214,7 @@ int parse_in_mode(PyObject* obj, std::vector<std::string>* out)
         if (text == nullptr) {
             Py_DECREF(name);
             PyErr_Clear();
-            PyErr_SetString(error_type, "in_mode entries must be str");
+            PyErr_SetString(sciforge_module_error(), "in_mode entries must be str");
             return -1;
         }
         out->emplace_back(text, static_cast<std::size_t>(length));
@@ -228,7 +235,7 @@ int parse_action(PyObject* obj, std::optional<scilex::mode_action>* out)
     const char* target  = nullptr;
     if (PyTuple_Check(obj) == 0 || PyArg_ParseTuple(obj, "s|s", &op_text, &target) == 0) {
         PyErr_Clear();
-        PyErr_SetString(error_type,
+        PyErr_SetString(sciforge_module_error(),
                         R"(action must be None or a tuple ("push", mode) / ("set", mode) / ("pop",))");
         return -1;
     }
@@ -236,7 +243,7 @@ int parse_action(PyObject* obj, std::optional<scilex::mode_action>* out)
     const std::string   operation {op_text};
     if (operation == "push" || operation == "set") {
         if (target == nullptr) {
-            PyErr_Format(error_type, "'%s' action needs a target mode", op_text);
+            PyErr_Format(sciforge_module_error(), "'%s' action needs a target mode", op_text);
             return -1;
         }
         action.operation = operation == "push" ? scilex::mode_action::op::push
@@ -247,7 +254,7 @@ int parse_action(PyObject* obj, std::optional<scilex::mode_action>* out)
         action.operation = scilex::mode_action::op::pop;
     }
     else {
-        PyErr_Format(error_type, "unknown action '%s' (expected push, pop or set)", op_text);
+        PyErr_Format(sciforge_module_error(), "unknown action '%s' (expected push, pop or set)", op_text);
         return -1;
     }
     *out = action;
@@ -311,7 +318,7 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
             }
             catch (const real::regex_error& error) {
                 // what() already reads "regex_error at <offset>: <cause>"; prefix the rule.
-                PyErr_Format(error_type, "rule %zd: %s", i, error.what());
+                PyErr_Format(sciforge_module_error(), "rule %zd: %s", i, error.what());
                 return nullptr;
             }
         }
@@ -329,33 +336,14 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
     }
 }
 
-// _scilex.dfa_modes_active(handle) -> tuple of the mode names actually accelerated by a
-// DFA fast path. A mode requested in compile()'s dfa_modes but rejected (an un-DFA-able
-// assertion, or a failed build-time audit) is absent — it fell back to Pike.
-PyObject* scilex_dfa_modes_active(PyObject* /*self*/, PyObject* args)
+// _scilex.dfa_modes_active(handle) -> the mode names actually accelerated by a DFA fast
+// path. A mode requested in compile()'s dfa_modes but rejected (an un-DFA-able assertion,
+// or a failed build-time audit) is absent — it fell back to Pike. Dispatched via def<>:
+// caster<scilex::lexer*> extracts the capsule, caster<std::vector<std::string>> builds the
+// list (the Python wrapper wraps either a tuple or a list in list(), so it is unchanged).
+std::vector<std::string> dfa_modes_active(scilex::lexer* lexer)
 {
-    PyObject* capsule = nullptr;
-    if (PyArg_ParseTuple(args, "O", &capsule) == 0) {
-        return nullptr;
-    }
-    auto* lexer = static_cast<scilex::lexer*>(PyCapsule_GetPointer(capsule, CAPSULE_NAME));
-    if (lexer == nullptr) {
-        return nullptr;
-    }
-    const std::vector<std::string> active {lexer->dfa_modes_active()};
-    PyObject*                      tuple {PyTuple_New(static_cast<Py_ssize_t>(active.size()))};
-    if (tuple == nullptr) {
-        return nullptr;
-    }
-    for (std::size_t i = 0; i < active.size(); ++i) {
-        PyObject* name {PyUnicode_FromStringAndSize(active[i].data(), static_cast<Py_ssize_t>(active[i].size()))};
-        if (name == nullptr) {
-            Py_DECREF(tuple);
-            return nullptr;
-        }
-        PyTuple_SetItem(tuple, static_cast<Py_ssize_t>(i), name); // steals the reference
-    }
-    return tuple;
+    return lexer->dfa_modes_active();
 }
 
 // _scilex.tokenize(handle, text, eof=False) -> list of (kind, lexeme, offset, line,
@@ -602,90 +590,93 @@ PyObject* scilex_layout(PyObject* /*self*/, PyObject* args)
     return result;
 }
 
-PyMethodDef module_methods[] = {
-    {"compile", scilex_compile, METH_VARARGS,
-     "compile(rules, dfa_modes=())\n"
-     "Compile an ordered list of rules into a lexer handle.\n\n"
-     "Args:\n"
-     "    rules (sequence): Each rule is (kind:int, pattern:str, skip:bool) and may\n"
-     "        carry two optional fields: in_mode (a sequence of mode-name str; empty\n"
-     "        means the default mode) and action (None, or a transition tuple\n"
-     "        (\"push\", mode) / (\"set\", mode) / (\"pop\",)).\n"
-     "    dfa_modes (sequence): Mode names to accelerate with a DFA fast path. Best-\n"
-     "        effort: an un-DFA-able mode silently stays on Pike (see dfa_modes_active).\n\n"
-     "Returns:\n"
-     "    capsule: An opaque compiled-lexer handle for tokenize()/scan_start().\n\n"
-     "Raises:\n"
-     "    error: If a pattern is an invalid regex, a transition targets an empty mode,\n"
-     "        or dfa_modes names an unknown mode."},
-    {"dfa_modes_active", scilex_dfa_modes_active, METH_VARARGS,
-     "dfa_modes_active(handle) -> tuple[str]\n"
-     "The mode names actually accelerated by a DFA (a requested mode that fell back\n"
-     "to Pike — an un-DFA-able assertion or a failed audit — is absent)."},
-    {"tokenize", scilex_tokenize, METH_VARARGS,
-     "tokenize(handle, text, eof=False)\n"
-     "Eagerly tokenize text with a compiled-lexer handle.\n\n"
-     "Args:\n"
-     "    handle (capsule): A handle from compile().\n"
-     "    text (str): The source to tokenize.\n"
-     "    eof (bool): Append a terminal end_of_input token.\n\n"
-     "Returns:\n"
-     "    list: (kind, lexeme, offset, line, column, mode) tuples, skip matches omitted.\n\n"
-     "Raises:\n"
-     "    error: If some position is matched by no rule (carrying .offset/.line/.column)."},
-    {"scan_start", scilex_scan_start, METH_VARARGS,
-     "scan_start(handle, text, eof=False)\n"
-     "Begin a lazy scan; returns a cursor capsule for scan_next().\n\n"
-     "Args:\n"
-     "    handle (capsule): A handle from compile().\n"
-     "    text (str): The source to scan.\n"
-     "    eof (bool): Yield a terminal end_of_input token.\n\n"
-     "Returns:\n"
-     "    capsule: A scan cursor; pass it to scan_next().\n\n"
-     "Raises:\n"
-     "    error: If the first position is matched by no rule."},
-    {"scan_next", scilex_scan_next, METH_VARARGS,
-     "scan_next(cursor)\n"
-     "Return the next token tuple from a scan cursor, or None at the end.\n\n"
-     "Args:\n"
-     "    cursor (capsule): A cursor from scan_start().\n\n"
-     "Returns:\n"
-     "    tuple | None: (kind, lexeme, offset, line, column, mode), or None when exhausted.\n\n"
-     "Raises:\n"
-     "    error: If some position is matched by no rule (after earlier tokens are yielded)."},
-    {"layout", scilex_layout, METH_VARARGS,
-     "layout(tokens, insignificant=())\n"
-     "Insert NEWLINE/INDENT/DEDENT tokens from indentation (mode-aware).\n\n"
-     "Args:\n"
-     "    tokens (sequence): An end_of_input-terminated sequence of\n"
-     "        (kind, lexeme, offset, line, column, mode) tuples.\n"
-     "    insignificant (sequence): Mode names whose tokens carry no layout\n"
-     "        structure (Layout Awareness Level A); empty is the positional pass.\n\n"
-     "Returns:\n"
-     "    list: The layout-aware tuples (still end_of_input-terminated).\n\n"
-     "Raises:\n"
-     "    error: On a dedent to an indentation no open block used (with .offset/.line/.column)."},
-    {nullptr, nullptr, 0, nullptr},
-};
-
-PyModuleDef module_def = {
-    PyModuleDef_HEAD_INIT, "_scilex",
-    "SciLex generic maximal-munch lexer C++ core (built on REAL).", -1,
-    module_methods, nullptr, nullptr, nullptr, nullptr,
-};
-
 } // namespace
 
-PyMODINIT_FUNC PyInit__scilex() // PyMODINIT_FUNC already implies extern "C"
+// The per-binding capsule caster (the documented pattern): extracts the owned lexer from
+// its handle for def<>-dispatched functions. A wrong/null capsule becomes a cast_error,
+// which the dispatch turns into a TypeError.
+namespace sciforge::binding {
+template <>
+struct caster<scilex::lexer*> {
+    static scilex::lexer* from_python(PyObject* obj)
+    {
+        auto* lexer = static_cast<scilex::lexer*>(PyCapsule_GetPointer(obj, CAPSULE_NAME));
+        if (lexer == nullptr) {
+            PyErr_Clear();
+            throw cast_error("expected a scilex.lexer handle");
+        }
+        return lexer;
+    }
+};
+} // namespace sciforge::binding
+
+// The declarative module surface. compile and scan_start are owned-capsule factories and
+// tokenize/scan_next/layout raise positioned errors (carrying .offset/.line/.column) that
+// the generic dispatch cannot reproduce, so all five stay manual PyCFunctions registered
+// through m.raw; only dfa_modes_active (a plain value return, no positioned error) is
+// def<>-dispatched.
+SCIFORGE_MODULE(_scilex, "scilex.error", m)
 {
-    PyObject* module = PyModule_Create(&module_def);
-    if (module == nullptr) {
-        return nullptr;
-    }
-    error_type = PyErr_NewException("scilex.error", nullptr, nullptr);
-    if (error_type == nullptr || PyModule_AddObject(module, "error", Py_NewRef(error_type)) < 0) {
-        Py_DECREF(module);
-        return nullptr;
-    }
-    return module;
+    m.raw("compile", scilex_compile, METH_VARARGS,
+          "compile(rules, dfa_modes=())\n"
+          "Compile an ordered list of rules into a lexer handle.\n\n"
+          "Args:\n"
+          "    rules (sequence): Each rule is (kind:int, pattern:str, skip:bool) and may\n"
+          "        carry two optional fields: in_mode (a sequence of mode-name str; empty\n"
+          "        means the default mode) and action (None, or a transition tuple\n"
+          "        (\"push\", mode) / (\"set\", mode) / (\"pop\",)).\n"
+          "    dfa_modes (sequence): Mode names to accelerate with a DFA fast path. Best-\n"
+          "        effort: an un-DFA-able mode silently stays on Pike (see dfa_modes_active).\n\n"
+          "Returns:\n"
+          "    capsule: An opaque compiled-lexer handle for tokenize()/scan_start().\n\n"
+          "Raises:\n"
+          "    error: If a pattern is an invalid regex, a transition targets an empty mode,\n"
+          "        or dfa_modes names an unknown mode.");
+    m.def<&dfa_modes_active>("dfa_modes_active",
+                             "dfa_modes_active(handle) -> list[str]\n"
+                             "The mode names actually accelerated by a DFA (a requested mode that fell back\n"
+                             "to Pike — an un-DFA-able assertion or a failed audit — is absent).");
+    m.raw("tokenize", scilex_tokenize, METH_VARARGS,
+          "tokenize(handle, text, eof=False)\n"
+          "Eagerly tokenize text with a compiled-lexer handle.\n\n"
+          "Args:\n"
+          "    handle (capsule): A handle from compile().\n"
+          "    text (str): The source to tokenize.\n"
+          "    eof (bool): Append a terminal end_of_input token.\n\n"
+          "Returns:\n"
+          "    list: (kind, lexeme, offset, line, column, mode) tuples, skip matches omitted.\n\n"
+          "Raises:\n"
+          "    error: If some position is matched by no rule (carrying .offset/.line/.column).");
+    m.raw("scan_start", scilex_scan_start, METH_VARARGS,
+          "scan_start(handle, text, eof=False)\n"
+          "Begin a lazy scan; returns a cursor capsule for scan_next().\n\n"
+          "Args:\n"
+          "    handle (capsule): A handle from compile().\n"
+          "    text (str): The source to scan.\n"
+          "    eof (bool): Yield a terminal end_of_input token.\n\n"
+          "Returns:\n"
+          "    capsule: A scan cursor; pass it to scan_next().\n\n"
+          "Raises:\n"
+          "    error: If the first position is matched by no rule.");
+    m.raw("scan_next", scilex_scan_next, METH_VARARGS,
+          "scan_next(cursor)\n"
+          "Return the next token tuple from a scan cursor, or None at the end.\n\n"
+          "Args:\n"
+          "    cursor (capsule): A cursor from scan_start().\n\n"
+          "Returns:\n"
+          "    tuple | None: (kind, lexeme, offset, line, column, mode), or None when exhausted.\n\n"
+          "Raises:\n"
+          "    error: If some position is matched by no rule (after earlier tokens are yielded).");
+    m.raw("layout", scilex_layout, METH_VARARGS,
+          "layout(tokens, insignificant=())\n"
+          "Insert NEWLINE/INDENT/DEDENT tokens from indentation (mode-aware).\n\n"
+          "Args:\n"
+          "    tokens (sequence): An end_of_input-terminated sequence of\n"
+          "        (kind, lexeme, offset, line, column, mode) tuples.\n"
+          "    insignificant (sequence): Mode names whose tokens carry no layout\n"
+          "        structure (Layout Awareness Level A); empty is the positional pass.\n\n"
+          "Returns:\n"
+          "    list: The layout-aware tuples (still end_of_input-terminated).\n\n"
+          "Raises:\n"
+          "    error: On a dedent to an indentation no open block used (with .offset/.line/.column).");
 }
