@@ -13,7 +13,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scilex"
-version = "2026.6.8"
+version = "2026.6.9"
 description = "SciLex — a generic, linear-time maximal-munch lexer built on REAL"
 readme = "README.md"
 requires-python = ">=3.10"
