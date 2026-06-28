@@ -189,19 +189,19 @@ void scan_capsule_free(PyObject* capsule)
 // (the rule lives in the default mode only); otherwise a sequence of str. A bare
 // str is rejected (it would silently char-split). Returns 0 on success, -1 (error
 // set) otherwise. `obj` must stay alive for the call (its entries are borrowed).
-int parse_in_mode(PyObject* obj, std::vector<std::string>* out)
+int parse_in_mode(PyObject* obj, std::vector<std::string>* out, const char* param_name)
 {
     if (obj == nullptr || obj == Py_None) {
         return 0;
     }
     if (PyUnicode_Check(obj)) {
-        PyErr_SetString(sciforge_module_error(), "in_mode must be a sequence of mode names, not a bare str");
+        PyErr_Format(sciforge_module_error(), "%s must be a sequence of mode names, not a bare str", param_name);
         return -1;
     }
     const Py_ssize_t count = PySequence_Size(obj);
     if (count < 0) {
         PyErr_Clear();
-        PyErr_SetString(sciforge_module_error(), "in_mode must be a sequence of str");
+        PyErr_Format(sciforge_module_error(), "%s must be a sequence of str", param_name);
         return -1;
     }
     for (Py_ssize_t i = 0; i < count; ++i) {
@@ -214,7 +214,7 @@ int parse_in_mode(PyObject* obj, std::vector<std::string>* out)
         if (text == nullptr) {
             Py_DECREF(name);
             PyErr_Clear();
-            PyErr_SetString(sciforge_module_error(), "in_mode entries must be str");
+            PyErr_Format(sciforge_module_error(), "%s entries must be str", param_name);
             return -1;
         }
         out->emplace_back(text, static_cast<std::size_t>(length));
@@ -251,6 +251,10 @@ int parse_action(PyObject* obj, std::optional<scilex::mode_action>* out)
         action.target = target;
     }
     else if (operation == "pop") {
+        if (target != nullptr) {
+            PyErr_SetString(sciforge_module_error(), "'pop' action takes no extra argument");
+            return -1;
+        }
         action.operation = scilex::mode_action::op::pop;
     }
     else {
@@ -276,7 +280,7 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
         return nullptr;
     }
     std::vector<std::string> dfa_modes;
-    if (parse_in_mode(dfa_modes_obj, &dfa_modes) < 0) {
+    if (parse_in_mode(dfa_modes_obj, &dfa_modes, "dfa_modes") < 0) {
         return nullptr; // not a sequence of names (error set)
     }
     const Py_ssize_t count = PySequence_Size(rules_obj);
@@ -304,7 +308,7 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
             std::vector<std::string>           in_mode;
             std::optional<scilex::mode_action> action;
             const bool                         extras_ok = parsed != 0
-                                                           && parse_in_mode(in_mode_obj, &in_mode) == 0
+                                                           && parse_in_mode(in_mode_obj, &in_mode, "in_mode") == 0
                                                            && parse_action(action_obj, &action) == 0;
             Py_DECREF(item);
             if (parsed == 0 || !extras_ok) {
@@ -507,7 +511,7 @@ PyObject* scilex_layout(PyObject* /*self*/, PyObject* args)
         return nullptr; // not a sequence (error already set)
     }
     std::vector<std::string> insignificant;
-    if (parse_in_mode(insignificant_obj, &insignificant) < 0) {
+    if (parse_in_mode(insignificant_obj, &insignificant, "insignificant_modes") < 0) {
         return nullptr; // not a sequence of mode names (error set)
     }
     PyObject* result = nullptr;

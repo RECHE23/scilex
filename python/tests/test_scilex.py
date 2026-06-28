@@ -620,5 +620,29 @@ class LayoutAwarenessTests(unittest.TestCase):
             scilex.Lexer([(0, r"a", False)], insignificant_modes=["nope"])
 
 
+class BindingErrorMessageTests(unittest.TestCase):
+    """Direct _scilex checks: the Python wrapper normalizes these, so they exercise the C
+    binding's own validation (a hand-written parser may call _scilex.compile directly)."""
+
+    def setUp(self):
+        from scilex import _scilex
+        self._scilex = _scilex
+
+    def test_pop_with_extra_argument_rejected(self):  # parse_action
+        with self.assertRaises(self._scilex.error) as caught:
+            self._scilex.compile([(0, "a", False, [], ("pop", "extra"))])
+        self.assertIn("'pop' action takes no extra argument", str(caught.exception))
+
+    def test_in_mode_error_names_the_field(self):  # parse_in_mode param name
+        with self.assertRaises(self._scilex.error) as caught:
+            self._scilex.compile([(0, "a", False, "default")])  # in_mode as a bare str
+        self.assertIn("in_mode must be a sequence", str(caught.exception))
+
+    def test_dfa_modes_error_names_the_field(self):
+        with self.assertRaises(self._scilex.error) as caught:
+            self._scilex.compile([(0, "a", False)], "default")  # dfa_modes as a bare str
+        self.assertIn("dfa_modes must be a sequence", str(caught.exception))
+
+
 if __name__ == "__main__":
     unittest.main()
