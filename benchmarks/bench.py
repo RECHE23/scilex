@@ -7,28 +7,33 @@ SciLex's guarantee is a *different* one: **linear time, ReDoS-safe by constructi
 (inherited from REAL), with maximal-munch lexer semantics over an ordered rule set.
 The pathological case below is where that guarantee is the whole point.
 
-Run with ``make bench`` (or ``python benchmarks/bench.py``). Best-of-N wall time,
-minimum reported; informational only — never gated.
+Timing, statistics and the comparison gate come from SciForge's shared, dependency-free
+benchmark substrate (sciforge.bench): the benign case goes through compare() — gated by a
+token-count callable, with a bootstrap CI on the paired ratios it previously lacked — and the
+linearity/scaling profiles use collect(). The substrate is never shipped; the sibling
+../sciforge/python is on PYTHONPATH via the Makefile (make bench). Informational, never gated
+(except a token-count mismatch, which is a real correctness failure and fails the run).
 """
 import re
+import sys
 import time
 
 import scilex
+# Shared dep-free bench substrate; sibling on PYTHONPATH via the Makefile.
+from sciforge.bench import collect, compare, median_iqr, verdict  # noqa: E402
 
 
-def best_time(call, iterations, repeats=5):
-    """Minimum per-call wall time over ``repeats`` runs of ``iterations`` calls."""
-    best = float("inf")
-    for _ in range(repeats):
-        start = time.perf_counter()
-        for _ in range(iterations):
-            call()
-        best = min(best, time.perf_counter() - start)
-    return best / iterations
+def _median(label, call, samples=40):
+    """Median per-call wall time of `call` (a single-fn profile, via the shared collector)."""
+    return median_iqr(collect(label, call, samples=samples).samples)[0]
 
 
 def benign_tokenization():
-    """Throughput on an ordinary token soup — the everyday case (re is expected to win)."""
+    """Throughput on an ordinary token soup — the everyday case (re is expected to win).
+
+    A comparative case: SciLex (subject) vs re (reference), gated by token *count* (the two
+    tokenizers must agree on how many tokens they emit). Returns the compare() Case.
+    """
     source = "foo = bar + 42 * baz - 7 ; " * 400  # ~10 KB
     rules = [(0, r"\s+", True), (1, r"[0-9]+", False),
              (2, r"[A-Za-z_]\w*", False), (3, r"[-+*/=;]", False)]
@@ -41,14 +46,22 @@ def benign_tokenization():
     def with_re():
         return [(m.lastgroup, m.group()) for m in master.finditer(source) if m.lastgroup != "WS"]
 
+    # equal = the two token streams have the same length (count agreement). The judgement
+    # lives here as a callable; sciforge.bench never knows what a token is.
+    case = compare("benign tokenization", with_scilex, with_re,
+                   lambda a, b: len(a) == len(b))
     count = len(with_scilex())
-    assert count == len(with_re()), "the two tokenizers must agree on the token count"
-    t_scilex = best_time(with_scilex, iterations=200)
-    t_re = best_time(with_re, iterations=200)
     print(f"  benign tokenization — {count} tokens, ~{len(source) // 1024} KB:")
+    if case.extra["mismatch"]:
+        print("    RESULT MISMATCH — the two tokenizers disagree on the token count")
+        return case
+    t_scilex = median_iqr(case.samples)[0]
+    t_re = median_iqr(case.extra["reference_samples"])[0]
+    ratio_median = median_iqr(case.extra["ratios"])[0]
     print(f"    scilex.Lexer.tokenize : {t_scilex * 1e3:8.3f} ms")
     print(f"    re.finditer (master)  : {t_re * 1e3:8.3f} ms   "
-          f"(scilex is {t_scilex / t_re:.1f}x re here)")
+          f"(scilex is {t_scilex / t_re:.1f}x re here; ratio re/scilex {ratio_median:.2f})")
+    return case
 
 
 def redos_linearity():
@@ -59,7 +72,7 @@ def redos_linearity():
     print(f"    {'n':>4} {'scilex':>12} {'re.match':>14}")
     for n in (16, 18, 20, 22, 24, 26):
         text = "a" * n
-        t_scilex = best_time(lambda t=text: lexer.tokenize(t), iterations=50)
+        t_scilex = _median("redos", lambda t=text: lexer.tokenize(t), samples=30)
         start = time.perf_counter()
         pattern.match(text)  # catastrophic backtracking
         t_re = time.perf_counter() - start
@@ -68,7 +81,7 @@ def redos_linearity():
             print("    (re already past 1 s — stopping; its curve is exponential)")
             break
     big = "a" * 1000
-    t_big = best_time(lambda: lexer.tokenize(big), iterations=50)
+    t_big = _median("redos-big", lambda: lexer.tokenize(big), samples=30)
     print(f"    n=1000: scilex {t_big * 1e6:.2f} us (still linear); re.match would never finish")
 
 
@@ -133,7 +146,7 @@ def realistic_lexer_dispatch_study():
     points = []
     for n_kw in (0, 8, 16, 24, 32, 40):
         lexer, n_rules = _realistic_lexer(n_kw)
-        t = best_time(lambda lx=lexer: lx.tokenize(source), iterations=20, repeats=3)
+        t = _median("study", lambda lx=lexer: lx.tokenize(source), samples=20)
         points.append((n_rules, t))
         print(f"    {n_rules:>6} {t * 1e3:8.2f} ms {t / len(tokens) * 1e6:8.3f}")
     (r0, t0), (r1, t1) = points[0], points[-1]
@@ -151,11 +164,17 @@ def realistic_lexer_dispatch_study():
 
 
 def main():
-    print("SciLex benchmarks (best-of-5 wall time, minimum reported; see BENCHMARKS.md):")
-    benign_tokenization()
+    print("SciLex benchmarks (median per-call via sciforge.bench; see BENCHMARKS.md):")
+    benign = benign_tokenization()
     redos_linearity()
     realistic_lexer_dispatch_study()
+    # The benign case is the one comparison; a count mismatch is a correctness failure.
+    result = verdict([benign], subject_label="SciLex")
+    if not result.passed:
+        print(f"\nVERDICT: FAIL — {result.text}")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

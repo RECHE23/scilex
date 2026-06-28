@@ -17,7 +17,11 @@ CMAKE  ?= cmake
 CTEST  ?= ctest
 BUILD  := build
 PYTHON ?= python3
-PYRUN  := PYTHONPATH=$(CURDIR)/python $(PYTHON)
+# SciForge owns the shared, dev-only benchmark substrate (sciforge.bench), in its python/ dir.
+# Same sibling default as SCIFORGE_INCLUDE/_LINT; never a build/runtime dep, never shipped.
+SCIFORGE_PYTHON ?= ../sciforge/python
+# Append the SciForge sibling so the benchmark can `import sciforge.bench` (compare/verdict/stats).
+PYRUN  := PYTHONPATH=$(CURDIR)/python:$(abspath $(SCIFORGE_PYTHON)) $(PYTHON)
 PREFIX ?= /usr/local
 BINDIR ?= $(PREFIX)/bin
 # Parallelism: detected core count (override with JOBS=N).
