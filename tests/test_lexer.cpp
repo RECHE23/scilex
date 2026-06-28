@@ -100,12 +100,45 @@ TEST(unmatched_input_throws_with_position)
 
 TEST(empty_matches_never_stall_the_scan)
 {
-  // A nullable rule ([0-9]*) matches the empty string; the lexer must ignore
-  // such matches rather than loop forever, and fall back to a real error when
-  // nothing consumes input.
+  // A nullable rule ([0-9]*) matches the empty string; the lexer must never loop
+  // forever on it — it consumes a non-empty run normally, and a zero-length win
+  // (nothing else matches here) surfaces as a positioned error instead of a hang.
   std::vector<scilex::rule> rules;
   rules.push_back({.kind = NUM, .pattern = real::regex("[0-9]*"), .skip = false});
   const scilex::lexer lx(std::move(rules));
   EXPECT_EQ(lx.tokenize("123").size(), 1U);             // consumes the digits
   EXPECT_THROWS(lx.tokenize("abc"), scilex::lex_error); // does not hang
+}
+
+TEST(zero_length_winning_match_is_a_positioned_error)
+{
+  // (a) A nullable rule ([0-9]*) is the only rule; at a non-digit byte it "wins" with a
+  // zero-length match. Advancing by 0 would spin forever, so the shared guard reports a
+  // positioned lex_error naming the cause — distinct from the #1 "no rule matches".
+  std::vector<scilex::rule> rules;
+  rules.push_back({.kind = NUM, .pattern = real::regex("[0-9]*"), .skip = false});
+  const scilex::lexer lx(std::move(rules));
+  bool                threw {false};
+  try {
+    (void)lx.tokenize("x"); // [0-9]* matches the empty string at 'x'
+  }
+  catch (const scilex::lex_error& error) {
+    threw = true;
+    EXPECT(std::string_view {error.what()}.find("zero-length") != std::string_view::npos);
+    EXPECT_EQ(error.where().offset, 0U); // at the offending byte
+  }
+  EXPECT(threw);
+}
+
+TEST(nullable_rule_matching_non_empty_still_lexes)
+{
+  // (b) Non-regression: only a zero-length WIN errors. The same nullable rule consumes a
+  // non-empty run exactly as before — maximal munch is untouched for >0 matches.
+  std::vector<scilex::rule> rules;
+  rules.push_back({.kind = NUM, .pattern = real::regex("[0-9]*"), .skip = false});
+  const scilex::lexer lx(std::move(rules));
+  const auto          tokens {lx.tokenize("007")};
+  EXPECT_EQ(tokens.size(), 1U);
+  EXPECT_EQ(tokens[0].kind, NUM);
+  EXPECT_EQ(tokens[0].lexeme, "007"sv);
 }

@@ -72,6 +72,12 @@ namespace scilex {
 
     op          operation;   //!< Which transition to perform.
     std::string target {};   //!< The mode push/set enters; ignored (and omittable) for pop.
+
+    //! \brief The interned id of \ref target, resolved once when the lexer is built
+    //!        (see \ref scilex::lexer::build_dispatch) so the per-token transition is
+    //!        a field read, not a name→id map lookup. Internal cache: a caller leaves
+    //!        it at 0 and sets only \ref target; pop leaves it unused.
+    std::size_t target_id {0};
   };
 
   /*!
@@ -139,22 +145,23 @@ namespace scilex {
    *        mode-stack mutation, kept pure so the lexer and the fuzz oracle share it
    *        verbatim.
    *
-   * Depends only on \p r's action, the token start \p start, the \p stack, and the
-   * \p mode_id name→id map; it mutates only \p stack. push enters the target
-   * (remembering \p start), pop leaves the current mode, set replaces it in place.
+   * Depends only on \p r's action (its pre-resolved \ref mode_action::target_id), the
+   * token start \p start, and the \p stack; it mutates only \p stack. push enters the
+   * target (remembering \p start), pop leaves the current mode, set replaces it in
+   * place. The target id is resolved once at build time, so this hot per-token pivot
+   * does no name→id map lookup.
    *
    * \throws lex_error On a pop while the stack is at its root (nothing to leave).
    */
-  inline void apply_transition(const rule&                               r,
-                               position                                  start,
-                               std::vector<frame>&                       stack,
-                               const std::map<std::string, std::size_t>& mode_id)
+  inline void apply_transition(const rule&         r,
+                               position            start,
+                               std::vector<frame>& stack)
   {
     if (!r.action) {
       return;
     }
     if (r.action->operation == mode_action::op::push) {
-      stack.push_back(frame {.mode_id = mode_id.at(r.action->target), .entry_pos = start});
+      stack.push_back(frame {.mode_id = r.action->target_id, .entry_pos = start});
     }
     else if (r.action->operation == mode_action::op::pop) {
       if (stack.size() == 1) {
@@ -163,7 +170,7 @@ namespace scilex {
       stack.pop_back();
     }
     else { // set: replace the active mode in place (depth unchanged)
-      stack.back().mode_id = mode_id.at(r.action->target);
+      stack.back().mode_id = r.action->target_id;
     }
   }
 
@@ -209,14 +216,16 @@ namespace scilex {
      * \brief Tokenizes \p source into the sequence of non-skipped tokens.
      *
      * At each position every rule is matched anchored; the longest match wins
-     * (ties broken by rule order). Empty matches are ignored — a rule that
-     * matches nothing cannot consume input, so it never stalls the scan.
+     * (ties broken by rule order). A zero-length winning match (a nullable rule
+     * with no longer match here) cannot advance the scan, so it is reported as a
+     * \ref lex_error rather than allowed to stall.
      *
      * \param[in] source The text to tokenize (must outlive the returned tokens;
      *            each token's lexeme views into it).
      * \param[in] policy Whether to append a terminal \ref end_of_input token.
      * \return The tokens in source order, skip-rule matches omitted.
-     * \throws lex_error If some position is matched by no rule.
+     * \throws lex_error If some position is matched by no rule, or only by a
+     *         zero-length match.
      */
     [[nodiscard]] std::vector<token> tokenize(std::string_view source,
                                               eof_policy       policy = eof_policy::omit) const
@@ -313,7 +322,8 @@ namespace scilex {
      * \param[out]    out    Receives the next non-skipped token on success.
      * \return `true` if a token was produced, `false` at end of input.
      * \throws lex_error If a position matches no rule in the active mode (#1), a rule
-     *         pops at the stack root (#2), or input ends inside a pushed mode (#3).
+     *         pops at the stack root (#2), input ends inside a pushed mode (#3), or the
+     *         winning match is zero-length and so cannot advance the scan (#4).
      */
     bool scan_next(std::string_view    source,
                    position&           cursor,
@@ -350,6 +360,14 @@ namespace scilex {
           throw lex_error("no rule matches in mode '" + mode_names_[mode] + "' (entered at "
                           + position_label(stack.back().entry_pos) + ")", cursor); // #1
         }
+        if (best_len == 0) {
+          // A rule won with a zero-length match (a nullable rule and no longer match at
+          // this position). Advancing by 0 would spin forever, so report it as a lexical
+          // error instead — the shared advance point, so both the Pike and DFA paths are
+          // covered. A nullable rule that matches >0 is unaffected (maximal munch keeps it).
+          throw lex_error("zero-length match in mode '" + mode_names_[mode]
+                          + "' (rule never advances)", cursor); // #4
+        }
 
         const position start {cursor};
         // Advance the line/column tracker across the consumed bytes.
@@ -364,7 +382,7 @@ namespace scilex {
         }
         cursor.offset += best_len;
 
-        apply_transition(rules_[best_idx], start, stack, mode_id_); // advances, then transitions (#2 on a bad pop)
+        apply_transition(rules_[best_idx], start, stack); // advances, then transitions (#2 on a bad pop)
 
         if (!rules_[best_idx].skip) {
           // Tag the token with the mode it was lexed in (captured before the
@@ -476,6 +494,15 @@ namespace scilex {
         }
       }
       validate_transitions();
+
+      // Pre-resolve each transition's target mode id once, now that every mode is
+      // interned and validated, so the per-token apply_transition reads a field instead
+      // of a name→id map lookup. The target string stays for diagnostics; pop has none.
+      for (rule& candidate : rules_) {
+        if (candidate.action && candidate.action->operation != mode_action::op::pop) {
+          candidate.action->target_id = mode_id_.at(candidate.action->target);
+        }
+      }
     }
 
     //! \brief Builds the layout-significance policy from the insignificant-mode
@@ -514,9 +541,10 @@ namespace scilex {
     };
 
     //! \brief The per-rule Pike + first-byte-dispatch munch in \p mode at the start of
-    //!        \p rest (\p lead is rest's first byte). Extracted verbatim from the
-    //!        historical scan_next loop — zero allocation, the Pike path unchanged — and
-    //!        shared by scan_next's Pike branch and the DFA audit.
+    //!        \p rest (\p lead is rest's first byte). Zero allocation; shared by
+    //!        scan_next's Pike branch and the DFA audit. A zero-length match is reported
+    //!        as a candidate (it wins only when nothing matches >0); scan_next's shared
+    //!        guard turns such a win into a lexical error.
     munch_result pike_munch_in_mode(std::size_t      mode,
                                     std::string_view rest,
                                     unsigned char    lead) const
@@ -533,7 +561,11 @@ namespace scilex {
                               // proven false positive is suppressed here (see REPORT note).
                               // NOLINTNEXTLINE(clang-analyzer-core.NonNullParamChecker)
                               const auto matched {rules_[idx].pattern.match(rest)};
-                              if (matched && matched.end() > 0
+                              // A zero-length match participates (it can only win when no rule
+                              // matches >0 here); the shared guard in scan_next turns that win
+                              // into a lexical error rather than a stalled scan. Maximal munch
+                              // still prefers any longer non-empty match.
+                              if (matched
                                   && (!have || matched.end() > best_len
                                       || (matched.end() == best_len && idx < best_idx))) {
                                 best_len = matched.end();

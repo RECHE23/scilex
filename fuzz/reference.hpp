@@ -55,7 +55,7 @@ namespace scilex::fuzz {
   struct mode_map
   {
     std::vector<std::string>           names; //!< id → name.
-    std::map<std::string, std::size_t> ids;   //!< name → id (fed to apply_transition).
+    std::map<std::string, std::size_t> ids;   //!< name → id (resolves each rule's target_id).
   };
 
   //! \brief Re-derives the mode map from \p rules (independent of the lexer).
@@ -120,7 +120,16 @@ namespace scilex::fuzz {
                                                        bool                             emit_skipped = false,
                                                        std::vector<std::string>*        modes_out    = nullptr)
   {
-    const mode_map             modes  {derive_modes(rules)};
+    // A local copy with each transition's target id pre-resolved (independently, from
+    // the oracle's own mode map), so the shared apply_transition reads the same field
+    // the lexer does — keeping the pivot verbatim now that it no longer takes the map.
+    std::vector<scilex::rule> local {rules};
+    const mode_map            modes {derive_modes(local)};
+    for (scilex::rule& candidate : local) {
+      if (candidate.action && candidate.action->operation != scilex::mode_action::op::pop) {
+        candidate.action->target_id = modes.ids.at(candidate.action->target);
+      }
+    }
     std::vector<scilex::token> out;
     scilex::position           cursor {0, 1, 1};
     std::vector<scilex::frame> stack  {scilex::frame {.mode_id = 0, .entry_pos = cursor}};
@@ -129,7 +138,7 @@ namespace scilex::fuzz {
       const std::string&     mode_name {modes.names[stack.back().mode_id]};
       std::size_t            best_len  {0};
       const scilex::rule*    best      {nullptr};
-      for (const scilex::rule& candidate : rules) {
+      for (const scilex::rule& candidate : local) {
         if (!rule_active_in(candidate, mode_name)) {
           continue; // brute-force, but only over the rules active in this mode
         }
@@ -164,7 +173,7 @@ namespace scilex::fuzz {
       }
       // The transition is part of the spec: share the lexer's pure pivot verbatim
       // (a pop at the root throws #2 here, at start, exactly as the lexer does).
-      scilex::apply_transition(*best, start, stack, modes.ids);
+      scilex::apply_transition(*best, start, stack);
     }
     if (stack.size() > 1) {                                                 // input ran out inside a pushed mode
       throw scilex::lex_error("unterminated mode", stack.back().entry_pos); // #3, at the opening

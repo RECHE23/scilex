@@ -228,27 +228,34 @@ TEST(error_unterminated_mode_points_at_the_opening)
 
 TEST(apply_transition_is_a_pure_stack_operation)
 {
-  const std::map<std::string, std::size_t> mode_id {{"default", 0}, {"a", 1}, {"b", 2}};
-  std::vector<scilex::frame>               stack   {scilex::frame {.mode_id = 0, .entry_pos = pos(0, 1, 1)}};
+  std::vector<scilex::frame> stack {scilex::frame {.mode_id = 0, .entry_pos = pos(0, 1, 1)}};
 
-  scilex::apply_transition(with_action(mode_rule(0, "x", {}), push_to("a")), pos(5, 1, 6), stack, mode_id);
+  // apply_transition reads each action's pre-resolved target_id (the lexer fills it in
+  // build_dispatch); here we set it by hand to drive the pivot in isolation. "a" = 1,
+  // "b" = 2 — the target string is kept for diagnostics but no longer looked up.
+  const auto to_id {[](scilex::mode_action action, std::size_t id) {
+                      action.target_id = id;
+                      return action;
+                    }};
+
+  scilex::apply_transition(with_action(mode_rule(0, "x", {}), to_id(push_to("a"), 1)), pos(5, 1, 6), stack);
   EXPECT_EQ(stack.size(), 2U);
   EXPECT_EQ(stack.back().mode_id, 1U);
   EXPECT_EQ(stack.back().entry_pos.offset, 5U); // push remembers the start
 
-  scilex::apply_transition(with_action(mode_rule(0, "x", {}), set_to("b")), pos(7, 1, 8), stack, mode_id);
+  scilex::apply_transition(with_action(mode_rule(0, "x", {}), to_id(set_to("b"), 2)), pos(7, 1, 8), stack);
   EXPECT_EQ(stack.size(), 2U);                  // set keeps the depth
   EXPECT_EQ(stack.back().mode_id, 2U);
 
-  scilex::apply_transition(with_action(mode_rule(0, "x", {}), pop_mode()), pos(9, 1, 10), stack, mode_id);
+  scilex::apply_transition(with_action(mode_rule(0, "x", {}), pop_mode()), pos(9, 1, 10), stack);
   EXPECT_EQ(stack.size(), 1U);
   EXPECT_EQ(stack.back().mode_id, 0U);
 
   // A rule without an action is a no-op; a pop at the root throws (#2).
-  scilex::apply_transition({.kind = 0, .pattern = real::regex("x")}, pos(0, 1, 1), stack, mode_id);
+  scilex::apply_transition({.kind = 0, .pattern = real::regex("x")}, pos(0, 1, 1), stack);
   EXPECT_EQ(stack.size(), 1U);
   EXPECT_THROWS(scilex::apply_transition(with_action(mode_rule(0, "x", {}), pop_mode()),
-                                         pos(9, 1, 10), stack, mode_id),
+                                         pos(9, 1, 10), stack),
                 scilex::lex_error);
 }
 
