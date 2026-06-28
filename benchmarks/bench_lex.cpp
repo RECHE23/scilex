@@ -1,36 +1,33 @@
 /*!
  * \file bench_lex.cpp
- * \brief Per-grammar C++ throughput baseline for the SciLex engine (MB/s).
+ * \brief Per-grammar C++ throughput baseline for the SciLex engine (raw collector).
  *
  * Complements \c benchmarks/bench.py (which times the Python binding against
  * \c re): this measures the pure C++ lexer directly, on each of the nine
  * example grammars, over realistic steady-state inputs built by scaling the
- * grammar's own sample. It reports MB/s for two paths:
+ * grammar's own sample. It collects four sections:
  *
- *   - \c tokenize() — eager, materializes the whole token vector (O(n) memory);
- *   - \c scan()     — lazy, one token at a time (O(1) memory) — the path a
- *                     parser actually consumes.
+ *   - grammar       — \c tokenize() (eager) vs \c scan() (lazy), per grammar;
+ *   - linearity     — one grammar over growing sizes (flat throughput => linear);
+ *   - mode-overhead — the modal Python grammar vs a mono-mode baseline;
+ *   - dfa-modes     — the per-mode DFA fast path vs Pike (build cost + steady state).
  *
- * A final section contrasts the modal Python grammar with a mono-mode baseline
- * (the same code rules with the f-string modes stripped, so f-strings lex as a
- * name + plain string) on the same sample — isolating the mode-stack overhead.
- *
- * Methodology (no measurement artifact): each input is scaled to a steady-state
- * size, the lexer is built once, the timed region is warmed up, and the
- * **minimum** wall time over N repetitions is taken (the cleanest throughput
- * estimate — least exposed to scheduler jitter). Built at -O2. A volatile sink
- * consumes every result so nothing is optimized away. Informational only — never
- * gated; see `make bench-lex` / `make bench`. Sizes are KiB (1024 B), throughput
- * is MB/s (10^6 B/s).
+ * This program ONLY collects raw per-call samples (seconds) and emits the canonical
+ * sciforge.bench JSON (emit_case/emit_run); benchmarks/bench_lex.py derives MB/s, the
+ * minimum, the speed-up and the build cost. The timing primitives and the JSON emitter live
+ * in SciForge's shared C++ collector (include/sciforge/bench.hpp). Each input is scaled once,
+ * the lexer is built once, the thunk is warmed up, and the thunk's work quantity is observed
+ * (do_not_optimize, inside collect) so nothing is optimized away. Informational only — never
+ * gated; see `make bench-lex` / `make bench`.
  */
-#include <algorithm>
-#include <chrono>
 #include <cstddef>
 #include <cstdio>
-#include <limits>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
+
+#include <sciforge/bench.hpp>
 
 #include "cpp.hpp"
 #include "css.hpp"
@@ -44,13 +41,26 @@
 
 namespace {
 
-  using clock_type = std::chrono::steady_clock;
-
   constexpr std::size_t target_bytes {256 * 1024}; //!< Steady-state input size.
-  constexpr int         warmup       {3};          //!< Untimed warmup passes.
-  constexpr int         reps         {9};          //!< Timed passes; min is taken.
 
-  volatile std::size_t g_sink        {0};          //!< Consumes results — defeats dead-code elimination.
+  std::vector<std::string> g_cases;                //!< The emitted canonical Cases, in order.
+
+  using field   = std::pair<std::string, std::string>;
+  using domain  = std::vector<field>;
+
+  //! \brief A domain field whose value is a JSON number (bytes / tokens).
+  field num(const char* key,
+            std::size_t value)
+  {
+    return {key, sciforge::bench::json_number(static_cast<double>(value))};
+  }
+
+  //! \brief A domain field whose value is a JSON string (section / grammar / path / variant).
+  field str(const char     * key,
+            std::string_view value)
+  {
+    return {key, sciforge::bench::json_string(std::string(value))};
+  }
 
   //! \brief Repeats \p sample (newline-separated) until at least \p target bytes.
   std::string scale(std::string_view sample,
@@ -65,118 +75,78 @@ namespace {
     return out;
   }
 
-  //! \brief Minimum wall-seconds of \p run over \ref reps passes, after \ref warmup.
+  //! \brief 3 warmups (untimed), then 9 raw per-call samples (seconds) for \p run, appended as
+  //!        one Case with \p domain. samples=9/inner=1 mirrors the old min-of-9 best; the
+  //!        minimum is taken by the reporter. The thunk's work is observed inside collect.
   template <class Run>
-  double min_seconds(Run&& run)
+  void measure(const std::string& name,
+               Run&&              run,
+               const domain&      fields)
   {
-    for (int i {0}; i < warmup; ++i) {
+    for (int i {0}; i < 3; ++i) {
       run();
     }
-    double best {std::numeric_limits<double>::infinity()};
-    for (int i {0}; i < reps; ++i) {
-      const auto before {clock_type::now()};
-      run();
-      const auto after  {clock_type::now()};
-      best = std::min(best, std::chrono::duration<double>(after - before).count());
-    }
-    return best;
+    const std::vector<double> samples {sciforge::bench::collect(run, 9, 1)};
+    g_cases.push_back(sciforge::bench::emit_case(name, "s", samples, fields));
   }
 
-  //! \brief Throughput in MB/s (10^6 bytes per second).
-  double mbps(std::size_t bytes,
-              double      seconds)
-  {
-    return (static_cast<double>(bytes) / 1e6) / seconds;
-  }
-
-  //! \brief One grammar's measured row.
-  struct row
-  {
-    const char* name;
-    std::size_t bytes;
-    std::size_t tokens;
-    double      eager_mbps;
-    double      lazy_mbps;
-  };
-
-  //! \brief Measures eager and lazy throughput of the Pike engine on \p sample, built
-  //!        from \p make_rules (NOT make_lexer): the per-grammar table is one engine
-  //!        across all nine grammars — apples-to-apples, and the first-byte-dispatch
-  //!        story holds. The DFA opt-in (which sql/css's make_lexer turns on) is the
-  //!        separate "DFA modes" section below.
-  row measure(const char                 * name,
-              std::vector<scilex::rule> (* make_rules)(),
-              std::string_view             sample)
+  //! \brief Emits the eager + lazy cases for one grammar (the Pike engine, built from
+  //!        \p make_rules — apples-to-apples across all nine grammars).
+  void grammar_case(const char                 * name,
+                    std::vector<scilex::rule> (* make_rules)(),
+                    std::string_view             sample)
   {
     const std::string   source {scale(sample, target_bytes)};
     const scilex::lexer lex    {make_rules()};
     const std::size_t   tokens {lex.tokenize(source).size()};
-
-    const double eager         {min_seconds([&] {
-                                              g_sink += lex.tokenize(source).size();
-                                            })};
-    const double lazy          {min_seconds([&] {
-                                              std::size_t consumed {0};
-                                              for (const scilex::token& tok : lex.scan(source)) {
-                                                consumed += tok.lexeme.size();
-                                              }
-                                              g_sink += consumed;
-                                            })};
-    return {name, source.size(), tokens, mbps(source.size(), eager), mbps(source.size(), lazy)};
+    const auto          base   {[&](const char* path) {
+                                  return domain {str("section", "grammar"), str("grammar", name),
+                                                 str("path", path), num("bytes", source.size()),
+                                                 num("tokens", tokens)};
+                                }};
+    measure(std::string(name) + " eager",
+            [&] { return lex.tokenize(source).size(); }, base("eager"));
+    measure(std::string(name) + " lazy", [&] {
+              std::size_t consumed {0};
+              for (const scilex::token& tok : lex.scan(source)) {
+                consumed += tok.lexeme.size();
+              }
+              return consumed;
+            }, base("lazy"));
   }
 } // namespace
 
 int main()
 {
-  std::printf("SciLex C++ engine throughput — per grammar, PIKE engine (min-of-%d, %d warmup, -O2)\n", reps, warmup);
-  std::printf("steady-state input: each grammar's sample scaled to >= %zu KiB\n", target_bytes / 1024);
-  std::printf("(the Pike per-rule + first-byte-dispatch engine across all grammars; the DFA opt-in is below)\n\n");
-  std::printf("  %-8s %8s %9s %13s %13s\n", "grammar", "KiB", "tokens", "eager MB/s", "lazy MB/s");
-  std::printf("  %-8s %8s %9s %13s %13s\n", "-------", "---", "------", "----------", "---------");
+  // --- grammar: eager vs lazy across the nine grammars (Pike engine). ---
+  grammar_case("json", &scilex::examples::json::make_rules, scilex::examples::json::sample);
+  grammar_case("python", &scilex::examples::python::make_rules, scilex::examples::python::sample);
+  grammar_case("cpp", &scilex::examples::cpp::make_rules, scilex::examples::cpp::sample);
+  grammar_case("sql", &scilex::examples::sql::make_rules, scilex::examples::sql::sample);
+  grammar_case("css", &scilex::examples::css::make_rules, scilex::examples::css::sample);
+  grammar_case("lisp", &scilex::examples::lisp::make_rules, scilex::examples::lisp::sample);
+  grammar_case("math", &scilex::examples::math::make_rules, scilex::examples::math::sample);
+  grammar_case("xml", &scilex::examples::xml::make_rules, scilex::examples::xml::sample);
+  grammar_case("yaml", &scilex::examples::yaml::make_rules, scilex::examples::yaml::sample);
 
-  const row rows[] {
-    measure("json", &scilex::examples::json::make_rules, scilex::examples::json::sample),
-    measure("python", &scilex::examples::python::make_rules, scilex::examples::python::sample),
-    measure("cpp", &scilex::examples::cpp::make_rules, scilex::examples::cpp::sample),
-    measure("sql", &scilex::examples::sql::make_rules, scilex::examples::sql::sample),
-    measure("css", &scilex::examples::css::make_rules, scilex::examples::css::sample),
-    measure("lisp", &scilex::examples::lisp::make_rules, scilex::examples::lisp::sample),
-    measure("math", &scilex::examples::math::make_rules, scilex::examples::math::sample),
-    measure("xml", &scilex::examples::xml::make_rules, scilex::examples::xml::sample),
-    measure("yaml", &scilex::examples::yaml::make_rules, scilex::examples::yaml::sample),
-  };
-  for (const row& entry : rows) {
-    std::printf("  %-8s %8zu %9zu %13.2f %13.2f\n",
-                entry.name, entry.bytes / 1024, entry.tokens, entry.eager_mbps, entry.lazy_mbps);
-  }
-
-  // Linearity: one grammar over growing sizes. Flat MB/s == time scales with the
-  // input == the linear, ReDoS-safe guarantee, shown directly in C++.
-  std::printf("\nlinearity — cpp grammar at growing sizes (flat MB/s => linear time):\n");
-  std::printf("  %8s %13s\n", "KiB", "eager MB/s");
+  // --- linearity: cpp grammar over growing sizes (flat MB/s => linear time). ---
   const scilex::lexer clex {scilex::examples::cpp::make_lexer()};
   for (const std::size_t kib : {std::size_t {64}, std::size_t {128}, std::size_t {256}, std::size_t {512}}) {
     const std::string source {scale(scilex::examples::cpp::sample, kib * 1024)};
-    const double      best   {min_seconds([&] {
-                                            g_sink += clex.tokenize(source).size();
-                                          })};
-    std::printf("  %8zu %13.2f\n", source.size() / 1024, mbps(source.size(), best));
+    measure("linearity " + std::to_string(source.size() / 1024) + "KiB",
+            [&] { return clex.tokenize(source).size(); },
+            domain {str("section", "linearity"), num("bytes", source.size())});
   }
 
-  // Mode overhead: the modal Python grammar vs a mono-mode baseline on the SAME
-  // sample. The baseline drops the f-string mode rules (so f"…" lexes as a NAME +
-  // plain string) and clears in_mode/action — the delta is the mode-stack cost.
+  // --- mode overhead: the modal Python grammar vs a mono-mode baseline on the same sample. ---
   namespace py = scilex::examples::python;
-  std::printf("\nmode overhead — python on its sample (modal vs a mono-mode baseline):\n");
-  std::printf("  %-10s %8s %9s %13s\n", "variant", "KiB", "tokens", "eager MB/s");
   const std::string pysrc {scale(py::sample, target_bytes)};
   {
     const scilex::lexer modal {py::make_lexer()};
     const std::size_t   toks  {modal.tokenize(pysrc).size()};
-    const double        secs  {min_seconds([&] {
-                                             g_sink += modal.tokenize(pysrc).size();
-                                           })};
-    std::printf("  %-10s %8zu %9zu %13.2f\n", "modal", pysrc.size() / 1024, toks, mbps(pysrc.size(), secs));
+    measure("modal", [&] { return modal.tokenize(pysrc).size(); },
+            domain {str("section", "mode-overhead"), str("variant", "modal"),
+                    num("bytes", pysrc.size()), num("tokens", toks)});
   }
   {
     std::vector<scilex::rule> mono;
@@ -192,20 +162,12 @@ int main()
     }
     const scilex::lexer base {std::move(mono)};
     const std::size_t   toks {base.tokenize(pysrc).size()};
-    const double        secs {min_seconds([&] {
-                                            g_sink += base.tokenize(pysrc).size();
-                                          })};
-    std::printf("  %-10s %8zu %9zu %13.2f\n", "mono-mode", pysrc.size() / 1024, toks, mbps(pysrc.size(), secs));
+    measure("mono-mode", [&] { return base.tokenize(pysrc).size(); },
+            domain {str("section", "mode-overhead"), str("variant", "mono-mode"),
+                    num("bytes", pysrc.size()), num("tokens", toks)});
   }
 
-  // DFA modes: a DFA-able mono-mode grammar (SQL, CSS) on the FULL token path
-  // (tokenize materializes the vector) with the per-mode DFA fast path vs the Pike
-  // path. The DFA is built ONCE in the ctor (build_dfa_modes + audit) — reported as a
-  // one-time cost; the per-tokenize speedup is the steady-state win. A non-DFA grammar
-  // (python, whose default falls back) is the 0-regression control.
-  std::printf("\nDFA modes — full token path (tokenize), DFA-accelerated vs Pike:\n");
-  std::printf("  %-6s %8s %9s %13s %13s %9s %11s %7s\n",
-              "gram", "KiB", "tokens", "Pike MB/s", "DFA MB/s", "speedup", "build us", "active");
+  // --- dfa-modes: the per-mode DFA fast path vs Pike (build cost + steady state). ---
   struct dfa_bench
   {
     const char              * name;
@@ -221,31 +183,40 @@ int main()
     const scilex::lexer pike        {grammar.rules()};
     const scilex::lexer dfa         {grammar.rules(), {}, {"default"}};
     const bool          accelerated {!dfa.dfa_modes_active().empty()};
-    const double        build       {min_seconds([&] {
-                                                   const scilex::lexer once {grammar.rules(), {}, {"default"}};
-                                                   g_sink += once.dfa_modes_active().size();
-                                                 })};
-    const std::size_t   toks   {pike.tokenize(source).size()};
-    const double        pike_s {min_seconds([&] { g_sink += pike.tokenize(source).size(); })};
-    const double        dfa_s  {min_seconds([&] { g_sink += dfa.tokenize(source).size(); })};
-    std::printf("  %-6s %8zu %9zu %13.2f %13.2f %8.1fx %11.1f %7s\n",
-                grammar.name, source.size() / 1024, toks, mbps(source.size(), pike_s),
-                mbps(source.size(), dfa_s), pike_s / dfa_s, build * 1e6, accelerated ? "yes" : "NO");
+    const std::size_t   tokens      {pike.tokenize(source).size()};
+    const auto          base        {[&](const char* path) {
+                                       return domain {str("section", "dfa-modes"), str("grammar", grammar.name),
+                                                      str("path", path), num("bytes", source.size()),
+                                                      num("tokens", tokens),
+                                                      field {"active", accelerated ? "true" : "false"}};
+                                     }};
+    measure(std::string(grammar.name) + " build", [&] {
+              const scilex::lexer once {grammar.rules(), {}, {"default"}};
+              return once.dfa_modes_active().size();
+            }, base("build"));
+    measure(std::string(grammar.name) + " pike", [&] { return pike.tokenize(source).size(); }, base("pike"));
+    measure(std::string(grammar.name) + " dfa", [&] { return dfa.tokenize(source).size(); }, base("dfa"));
   }
-  // 0-regression control: python's default falls back to Pike (lazy tstr), so DFA-on
-  // and DFA-off tokenize at the same rate — the if(per_mode_dfa_) check is free.
+  // 0-regression control: python's default falls back to Pike, so DFA-on and DFA-off tokenize
+  // at the same rate — the per_mode_dfa_ check is free.
   {
     const std::string   source {scale(py::sample, target_bytes)};
     const scilex::lexer off    {py::make_rules()};
     const scilex::lexer on     {py::make_rules(), {}, {"default"}}; // default rejected (lazy) → Pike
-    const double        off_s  {min_seconds([&] { g_sink += off.tokenize(source).size(); })};
-    const double        on_s   {min_seconds([&] { g_sink += on.tokenize(source).size(); })};
-    std::printf("  %-6s %8zu %9zu %13.2f %13.2f %8.1fx %11s %7s\n",
-                "py*", source.size() / 1024, off.tokenize(source).size(),
-                mbps(source.size(), off_s), mbps(source.size(), on_s), off_s / on_s, "-",
-                on.dfa_modes_active().empty() ? "fallbk" : "?");
+    const bool          active {!on.dfa_modes_active().empty()};
+    const std::size_t   tokens {off.tokenize(source).size()};
+    const auto          base   {[&](const char* path) {
+                                  return domain {str("section", "dfa-modes"), str("grammar", "py*"),
+                                                 str("path", path), num("bytes", source.size()),
+                                                 num("tokens", tokens), field {"active", active ? "true" : "false"}};
+                                }};
+    measure("py* off", [&] { return off.tokenize(source).size(); }, base("off"));
+    measure("py* on", [&] { return on.tokenize(source).size(); }, base("on"));
   }
 
-  (void)g_sink;
+  const std::string meta {sciforge::bench::json_object(
+                            {{"bench", sciforge::bench::json_string("lex")},
+                              {"compiler", sciforge::bench::json_string(__VERSION__)}})};
+  std::printf("%s\n", sciforge::bench::emit_run(meta, g_cases).c_str());
   return 0;
 }

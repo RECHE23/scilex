@@ -185,8 +185,8 @@ python-test: python
 # steady state. Standalone (no Python build); informational, never gated.
 bench-lex:
 	@mkdir -p $(BUILD)/benchmarks
-	c++ $(CXXSTD) -O2 -Wall -Wextra -Wpedantic -Werror $(INCLUDES) -Iexamples benchmarks/bench_lex.cpp -o $(BUILD)/benchmarks/bench_lex
-	@$(BUILD)/benchmarks/bench_lex
+	c++ $(CXXSTD) -O2 -Wall -Wextra -Wpedantic -Werror $(INCLUDES) -I$(SCIFORGE_INCLUDE) -Iexamples benchmarks/bench_lex.cpp -o $(BUILD)/benchmarks/bench_lex
+	$(PYRUN) benchmarks/bench_lex.py $(BUILD)/benchmarks/bench_lex
 
 # The full benchmark picture: the C++ engine throughput first, then the Python
 # binding versus re. Informational only — never part of full-local-gate.
