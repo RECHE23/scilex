@@ -104,7 +104,10 @@ namespace {
              const char*      pattern,
              bool             skip = false)
   {
-    return rule {.kind = kind, .pattern = real::regex(pattern), .skip = skip};
+    // These are ASCII-by-spec grammars used to exercise the DFA fast path; pin real::flags::ascii so
+    // \s / \w / \d stay byte-level (a text-mode Unicode shorthand compiles to a code-point predicate
+    // the DFA cannot represent, which would silently demote the mode to the general scan).
+    return rule {.kind = kind, .pattern = real::regex(pattern, real::flags::ascii), .skip = skip};
   }
 
   //! \brief A SQL-ish mono-mode grammar (keywords overlap ident on letters — the DFA's
@@ -257,7 +260,7 @@ TEST(dfa_modes_layout_non_regression)
 TEST(dfa_modes_orthogonal_to_insignificant_modes)
 {
   using op = scilex::mode_action::op;
-  rule ws   {.kind = 1, .pattern = real::regex(R"(\s+)"), .skip = true};
+  rule ws   {.kind = 1, .pattern = real::regex(R"(\s+)", real::flags::ascii), .skip = true};
   ws.in_mode = {"default", "flow"};
   rule name {.kind = 2, .pattern = real::regex("[A-Za-z]+")};
   name.in_mode = {"default", "flow"};

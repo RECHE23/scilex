@@ -39,7 +39,7 @@ option(SCILEX_COVERAGE "Build the tests with LLVM source-based coverage instrume
 #    FetchContent from a configurable repository + tag (no on-disk-layout
 #    assumption). The repository defaults to the sibling git checkout, so it
 #    works locally too; on CI point it at a remote and pin a tag, e.g.
-#      -DSCILEX_FETCH_DEPS=ON -DSCILEX_REAL_REPO=https://… -DSCILEX_REAL_TAG=v2026.6.14
+#      -DSCILEX_FETCH_DEPS=ON -DSCILEX_REAL_REPO=https://… -DSCILEX_REAL_TAG=v2026.7.3
 option(SCILEX_FETCH_DEPS "Fetch the dependencies with FetchContent" OFF)
 
 set(SCILEX_REAL_INCLUDE "${CMAKE_CURRENT_SOURCE_DIR}/../real-regex/include"
@@ -48,7 +48,7 @@ set(SCILEX_REAL_REPO "${CMAKE_CURRENT_SOURCE_DIR}/../real-regex"
     CACHE STRING "REAL git repository (path or URL) when fetching")
 # Default to REAL's released tag so a FetchContent build is reproducible (override
 # with -DSCILEX_REAL_TAG=main to track the latest during co-development).
-set(SCILEX_REAL_TAG "v2026.6.14" CACHE STRING "REAL git tag when fetching")
+set(SCILEX_REAL_TAG "v2026.7.3" CACHE STRING "REAL git tag when fetching")
 
 if(SCILEX_FETCH_DEPS)
     include(FetchContent)

@@ -56,7 +56,7 @@ namespace scilex::examples::lisp {
   inline std::vector<scilex::rule> make_rules()
   {
     std::vector<scilex::rule> rules;
-    rules.push_back({ws, real::regex("\\s+"), true});
+    rules.push_back({ws, real::regex("\\s+", real::flags::ascii), true});
     rules.push_back({comment, real::regex(";.*"), true});
     rules.push_back({lparen, real::regex("\\("), false});
     rules.push_back({rparen, real::regex("\\)"), false});

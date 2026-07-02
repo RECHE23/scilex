@@ -62,7 +62,7 @@ namespace scilex::examples::cpp {
   inline std::vector<scilex::rule> make_rules()
   {
     std::vector<scilex::rule> rules;
-    rules.push_back({ws, real::regex("\\s+"), true});
+    rules.push_back({ws, real::regex("\\s+", real::flags::ascii), true});
     rules.push_back({line_comment, real::regex("//.*"), true});
     rules.push_back({block_comment, real::regex(R"re(/\*([^*]|\*+[^*/])*\*+/)re"), true});
     rules.push_back({preproc, real::regex("#.*"), false});

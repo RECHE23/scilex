@@ -87,11 +87,18 @@ namespace scilex {
    *
    * \ref in_mode empty means the rule is active in the implicit "default" mode only,
    * so a plain `{kind, pattern, skip}` rule keeps working unchanged.
+   *
+   * The pattern is a fully-formed `real::regex`, so the grammar author owns its flags: pass
+   * `real::flags::ascii` to keep `\w \d \s \b` and case folding ASCII (small, DFA-representable — the
+   * right choice for ASCII-by-spec grammars like JSON/SQL, and what the `examples/` grammars use), or
+   * leave the default to recognise Unicode word/digit/space (e.g. a language whose identifiers are
+   * Unicode). A Unicode shorthand is not DFA-representable, so a `dfa_modes` mode containing one is
+   * transparently demoted to the general scan (same tokens; see `lexer::dfa_modes_active`).
    */
   struct rule
   {
     int                        kind;            //!< Kind assigned to tokens this rule produces.
-    real::regex                pattern;         //!< The recognizer (a linear-time REAL regex).
+    real::regex                pattern;         //!< The recognizer (a linear-time REAL regex; its flags are the author's — see above).
     bool                       skip    {false}; //!< If true, matches are consumed but not emitted.
     std::vector<std::string>   in_mode {};      //!< Modes this rule is active in; empty ⇒ {"default"}.
     std::optional<mode_action> action  {};      //!< Mode transition fired when this rule wins.

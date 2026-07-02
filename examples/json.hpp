@@ -69,7 +69,7 @@ namespace scilex::examples::json {
   inline std::vector<scilex::rule> make_rules()
   {
     std::vector<scilex::rule> rules;
-    rules.push_back({ws, real::regex("\\s+"), true});
+    rules.push_back({ws, real::regex("\\s+", real::flags::ascii), true});
     rules.push_back({lbrace, real::regex("\\{"), false});
     rules.push_back({rbrace, real::regex("\\}"), false});
     rules.push_back({lbracket, real::regex("\\["), false});

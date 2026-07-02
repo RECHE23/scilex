@@ -65,7 +65,7 @@ namespace scilex::examples::math {
   inline std::vector<scilex::rule> make_rules()
   {
     std::vector<scilex::rule> rules;
-    rules.push_back({ws, real::regex("\\s+"), true});
+    rules.push_back({ws, real::regex("\\s+", real::flags::ascii), true});
     rules.push_back({number, real::regex("[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?"), false});
     rules.push_back({ident, real::regex("[A-Za-z_][A-Za-z0-9_]*"), false});
     rules.push_back({plus, real::regex("\\+"), false});

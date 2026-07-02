@@ -73,7 +73,7 @@ namespace scilex::examples::css {
   inline std::vector<scilex::rule> make_rules()
   {
     std::vector<scilex::rule> rules;
-    rules.push_back({ws, real::regex("\\s+"), true});
+    rules.push_back({ws, real::regex("\\s+", real::flags::ascii), true});
     rules.push_back({comment, real::regex(R"re(/\*([^*]|\*+[^*/])*\*+/)re"), true});
     rules.push_back({at_keyword, real::regex("@[A-Za-z][A-Za-z-]*"), false});
     rules.push_back({hash, real::regex("#[A-Za-z0-9_-]+"), false});
