@@ -29,8 +29,8 @@ the difference that matters for a lexer fed untrusted or machine-generated input
 
 | input | winner | why |
 | --- | --- | --- |
-| benign token soup | `re` (~2×, see B1) | a mature C backtracking engine; SciLex runs REAL's NFA per position and builds rich `Token`s (the gap narrowed to ~2× with the zero-copy binding + exact dispatch) |
-| adversarial / ReDoS (B2) | **SciLex** (linear vs exponential) | REAL is linear-time and ReDoS-safe; `re` backtracks catastrophically |
+| benign token soup | `re` (~2×) | a mature C backtracking engine; SciLex runs REAL's NFA per position and builds rich `Token`s (the gap narrowed to ~2× with the zero-copy binding + exact dispatch) |
+| adversarial / ReDoS | **SciLex** (linear vs exponential) | REAL is linear-time and ReDoS-safe; `re` backtracks catastrophically |
 | untrusted / machine-generated | **SciLex** | the linear bound holds on *every* input — no pathological cliff |
 
 ## C++ engine throughput — per grammar
@@ -40,54 +40,51 @@ engine directly** — the speed a C++ embedder or a SciParse parser sees, with n
 interpreter in the path. `make bench-lex` lexes each of the nine example grammars
 (`examples/<lang>.hpp`) over its own sample scaled to a ~256 KiB steady-state input,
 reporting MB/s for `tokenize()` (eager, full token vector) and `scan()` (lazy, O(1)
-memory — the parser path).
+memory — the parser path). All rows are the **Pike engine** (the per-rule scan + first-byte
+dispatch); the DFA fast path is a separate opt-in, reported on its own below.
 
-All nine rows are the **Pike engine** (the per-rule scan + first-byte dispatch) for one
-apples-to-apples baseline. `sql` and `css`, being DFA-able, additionally ship the **DFA
-fast path** on — their `make_lexer` opts `"default"` in — for the ~20× shown in the *DFA
-fast path* section below; that is an opt-in over this engine floor, not a change to it.
+The engine has **two regimes**, reported separately rather than as one average, because
+they run different match-time machinery:
 
-| grammar | rules | tokens | eager MB/s | lazy MB/s |
+- **ASCII-pinned grammars** — their `\s`/`\w`/`\d` are pinned to byte-level classes (an
+  explicit `(?a)` flag), so each is a 256-bit membership test.
+- **Unicode text-mode grammars** — they keep the default Unicode shorthands, which compile
+  to *code-point predicates* (decode a code point, then test membership). An earlier
+  measurement put these at a **0.8–2.5 MB/s** floor when the shorthands expanded to a
+  byte-automaton alternative per code-point range; with the current code-point-predicate
+  path both regimes now sit in the **same 8–13 MB/s band** — the floor is gone.
+
+| ASCII-pinned grammar | rules | tokens | eager MB/s | lazy MB/s |
 | --- | ---: | ---: | ---: | ---: |
-| xml    | 12 | 65 588  | 9.04 | 9.36 |
-| cpp    | 41 | 52 228  | 7.90 | 8.04 |
-| json   | 12 | 58 793  | 7.82 | 8.11 |
-| sql    | 39 | 38 760  | 7.60 | 7.71 |
-| yaml   | 14 | 56 829  | 7.26 | 7.38 |
-| python | 65 | 53 960  | 7.22 | 7.32 |
-| lisp   |  8 | 96 600  | 6.58 | 6.80 |
-| css    | 17 | 64 224  | 6.41 | 6.54 |
-| math   | 12 | 123 376 | 5.55 | 5.73 |
+| json | 12 | 58 793  | 11.24 | 11.54 |
+| cpp  | 41 | 52 228  | 11.28 | 11.77 |
+| sql  | 39 | 38 760  | 11.21 | 11.58 |
+| css  | 17 | 64 224  |  8.92 |  9.21 |
+| lisp |  8 | 96 600  |  8.97 |  9.56 |
+| math | 12 | 123 376 |  7.95 |  8.46 |
 
-Three of the nine are **modal** (contextual lexing): `python` (f-strings — five
-modes), `xml` (content ↔ tag), `yaml` (block ↔ flow). They sit in the same band as
-the flat grammars — the dispatch runs *per mode*, so modes cost throughput nothing
-structural. `python` carries **65** rules (35 keywords + the modal machinery) yet
-holds ~7.35 MB/s: the first-byte dispatch keeps it rule-count-independent.
+| Unicode text-mode grammar | rules | tokens | eager MB/s | lazy MB/s |
+| --- | ---: | ---: | ---: | ---: |
+| xml    | 12 | 65 588 | 13.27 | 14.39 |
+| yaml   | 14 | 56 829 | 12.64 | 13.29 |
+| python | 65 | 53 960 | 10.62 | 10.96 |
+
+Three grammars are **modal** (contextual lexing): `python` (f-strings — five modes), `xml`
+(content ↔ tag), `yaml` (block ↔ flow). They sit in the same band as the flat grammars —
+the dispatch runs *per mode*, so modes cost throughput nothing structural. `python` carries
+**65** rules (35 keywords + the modal machinery) yet holds ~10.6 MB/s: the first-byte
+dispatch keeps it rule-count-independent.
 
 Method: lexer built once, warmup then **min of 9** timed passes, `-O2`, every result
 consumed through a volatile sink. Sizes are KiB (1024 B), throughput is MB/s (10⁶ B/s),
-same machine as the conditions below. Reproduce with `make bench-lex`. (Re-measured
-2026.6 — when `sql`/`css` opted into the DFA fast path — so this stays a single-engine
-Pike table.)
+same machine as the conditions below. Reproduce with `make bench-lex`.
 
 **Reading — what sets the pace.** Dispatch is **exact**: the lexer builds a 256-bucket
 first-byte index from REAL's first-byte API (`has_first_byte_set` / `unique_first_byte` /
 `may_start_with`), so a rule is tried at a position **only if its pattern can begin there**.
 That collapses the per-position rule count, leaving throughput governed mainly by **token
 density** — the cost is paid per token (one maximal-munch decision each): `math` is densest
-(123 k tokens) and slowest (5.70), while `xml` / `cpp` / `json` (fewer tokens per byte) top
-the table (8–9). `sql` — 31 *case-insensitive* keyword rules — is **no longer the outlier**:
-REAL reports an icase literal's both-case first bytes (`{s, S}`), so the dispatch buckets
-those keywords by case instead of trying all 31 at every byte. `sql` and `css` go further
-still — being DFA-able, they opt the **DFA fast path**, ≈20× over this Pike row (below).
-
-This exact dispatch replaced an earlier *textual* heuristic that conservatively dumped any
-class, alternation, or flagged literal into a general list tried everywhere. Switching to
-REAL's exact set lifted `sql` from **0.80 → 7.68 MB/s** (~9.6×) and every grammar **3–7×**
-across the board — the single biggest engine win measured here. The general list now holds
-only *nullable* rules (which can match the empty string, so they genuinely can start
-anywhere).
+(123 k tokens) and slowest (7.95), while the lower-density grammars top the tables (11–13).
 
 **Reading — eager vs lazy.** `scan()` edges out `tokenize()` (it never materializes the
 token vector), but only just: both pay REAL's per-position NFA scan, which dominates. The
@@ -98,48 +95,87 @@ inputs:
 
 | KiB | eager MB/s |
 | ---: | ---: |
-| 64  | 8.08 |
-| 128 | 7.80 |
-| 256 | 7.83 |
-| 512 | 7.80 |
+| 64  | 11.65 |
+| 128 | 11.40 |
+| 256 | 11.30 |
+| 512 | 11.17 |
 
-Flat MB/s means time scales **linearly** with input — REAL's linear, ReDoS-safe bound
-holds for the lexer too, not only for the pathological `re` contrast in B2 below.
+Flat MB/s means time scales **linearly** with input — the linear, ReDoS-safe bound holds
+for the lexer too, not only for the pathological contrast with `re` (below).
 
 **Reading — modes & Layout Awareness.** Contextual lexing is throughput-neutral by
 construction (the dispatch runs per mode). `make bench-lex` also contrasts the modal
-`python` grammar with a mono-mode baseline — the same code rules with the f-string
-modes stripped, so an f-string lexes as a name + one opaque string — on the same
-sample: **modal 7.28 vs mono-mode 7.59 MB/s** (~4%), and the modal path does
-materially more work (53 960 vs 44 872 tokens — full f-string structure, not an
-opaque string). The mode stack is per-scan; Layout Awareness reads each token's mode
-but adds nothing when no mode is insignificant (invariant 1: an empty policy is
-byte-for-byte the positional pass). Both are informational, never gated.
+`python` grammar with a mono-mode baseline — the same rules with the f-string modes stripped
+— on the same sample: **modal 10.62 vs mono-mode 11.02 MB/s** (~4%), and the modal path does
+materially more work (53 960 vs 44 872 tokens — full f-string structure, not an opaque
+string). The mode stack is per-scan; Layout Awareness reads each token's mode but adds
+nothing when no mode is insignificant (an empty policy is byte-for-byte the positional pass).
 
-**The honest position.** This Pike baseline is ~5.6–9.0 MB/s — still **slower** than `re`
-or `flex` (tens to hundreds of MB/s) on benign input — the price of running a real NFA at
-every position and building ordered maximal-munch `Token`s, in exchange for the linear
-guarantee. The next lever has now landed: the **DFA fast path** (below) takes a DFA-able
-mode to ≈20× this baseline. A compile-time `static_lexer` (a *baked* DFA) is the step
-beyond — the Phase-0 spike found constexpr construction off-budget at the compilers'
-default limits, so it would be **build-time codegen** (the re2c / flex model), grown in
-when a workload demands it.
+## DFA fast path (opt-in) — and which modes actually accelerate
 
-**DFA fast path (opt-in).** A DFA-able mode (mono-mode, greedy, assertion- and lazy-free)
-opts into a `real::dfa`: one automaton pass replaces the per-rule scan. On the full token
-path (`tokenize`), DFA versus the Pike row above:
+A DFA-able mode (mono-mode, greedy, assertion- and lazy-free, no code-point predicate) opts
+into a `real::dfa`: one automaton pass replaces the per-rule scan. Whether a mode qualifies is
+a **measured fact, not a property of the grammar's segment** — a Unicode code-point predicate
+or a lazy/assertion rule makes the DFA reject the mode, which then stays on Pike. On the full
+token path (`tokenize`), DFA versus the Pike row above, and the observed default-mode outcome:
 
-| grammar | Pike MB/s | DFA MB/s | speedup |
-| --- | ---: | ---: | ---: |
-| sql | 7.61 | 158.11 | **20.8×** |
-| css | 6.46 | 134.86 | **20.9×** |
-| python\* | 7.21 | 7.20 | 1.0× |
+| grammar | Pike MB/s | DFA MB/s | speed-up | default mode |
+| --- | ---: | ---: | ---: | --- |
+| json | 11.00 | 146.68 | **13.3×** | accelerates |
+| sql  | 11.15 | 156.54 | **14.0×** | accelerates |
+| css  |  9.00 | 133.39 | **14.8×** | accelerates |
+| math |  8.00 |  81.99 | **10.2×** | accelerates |
+| xml  | 13.27 | 340.29 | **25.7×** | accelerates |
+| lisp |  9.05 |  9.12  | 1.0×      | stays on Pike (rejected) |
+| yaml | 12.67 | 12.74  | 1.0×      | stays on Pike (rejected) |
+| python\* | 10.45 | 10.61 | 1.0×  | stays on Pike (rejected) |
 
-`python\*` is the **0-regression control**: its `default` mode has a lazy rule, so it
-fails the build-time audit and stays on Pike — proof the `if (per_mode_dfa_[mode])` check
-is free. The DFA is built once in the constructor (≈2.6–4.3 ms one-time — a vigilance
-point only on very short inputs). `sql` and `css` ship with it on; reproduce with
-`make bench-lex`.
+The split is **not** the ASCII/Unicode segment boundary: `xml` keeps Unicode shorthands yet
+its default mode is DFA-representable (**25.7×**, the largest), while `lisp` is ASCII-pinned
+yet its default mode carries a construct the DFA cannot represent and stays on Pike. `yaml`
+and `python` (a lazy default rule) likewise stay on Pike — a transparent fallback: the token
+stream is identical, only the fast path is skipped. `python\*` is the **0-regression control**
+(the per-mode DFA check is free when the mode is rejected). The DFA is built once in the
+constructor (≈0.3–4.2 ms one-time — a vigilance point only on very short inputs). Reproduce
+with `make bench-lex`.
+
+## Failure-cost — the recover-and-resync loop on adversarial input
+
+When a lexer meets bytes no rule matches — a binary blob, an invalid-UTF-8 run, an unclosed
+string, parasitic punctuation — a recovering lexer must skip the offending byte and resume.
+This section baselines the cost of that loop **per rejected position**, on both engine paths
+(an ASCII grammar whose default mode the DFA accelerates, and a Unicode text-mode grammar on
+Pike). The loop is simulated over the public `tokenize` API (recover, step one byte, re-lex),
+on a deterministic adversarial corpus versioned in the harness. Two costs are separated: the
+raw per-position cost, and the exception-throw cost isolated on its own (an in-lexer recovery
+would not throw per byte), leaving a **net per-position** figure.
+
+| path | corpus | rejected positions | raw ns/pos | net ns/pos |
+| --- | --- | ---: | ---: | ---: |
+| DFA-accel (json) | binary blob        | 29 952 | 5 964 | 3 738 |
+| DFA-accel (json) | invalid-UTF-8      | 32 768 | 5 957 | 3 732 |
+| DFA-accel (json) | unclosed quote     | 32 768 | 5 958 | 3 732 |
+| DFA-accel (json) | parasitic delims   | 32 768 | 5 971 | 3 745 |
+| Pike (xml)       | binary blob        | 16 512 | 6 112 | 3 886 |
+| Pike (xml)       | invalid-UTF-8      | 32 768 | 5 950 | 3 724 |
+| Pike (xml)       | unclosed quote     | 0 (tolerated) | — | — |
+| Pike (xml)       | parasitic delims   |  4 096 | 6 333 | 4 107 |
+
+**Reading — three findings that shape a recovering lexer.**
+
+1. **The exception throw dominates.** A `throw`+`catch` pair alone measures **~2 230 ns**, so
+   throwing once per rejected byte is by itself larger than everything else combined. A
+   recovering lexer must report the skip *without* throwing per byte.
+2. **Re-lexing from scratch is setup-bound, not scan-bound.** After subtracting the throw, the
+   net ~3.7 µs/position is dominated by `tokenize`'s fixed per-call setup, not the byte scan —
+   which is why the DFA and Pike paths measure nearly the same here (the engine barely matters
+   when a fresh `tokenize` runs at every recovery point). A recovery that reuses one cursor
+   would avoid this; these figures are an upper bound.
+3. **A non-fail-fast rule is O(remaining) per position.** A rule like `[^!]*!` (a maximal run
+   before a terminator) that never completes scans to the end of the input before failing, so
+   every recovery position re-scans what's left — **~199 000 ns/position** on an 8 KiB
+   no-terminator run, and quadratic in the input. This is the characteristic a first-byte
+   prefilter (`may_start_with`) mitigates by skipping positions that cannot begin the rule.
 
 ## Conditions of this baseline
 
@@ -148,11 +184,11 @@ point only on very short inputs). `sql` and `css` ship with it on; reproduce wit
 | Machine | Apple Silicon (`arm64`), Darwin 23.6.0 |
 | Binding | abi3 CPython extension as built by `setup.py` (`Py_LIMITED_API` 3.10) |
 | Method | best-of-5 timed runs, **minimum** reported |
-| As of | 2026-06-22 — C++ engine table re-measured on the **Pike engine** for the nine grammars (three modal: python/xml/yaml) + the modal-vs-mono overhead + the new **DFA fast-path** opt-in (after `sql`/`css` adopted it); B1 reflects the binding's zero-copy source + GIL release (str/bytes); B2/B3 predate those |
+| As of | 2026-07-02 — C++ engine tables (per-grammar bimodal, DFA opt-in, and the new failure-cost baseline) re-measured against REAL 2026.7.5. The binding baseline below reflects the zero-copy source path + GIL release (str/bytes); the rule-count-scaling study predates the exact first-byte dispatch (noted there) |
 
 ## Binding baseline (versus `re`)
 
-### B1. Benign tokenization (the everyday case — `re` wins)
+### Benign tokenization (the everyday case — `re` wins)
 
 Tokenizing ~10 KB of ordinary `ident = ident + number * ident - number ;` soup into
 4000 tokens (numbers, identifiers, operators; whitespace skipped). SciLex compiles the
@@ -172,7 +208,7 @@ multi-threaded throughput, `tokenize` releases the GIL around the scan of inputs
 the lazy `scan` holds the GIL per one-token step (the parser-friendly path, not the
 throughput path).
 
-### B2. Pathological input (the linearity guarantee — SciLex wins decisively)
+### Pathological input (the linearity guarantee — SciLex wins decisively)
 
 The classic ReDoS trigger `(a+)+b` over a run of `n` `a`s with no terminating `b`. A
 backtracking engine explores `O(2ⁿ)` partitions; REAL (and therefore SciLex) is linear.
@@ -191,7 +227,7 @@ backtracking engine explores `O(2ⁿ)` partitions; REAL (and therefore SciLex) i
 grows **linearly** and is still ~78 µs at `n = 1000`, where `re` would not finish in any
 practical time. This is the case SciLex exists for.
 
-### B3. Rule-count scaling — the first-byte dispatch
+### Rule-count scaling — the first-byte dispatch
 
 A *realistic* lexer (a small-language rule set: whitespace, line comments, numbers,
 strings, an identifier rule, operators, plus N literal keyword rules before the

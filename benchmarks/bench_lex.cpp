@@ -114,6 +114,91 @@ namespace {
               return consumed;
             }, base("lazy"));
   }
+
+  // --- Adversarial corpus for the failure-cost baseline (deterministic, versioned here) ---------
+  // Inputs that a lexer's rules reject, forcing the recover-and-resync path. Each is built the same
+  // way on every run so the numbers are comparable across revisions.
+
+  //! \brief `n` bytes cycling through all 256 values — binary junk no text grammar tokenizes.
+  std::string binary_block(std::size_t n)
+  {
+    std::string out;
+    out.reserve(n);
+    for (std::size_t i {0}; i < n; ++i) {
+      out.push_back(static_cast<char>((i * 37U + 17U) & 0xFFU));
+    }
+    return out;
+  }
+
+  //! \brief A long run of invalid UTF-8 lead bytes (0xFF/0xFE), never a valid code point.
+  std::string invalid_utf8_run(std::size_t n)
+  {
+    return std::string(n, '\xFF');
+  }
+
+  //! \brief One quote then a long unterminated body (a string that never closes).
+  std::string unclosed_quote(std::size_t n)
+  {
+    std::string out(1, '"');
+    out.append(n - 1, 'x');
+    return out;
+  }
+
+  //! \brief Punctuation outside every grammar's alphabet, densely — one failure per byte.
+  std::string parasitic_delims(std::size_t n)
+  {
+    static constexpr char marks[] {'@', '#', '$', '%', '^', '&', '`', '~'};
+    std::string           out;
+    out.reserve(n);
+    for (std::size_t i {0}; i < n; ++i) {
+      out.push_back(marks[i % sizeof(marks)]);
+    }
+    return out;
+  }
+
+  //! \brief The recover-and-resync loop, over the public API: tokenize from a cursor; on a lexical
+  //!        error, emit the good prefix, step past the offending byte, and resume. Returns tokens
+  //!        consumed and, via \p failures, how many positions were rejected (one throw each). The
+  //!        string_view substr is O(1). NB: each recovery is a fresh \c tokenize call, so this measures
+  //!        the NAIVE resync -- it carries tokenize()'s fixed per-call setup at every recovery point.
+  //!        An in-lexer resync would reuse a cursor and avoid that; this loop is thus an upper bound on
+  //!        the per-position cost, and its throw overhead is isolated below.
+  std::size_t resync(const scilex::lexer& lex,
+                     std::string_view     source,
+                     std::size_t&         failures)
+  {
+    std::size_t pos      {0};
+    std::size_t consumed {0};
+    failures = 0;
+    while (pos < source.size()) {
+      try {
+        consumed += lex.tokenize(source.substr(pos)).size();
+        break; // reached the end cleanly
+      }
+      catch (const scilex::lex_error& error) {
+        ++failures;
+        pos += error.where().offset + 1; // emit the good prefix, then step past the bad byte
+      }
+    }
+    return consumed;
+  }
+
+  //! \brief The cost of \p n throw+catch pairs ALONE — the exception mechanism the future
+  //!        incremental lexer will NOT pay per byte (it recovers without throwing). Subtracted from
+  //!        the resync cost to isolate the net per-position probe cost.
+  std::size_t throw_overhead(std::size_t n)
+  {
+    std::size_t sink {0};
+    for (std::size_t i {0}; i < n; ++i) {
+      try {
+        throw scilex::lex_error("probe", scilex::position {i, 1, 1});
+      }
+      catch (const scilex::lex_error& error) {
+        sink += error.where().offset;
+      }
+    }
+    return sink;
+  }
 } // namespace
 
 int main()
@@ -175,8 +260,16 @@ int main()
     std::string_view          sample;
   };
   const dfa_bench dfa_grammars[] {
+    // ASCII-pinned grammars: their default mode is DFA-representable, so it accelerates.
+    {.name = "json", .rules = &scilex::examples::json::make_rules, .sample = scilex::examples::json::sample},
     {.name = "sql", .rules = &scilex::examples::sql::make_rules, .sample = scilex::examples::sql::sample},
     {.name = "css", .rules = &scilex::examples::css::make_rules, .sample = scilex::examples::css::sample},
+    {.name = "lisp", .rules = &scilex::examples::lisp::make_rules, .sample = scilex::examples::lisp::sample},
+    {.name = "math", .rules = &scilex::examples::math::make_rules, .sample = scilex::examples::math::sample},
+    // Text-mode grammars: their \s+/\w are code-point predicates the DFA cannot represent, so the
+    // default mode is rejected and stays on Pike — dfa_modes_active is empty (active=false).
+    {.name = "xml", .rules = &scilex::examples::xml::make_rules, .sample = scilex::examples::xml::sample},
+    {.name = "yaml", .rules = &scilex::examples::yaml::make_rules, .sample = scilex::examples::yaml::sample},
   };
   for (const dfa_bench& grammar : dfa_grammars) {
     const std::string   source      {scale(grammar.sample, target_bytes)};
@@ -212,6 +305,78 @@ int main()
                                 }};
     measure("py* off", [&] { return off.tokenize(source).size(); }, base("off"));
     measure("py* on", [&] { return on.tokenize(source).size(); }, base("on"));
+  }
+
+  // --- failure-cost: the per-invalid-byte cost of the recover-and-resync loop. -----------------
+  // On adversarial input (bytes no rule matches) the future incremental lexer must skip the bad byte
+  // and resume. We run that loop here on two engine paths -- an ASCII grammar whose default mode is
+  // DFA-accelerated (fast rejection), and a text-mode grammar on Pike (the worst case) -- and isolate
+  // the exception overhead so the NET probe cost is comparable to what M1 (which will not throw per
+  // byte) would pay.
+  {
+    struct corpus_case
+    {
+      const char* name;
+      std::string data;
+    };
+    const std::size_t              corpus_bytes {32 * 1024};
+    const std::vector<corpus_case> corpora      {
+      {"binary", binary_block(corpus_bytes)},
+      {"invalid-utf8", invalid_utf8_run(corpus_bytes)},
+      {"unclosed-quote", unclosed_quote(corpus_bytes)},
+      {"parasitic-delims", parasitic_delims(corpus_bytes)},
+    };
+    struct engine_path
+    {
+      const char              * name; // "dfa" (ASCII, accelerated) or "pike" (text-mode)
+      const char              * grammar;
+      std::vector<scilex::rule> (* rules)();
+      bool                      accelerate;
+    };
+    const engine_path paths[] {
+      {.name = "dfa", .grammar = "json", .rules = &scilex::examples::json::make_rules, .accelerate = true},
+      {.name = "pike", .grammar = "xml", .rules = &scilex::examples::xml::make_rules, .accelerate = false},
+    };
+
+    for (const engine_path& path : paths) {
+      const scilex::lexer lex    {path.accelerate ? scilex::lexer {path.rules(), {}, {"default"}}
+                                               : scilex::lexer {path.rules()}};
+      const bool          active {!lex.dfa_modes_active().empty()};
+      for (const corpus_case& corpus : corpora) {
+        std::size_t failures {0};
+        resync(lex, corpus.data, failures); // count the rejected positions once, outside timing
+        measure(std::string(path.name) + " " + corpus.name,
+                [&] { std::size_t f {0}; return resync(lex, corpus.data, f); },
+                domain {str("section", "failure-cost"), str("path", path.name), str("grammar", path.grammar),
+                        str("corpus", corpus.name), num("bytes", corpus.data.size()),
+                        num("failures", failures), field {"active", active ? "true" : "false"}});
+      }
+    }
+
+    // The exception mechanism alone (throw+catch), to subtract from the resync cost -- M1 recovers
+    // without throwing, so this overhead is not part of its per-byte cost.
+    const std::size_t throw_n {corpus_bytes};
+    measure("throw-overhead",
+            [&] { return throw_overhead(throw_n); },
+            domain {str("section", "failure-cost"), str("path", "throw-isolated"),
+                    num("throws", throw_n)});
+
+    // Non-fail-fast rule: `[^!]*!` consumes a maximal non-'!' run before requiring '!', so on input
+    // with no '!' it scans to the end and fails -- every resync position re-scans O(remaining). This
+    // is the O(rest)-per-position characteristic M1 documents (and a first-byte prefilter mitigates).
+    {
+      const std::size_t         nff_bytes {8 * 1024}; // smaller: this path is quadratic by design
+      const std::string         run(nff_bytes, 'x');  // no '!': the rule never completes
+      std::vector<scilex::rule> nff;
+      nff.push_back(scilex::rule {.kind = 0, .pattern = real::regex("[^!]*!", real::flags::ascii), .skip = false});
+      const scilex::lexer nff_lex  {std::move(nff)};
+      std::size_t         failures {0};
+      resync(nff_lex, run, failures);
+      measure("non-fail-fast",
+              [&] { std::size_t f {0}; return resync(nff_lex, run, f); },
+              domain {str("section", "failure-cost"), str("path", "non-fail-fast"), str("grammar", "greedy-scan"),
+                      str("corpus", "no-terminator"), num("bytes", run.size()), num("failures", failures)});
+    }
   }
 
   const std::string meta {sciforge::bench::json_object(
