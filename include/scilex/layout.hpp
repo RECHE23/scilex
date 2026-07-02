@@ -53,6 +53,12 @@ namespace scilex {
   //! \brief Reserved kind: indentation decreased (end of a block).
   inline constexpr int dedent  {std::numeric_limits<int>::min() + 3};
 
+  // The reserved kinds (this family plus end_of_input and error) must stay mutually distinct — they
+  // share the low end of the int range, and a collision would make two reserved kinds indistinguishable.
+  static_assert(end_of_input != newline && newline != indent && indent != dedent
+                && end_of_input != error && newline != error && indent != error && dedent != error,
+                "reserved token kinds must be distinct");
+
   /*!
    * \brief Thrown when a line's indentation matches no enclosing level.
    */

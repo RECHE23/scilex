@@ -53,42 +53,43 @@ namespace {
   //! \brief One registered example language: its name and reusable entry points.
   struct example
   {
-    std::string_view name;                      //!< CLI name (`--example <name>`).
-    scilex::lexer    (* make_lexer)();          //!< Builds the language's lexer.
-    const char     * (*  kind_name)(int);       //!< Names a token kind for printing.
-    std::string_view sample;                    //!< The built-in sample document.
-    bool             (*          self_check)(); //!< Invariant self-check (true = ok).
-    bool             uses_layout;               //!< Run the indentation layout pass.
+    std::string_view          name;                      //!< CLI name (`--example <name>`).
+    std::vector<scilex::rule> (* make_rules)();          //!< The rule list (to rebuild under an error policy).
+    scilex::lexer             (* make_lexer)();          //!< Builds the language's lexer.
+    const char              * (*  kind_name)(int);       //!< Names a token kind for printing.
+    std::string_view          sample;                    //!< The built-in sample document.
+    bool                      (*          self_check)(); //!< Invariant self-check (true = ok).
+    bool                      uses_layout;               //!< Run the indentation layout pass.
   };
 
   // The registry. Each new language: include its header above, add one line here.
   const std::vector<example> registry {
     {"json",
-     &scilex::examples::json::make_lexer, &scilex::examples::json::kind_name,
+     &scilex::examples::json::make_rules, &scilex::examples::json::make_lexer, &scilex::examples::json::kind_name,
      scilex::examples::json::sample, &scilex::examples::json::self_check, false},
     {"python",
-     &scilex::examples::python::make_lexer, &scilex::examples::python::kind_name,
+     &scilex::examples::python::make_rules, &scilex::examples::python::make_lexer, &scilex::examples::python::kind_name,
      scilex::examples::python::sample, &scilex::examples::python::self_check, true},
     {"cpp",
-     &scilex::examples::cpp::make_lexer, &scilex::examples::cpp::kind_name,
+     &scilex::examples::cpp::make_rules, &scilex::examples::cpp::make_lexer, &scilex::examples::cpp::kind_name,
      scilex::examples::cpp::sample, &scilex::examples::cpp::self_check, false},
     {"sql",
-     &scilex::examples::sql::make_lexer, &scilex::examples::sql::kind_name,
+     &scilex::examples::sql::make_rules, &scilex::examples::sql::make_lexer, &scilex::examples::sql::kind_name,
      scilex::examples::sql::sample, &scilex::examples::sql::self_check, false},
     {"css",
-     &scilex::examples::css::make_lexer, &scilex::examples::css::kind_name,
+     &scilex::examples::css::make_rules, &scilex::examples::css::make_lexer, &scilex::examples::css::kind_name,
      scilex::examples::css::sample, &scilex::examples::css::self_check, false},
     {"lisp",
-     &scilex::examples::lisp::make_lexer, &scilex::examples::lisp::kind_name,
+     &scilex::examples::lisp::make_rules, &scilex::examples::lisp::make_lexer, &scilex::examples::lisp::kind_name,
      scilex::examples::lisp::sample, &scilex::examples::lisp::self_check, false},
     {"math",
-     &scilex::examples::math::make_lexer, &scilex::examples::math::kind_name,
+     &scilex::examples::math::make_rules, &scilex::examples::math::make_lexer, &scilex::examples::math::kind_name,
      scilex::examples::math::sample, &scilex::examples::math::self_check, false},
     {"xml",
-     &scilex::examples::xml::make_lexer, &scilex::examples::xml::kind_name,
+     &scilex::examples::xml::make_rules, &scilex::examples::xml::make_lexer, &scilex::examples::xml::kind_name,
      scilex::examples::xml::sample, &scilex::examples::xml::self_check, false},
     {"yaml",
-     &scilex::examples::yaml::make_lexer, &scilex::examples::yaml::kind_name,
+     &scilex::examples::yaml::make_rules, &scilex::examples::yaml::make_lexer, &scilex::examples::yaml::kind_name,
      scilex::examples::yaml::sample, &scilex::examples::yaml::self_check, true},
   };
 
@@ -98,6 +99,7 @@ namespace {
   {
     switch (kind) {
       case scilex::end_of_input: return "EOF";
+      case scilex::error:        return "ERROR";
       case scilex::newline:      return "NEWLINE";
       case scilex::indent:       return "INDENT";
       case scilex::dedent:       return "DEDENT";
@@ -289,13 +291,15 @@ namespace {
         << "  scilex --check                    run every example self-check\n"
         << "options:\n"
         << "  --layout                          emit indentation tokens (NEWLINE / INDENT / DEDENT)\n"
+        << "  --errors=token                    recover from unlexable bytes (emit ERROR tokens; default: raise)\n"
         << "grammar file: one rule per line   name<TAB>regex[<TAB>skip]   ('#' comments, blank lines ok)\n"
         << "output: one token per line        KIND<TAB>lexeme<TAB>line:col\n";
   }
 
   //! \brief Lexes with a built-in grammar (`--example <lang> [file|-]`).
   int run_example(const std::vector<std::string_view>& args,
-                  bool                                 layout)
+                  bool                                 layout,
+                  scilex::error_policy                 errors)
   {
     if (args.size() < 2) {
       std::cerr << "scilex --example needs a language (try --list)\n";
@@ -306,7 +310,11 @@ namespace {
       std::cerr << "unknown example grammar: " << args[1] << " (try --list)\n";
       return 2;
     }
-    const scilex::lexer lex    {lang->make_lexer()};
+    // Under recovery, rebuild from the rule list with the token policy; otherwise the grammar's own
+    // lexer (with its dfa/layout config) is used unchanged.
+    const scilex::lexer lex {errors == scilex::error_policy::token
+                             ? scilex::lexer {lang->make_rules(), {}, {}, errors}
+                             : lang->make_lexer()};
     const std::string   source {args.size() >= 3 ? read_input(args[2]) : std::string {lang->sample}};
     dump(lex, source, [lang](int kind) {
            return lang->kind_name(kind);
@@ -316,11 +324,12 @@ namespace {
 
   //! \brief Lexes with a user grammar file (`<grammar.lex> [file|-]`).
   int run_grammar(const std::vector<std::string_view>& args,
-                  bool                                 layout)
+                  bool                                 layout,
+                  scilex::error_policy                 errors)
   {
     grammar                        parsed {parse_grammar(std::string {args[0]})};
     const std::vector<std::string> names  {std::move(parsed.names)};
-    const scilex::lexer            lex    {std::move(parsed.rules)};
+    const scilex::lexer            lex    {std::move(parsed.rules), {}, {}, errors};
     const std::string              source {read_input(args.size() >= 2 ? args[1] : std::string_view {"-"})};
     dump(lex, source, [&names](int kind) {
            return (kind >= 0 && static_cast<std::size_t>(kind) < names.size())
@@ -336,10 +345,17 @@ int main(int    argc,
 {
   std::vector<std::string_view> args;
   bool                          layout {false};
+  scilex::error_policy          errors {scilex::error_policy::raise};
   for (int i {1}; i < argc; ++i) {
     const std::string_view arg {argv[i]};
     if (arg == "--layout") {
       layout = true;
+    }
+    else if (arg == "--errors=token") {
+      errors = scilex::error_policy::token;
+    }
+    else if (arg == "--errors=raise") {
+      errors = scilex::error_policy::raise;
     }
     else {
       args.push_back(arg);
@@ -363,9 +379,9 @@ int main(int    argc,
       return check();
     }
     if (command == "--example") {
-      return run_example(args, layout);
+      return run_example(args, layout, errors);
     }
-    return run_grammar(args, layout);
+    return run_grammar(args, layout, errors);
   }
   catch (const scilex::lex_error& error) {
     std::cerr << "lex error at " << error.where().line << ':' << error.where().column << '\n';

@@ -68,7 +68,7 @@ from scilex._scilex import (
 
 __all__ = [
     "Lexer", "Token", "Position", "Layout", "tokenize", "scan", "layout", "error",
-    "LexerError", "END_OF_INPUT", "NEWLINE", "INDENT", "DEDENT", "get_include", "get_config",
+    "LexerError", "END_OF_INPUT", "NEWLINE", "INDENT", "DEDENT", "ERROR", "get_include", "get_config",
     "real_version",
 ]
 
@@ -86,6 +86,11 @@ INDENT = -2147483646
 
 #: Reserved kind: indentation decreased — the end of a block (INT_MIN + 3).
 DEDENT = -2147483645
+
+#: Reserved kind: a run of bytes no rule could lex, emitted by a lexer built with
+#: ``errors="token"`` instead of raising (INT_MIN + 4). Its ``lexeme`` is the exact
+#: offending bytes. Not the :class:`error` exception — that is unrelated.
+ERROR = -2147483644
 
 #: Alias of :class:`error`, the exception raised on an invalid pattern or
 #: unlexable input. Lexing errors carry a :class:`Position` in ``.position``.
@@ -232,6 +237,19 @@ class Lexer:
             whose rules need an assertion no DFA can represent, or whose DFA fails the
             build-time audit (a lazy quantifier), silently stays on the regular engine
             — see :attr:`dfa_modes_active`. The token stream is identical either way.
+        errors (str): What to do at a byte no rule can lex. The default ``"raise"`` is
+            unchanged — it raises :class:`error` at the first unlexable byte, exactly as
+            before. ``"token"`` opts into recovery: a maximal run of unlexable bytes is
+            emitted as one token of reserved kind :data:`ERROR` (its ``lexeme`` the exact
+            bytes) and lexing resumes, so a whole document is tokenized in one pass.
+
+            Recovery cost is the cost of a *no-match* in your grammar: at each byte of an
+            error run a first-byte pre-filter skips positions no rule can begin (usually
+            O(1) per byte), attempting a match only where a rule might start. A rule that
+            scans far before failing — an unanchored, greedy pattern with no distinguishing
+            leading byte — pays that scan at every position of a long error run (on the order
+            of 200 µs per position over an 8 KB run in the worst case). Prefer rules with a
+            definite leading byte if recovery speed on hostile input matters.
 
     Raises:
         error: If a pattern is an invalid regex, a transition targets an empty mode, or
@@ -239,7 +257,9 @@ class Lexer:
         ValueError: If ``insignificant_modes`` names a mode the rules do not use.
     """
 
-    def __init__(self, rules, insignificant_modes=(), dfa_modes=()):
+    def __init__(self, rules, insignificant_modes=(), dfa_modes=(), errors="raise"):
+        if errors not in ("raise", "token"):
+            raise ValueError(f"errors must be 'raise' or 'token', not {errors!r}")
         normalized = []
         for entry in rules:
             kind, pattern = entry[0], entry[1]
@@ -265,9 +285,10 @@ class Lexer:
                 normalized.append((int(kind), pattern, skip)) # plain rule stays a triple
         self._rules = normalized
         self._dfa_modes = [str(mode) for mode in dfa_modes]
+        self._errors = errors
         # The C++ ctor validates dfa_modes against the interned modes (raising error on
         # an unknown one) and builds the per-mode DFA fast path.
-        self._handle = _compile(normalized, self._dfa_modes)
+        self._handle = _compile(normalized, self._dfa_modes, errors)
         known = {"default"}
         for entry in normalized:
             if len(entry) > 3:

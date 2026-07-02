@@ -26,6 +26,17 @@ namespace scilex {
   inline constexpr int end_of_input {std::numeric_limits<int>::min()};
 
   /*!
+   * \brief Reserved token kind for a lexical-error run under \ref scilex::error_policy::token.
+   *
+   * When error recovery is enabled, a maximal run of bytes that no rule in the active mode can begin
+   * is emitted as one token of this kind (its \ref token::lexeme is the exact offending bytes), instead
+   * of throwing. Part of the reserved family: \ref end_of_input is `min()`, the layout kinds
+   * (`scilex::newline` / `indent` / `dedent` in layout.hpp) are `min()+1..+3`, so this takes the next
+   * free slot, `min()+4`. User-defined token kinds must not use it.
+   */
+  inline constexpr int error {std::numeric_limits<int>::min() + 4};
+
+  /*!
    * \brief A location in the source text.
    *
    * Columns are counted in bytes within the line, consistent with REAL's

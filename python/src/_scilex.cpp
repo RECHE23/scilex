@@ -274,14 +274,26 @@ int parse_action(PyObject* obj, std::optional<scilex::mode_action>* out)
 // significance is applied Python-side in _scilex.layout, unchanged.
 PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
 {
-    PyObject* rules_obj     = nullptr;
-    PyObject* dfa_modes_obj = nullptr; // optional sequence of mode names (borrowed)
-    if (PyArg_ParseTuple(args, "O|O", &rules_obj, &dfa_modes_obj) == 0) {
+    PyObject*   rules_obj     = nullptr;
+    PyObject*   dfa_modes_obj  = nullptr; // optional sequence of mode names (borrowed)
+    const char* errors_str     = nullptr; // optional "raise" (default) or "token"
+    if (PyArg_ParseTuple(args, "O|Oz", &rules_obj, &dfa_modes_obj, &errors_str) == 0) {
         return nullptr;
     }
     std::vector<std::string> dfa_modes;
     if (parse_in_mode(dfa_modes_obj, &dfa_modes, "dfa_modes") < 0) {
         return nullptr; // not a sequence of names (error set)
+    }
+    scilex::error_policy errors = scilex::error_policy::raise;
+    if (errors_str != nullptr) {
+        const std::string name {errors_str};
+        if (name == "token") {
+            errors = scilex::error_policy::token;
+        }
+        else if (name != "raise") {
+            PyErr_Format(PyExc_ValueError, "errors must be 'raise' or 'token', not '%s'", errors_str);
+            return nullptr;
+        }
     }
     const Py_ssize_t count = PySequence_Size(rules_obj);
     if (count < 0) {
@@ -327,7 +339,8 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
             }
         }
         auto* lexer = new scilex::lexer(std::move(rules), {},
-                                        std::unordered_set<std::string>(dfa_modes.begin(), dfa_modes.end()));
+                                        std::unordered_set<std::string>(dfa_modes.begin(), dfa_modes.end()),
+                                        errors);
         PyObject* capsule = PyCapsule_New(lexer, CAPSULE_NAME, capsule_free);
         if (capsule == nullptr) {
             delete lexer;
@@ -630,7 +643,7 @@ struct caster<scilex::lexer*> {
 SCIFORGE_MODULE(_scilex, "scilex.error", m)
 {
     m.raw("compile", scilex_compile, METH_VARARGS,
-          "compile(rules, dfa_modes=())\n"
+          "compile(rules, dfa_modes=(), errors='raise')\n"
           "Compile an ordered list of rules into a lexer handle.\n\n"
           "Args:\n"
           "    rules (sequence): Each rule is (kind:int, pattern:str, skip:bool) and may\n"
@@ -638,12 +651,15 @@ SCIFORGE_MODULE(_scilex, "scilex.error", m)
           "        means the default mode) and action (None, or a transition tuple\n"
           "        (\"push\", mode) / (\"set\", mode) / (\"pop\",)).\n"
           "    dfa_modes (sequence): Mode names to accelerate with a DFA fast path. Best-\n"
-          "        effort: an un-DFA-able mode silently stays on Pike (see dfa_modes_active).\n\n"
+          "        effort: an un-DFA-able mode silently stays on Pike (see dfa_modes_active).\n"
+          "    errors (str): 'raise' (default, unchanged: raise at the first unlexable byte)\n"
+          "        or 'token' (recover, emitting one ERROR-kind token per unlexable run).\n\n"
           "Returns:\n"
           "    capsule: An opaque compiled-lexer handle for tokenize()/scan_start().\n\n"
           "Raises:\n"
           "    error: If a pattern is an invalid regex, a transition targets an empty mode,\n"
-          "        or dfa_modes names an unknown mode.");
+          "        or dfa_modes names an unknown mode.\n"
+          "    ValueError: If errors is not 'raise' or 'token'.");
     m.def<&dfa_modes_active>("dfa_modes_active",
                              "dfa_modes_active(handle) -> list[str]\n"
                              "The mode names actually accelerated by a DFA (a requested mode that fell back\n"

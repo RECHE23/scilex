@@ -181,6 +181,123 @@ namespace scilex::fuzz {
     return out;
   }
 
+  //! \brief Does some rule active in \p mode_name match (positive length) at \p offset in \p source?
+  //!        The recovery reference's resync stop test — the smallest such offset ends an error run.
+  //!        Independent of the lexer (brute-force over the rules, no dispatch).
+  inline bool reference_matches_here(const std::vector<scilex::rule>& rules,
+                                     const std::string&               mode_name,
+                                     std::string_view                 source,
+                                     std::size_t                      offset)
+  {
+    const std::string_view rest {source.substr(offset)};
+    for (const scilex::rule& candidate : rules) {
+      if (!rule_active_in(candidate, mode_name)) {
+        continue;
+      }
+      const auto matched {candidate.pattern.match(rest)};
+      if (matched && static_cast<std::size_t>(matched.end()) > 0) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  //! \brief Tokenizes \p source by the SciLex spec **with error recovery** (\ref
+  //!        scilex::error_policy::token), brute-force and independent of the lexer. Encodes the full
+  //!        policy: a no-match run (#1) becomes one \ref scilex::error token holding the exact
+  //!        offending bytes, recovered at the smallest later position where an active rule matches
+  //!        (>0), staying in the current mode (no transition); a zero-length win (#4) and a pop at the
+  //!        root (#2) stay fatal (thrown); input ending inside a pushed mode (#3) yields one zero-width
+  //!        error token at the EOF, then unwinds to the root. Never throws on #1/#3.
+  //!
+  //! \param[out] modes_out When non-null, receives the mode name each emitted token was lexed in.
+  //! \throws scilex::lex_error on #4 (zero-length) or #2 (pop at the root) — the fatal cases.
+  inline std::vector<scilex::token> reference_tokenize_recover(const std::vector<scilex::rule>& rules,
+                                                               std::string_view                 source,
+                                                               bool                             emit_skipped = false,
+                                                               std::vector<std::string>*        modes_out    = nullptr)
+  {
+    std::vector<scilex::rule> local {rules};
+    const mode_map            modes {derive_modes(local)};
+    for (scilex::rule& candidate : local) {
+      if (candidate.action && candidate.action->operation != scilex::mode_action::op::pop) {
+        candidate.action->target_id = modes.ids.at(candidate.action->target);
+      }
+    }
+    std::vector<scilex::token> out;
+    scilex::position           cursor {0, 1, 1};
+    std::vector<scilex::frame> stack  {scilex::frame {.mode_id = 0, .entry_pos = cursor}};
+    const auto                 emit   {[&](const scilex::token& tok, const std::string& mode_name) {
+                                         out.push_back(tok);
+                                         if (modes_out != nullptr) {
+                                           modes_out->push_back(mode_name);
+                                         }
+                                       }};
+    const auto                 step   {[&source](scilex::position& at) {
+                                         if (source[at.offset] == '\n') {
+                                           ++at.line;
+                                           at.column = 1;
+                                         }
+                                         else {
+                                           ++at.column;
+                                         }
+                                         ++at.offset;
+                                       }};
+    while (cursor.offset < source.size()) {
+      const std::string_view rest      {source.substr(cursor.offset)};
+      const std::string&     mode_name {modes.names[stack.back().mode_id]};
+      std::size_t            best_len  {0};
+      const scilex::rule*    best      {nullptr};
+      bool                   any       {false}; // some rule matched, possibly empty
+      for (const scilex::rule& candidate : local) {
+        if (!rule_active_in(candidate, mode_name)) {
+          continue;
+        }
+        const auto matched {candidate.pattern.match(rest)};
+        if (matched) {
+          any = true;
+          const std::size_t len {static_cast<std::size_t>(matched.end())};
+          if (len > best_len) {
+            best_len = len;
+            best     = &candidate;
+          }
+        }
+      }
+      if (best_len == 0) {
+        if (any) {
+          throw scilex::lex_error("zero-length match in the current mode", cursor); // #4, fatal
+        }
+        // #1 recovery: accumulate the maximal unmatched byte run into one error token.
+        const scilex::position err_start {cursor};
+        step(cursor); // the byte at err_start is unmatched by definition
+        while (cursor.offset < source.size()
+               && !reference_matches_here(local, mode_name, source, cursor.offset)) {
+          step(cursor);
+        }
+        emit(scilex::token {scilex::error, source.substr(err_start.offset, cursor.offset - err_start.offset),
+                            err_start, stack.back().mode_id},
+             mode_name);
+        continue; // stay in the mode, no transition
+      }
+      const scilex::position start {cursor};
+      for (std::size_t i {0}; i < best_len; ++i) {
+        step(cursor);
+      }
+      if (emit_skipped || !best->skip) {
+        emit(scilex::token {best->kind, source.substr(start.offset, best_len), start, stack.back().mode_id},
+             mode_name);
+      }
+      scilex::apply_transition(*best, start, stack); // #2 (pop at the root) stays fatal here
+    }
+    if (stack.size() > 1) {
+      // #3 recovery: one zero-width error at the EOF, then unwind to the root.
+      emit(scilex::token {scilex::error, source.substr(cursor.offset, 0), cursor, stack.back().mode_id},
+           modes.names[stack.back().mode_id]);
+      stack.resize(1);
+    }
+    return out;
+  }
+
   //! \brief Two token streams are equal iff every kind, lexeme, and position match.
   inline bool tokens_equal(const std::vector<scilex::token>& a,
                            const std::vector<scilex::token>& b)
@@ -207,7 +324,7 @@ namespace scilex::fuzz {
 
   //! \brief Runs every applicable property invariant for one (grammar, input).
   //!
-  //! Invariants (see the fiche): 3 total coverage, 4 maximal munch (independent),
+  //! Invariants: 3 total coverage, 4 maximal munch (independent),
   //! 5 lazy == eager, 6 layout balance (when \p has_layout), 7 positioned error,
   //! 8 determinism. (1 no-crash / 2 termination are the harness's job — sanitizers
   //! and a bound.) The reference-vs-lexer equivalence is the spine of 3-4.
@@ -343,6 +460,81 @@ namespace scilex::fuzz {
       if (depth != 0) {
         return {false, "layout: unbalanced INDENT/DEDENT (depth ends non-zero)"};
       }
+    }
+    return {true, nullptr};
+  }
+
+  //! \brief Runs the error-recovery invariants for one (grammar, input): the recovery reference must
+  //!        equal the \ref scilex::error_policy::token lexer on everything — the error-run lexemes, the
+  //!        positions, lazy == eager (so the DFA and Pike scan paths agree on the ERROR tokens), full
+  //!        coverage, and the fatal cases (#4/#2) throwing together. A dense adversarial corpus is the
+  //!        nominal input here.
+  //!
+  //! \param[in] rules     The grammar's rule list (for the independent recovery reference).
+  //! \param[in] token_lex The lexer built with \ref scilex::error_policy::token (same grammar).
+  //! \param[in] input     The text to tokenize (adversarial or benign).
+  inline result check_recover(const std::vector<scilex::rule>& rules,
+                              const scilex::lexer&             token_lex,
+                              std::string_view                 input)
+  {
+    bool                       reference_threw {false};
+    std::size_t                reference_pos   {0};
+    std::vector<scilex::token> reference;
+    try {
+      reference = reference_tokenize_recover(rules, input);
+    }
+    catch (const scilex::lex_error& error) {
+      reference_threw = true;
+      reference_pos   = error.where().offset;
+    }
+
+    bool                       lexer_threw {false};
+    std::size_t                lexer_pos   {0};
+    std::vector<scilex::token> eager;
+    try {
+      eager = token_lex.tokenize(input);
+    }
+    catch (const scilex::lex_error& error) {
+      lexer_threw = true;
+      lexer_pos   = error.where().offset;
+    }
+
+    if (reference_threw != lexer_threw) {
+      return {false, "recovery: reference and token lexer disagree on whether a fatal error fires"};
+    }
+    if (lexer_threw) {
+      if (reference_pos != lexer_pos) {
+        return {false, "recovery: reference and token lexer disagree on the fatal error position"};
+      }
+      return {true, nullptr}; // both hit the same fatal (#4/#2) — agreement
+    }
+    if (!tokens_equal(reference, eager)) {
+      return {false, "recovery: reference != token lexer (error run, kind, or position divergence)"};
+    }
+
+    // lazy scan == eager tokenize under recovery — the DFA and Pike scan paths must agree on ERRORs.
+    std::vector<scilex::token> lazy;
+    for (const scilex::token& tok : token_lex.scan(input)) {
+      lazy.push_back(tok);
+    }
+    if (!tokens_equal(lazy, eager)) {
+      return {false, "recovery: lazy scan != eager tokenize"};
+    }
+    if (!tokens_equal(token_lex.tokenize(input), eager)) {
+      return {false, "recovery: token tokenize is not deterministic"};
+    }
+
+    // Total coverage: every byte consumed exactly once, contiguously (error runs and skips included).
+    const std::vector<scilex::token> all     {reference_tokenize_recover(rules, input, true)};
+    std::size_t                      covered {0};
+    for (const scilex::token& tok : all) {
+      if (tok.start.offset != covered) {
+        return {false, "recovery coverage: a gap or overlap between consumed spans"};
+      }
+      covered += tok.lexeme.size();
+    }
+    if (covered != input.size()) {
+      return {false, "recovery coverage: the input was not fully consumed"};
     }
     return {true, nullptr};
   }

@@ -8,6 +8,7 @@ END_OF_INPUT: int
 NEWLINE: int
 INDENT: int
 DEDENT: int
+ERROR: int
 
 class error(Exception):
     # Attributes attached by the lexing paths (see _attach_position):
@@ -60,7 +61,7 @@ class Token:
     def __hash__(self) -> int: ...
 
 class Lexer:
-    def __init__(self, rules: Iterable[_Rule], insignificant_modes: Iterable[str] = ...) -> None: ...
+    def __init__(self, rules: Iterable[_Rule], insignificant_modes: Iterable[str] = ..., dfa_modes: Iterable[str] = ..., errors: str = ...) -> None: ...
     @property
     def rules(self) -> list[_NormRule]: ...
     @property

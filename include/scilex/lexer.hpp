@@ -182,6 +182,21 @@ namespace scilex {
   }
 
   /*!
+   * \brief What a lexer does when it reaches a byte that no rule in the active mode can begin.
+   *
+   * The default preserves the historical behaviour exactly; \ref token is opt-in recovery.
+   */
+  enum class error_policy
+  {
+    raise, //!< Throw a \ref lex_error at the first unmatched byte (the default).
+    //! Recover: emit the maximal unmatched byte run as one \ref scilex::error token and resume. The
+    //! cost of an error run is the grammar's no-match cost: a first-byte pre-filter skips positions no
+    //! rule can begin (usually O(1) per byte), so an unanchored, greedy rule that scans far before
+    //! failing is what makes recovery expensive on a long run — prefer a definite leading byte.
+    token,
+  };
+
+  /*!
    * \brief A lexer built from an ordered list of rules.
    *
    * Order matters only as a tie-breaker between rules whose matches have equal
@@ -205,14 +220,19 @@ namespace scilex {
      *            be a DFA (a zero-width assertion) or whose DFA fails the build-time
      *            audit (a lazy quantifier) silently stays on Pike — see
      *            \ref dfa_modes_active. The token stream is identical either way.
+     * \param[in] errors What to do at a byte no rule can lex: \ref error_policy::raise (the default —
+     *            throw) or \ref error_policy::token (recover, emitting an \ref scilex::error token). The
+     *            recovery path never throws per byte; the token stream under \c raise is unchanged.
      * \throws std::invalid_argument If a transition rule is malformed (empty
      *         pattern or target), or \p insignificant_modes / \p dfa_modes names an
      *         unknown mode.
      */
     explicit lexer(std::vector<rule>               rules,
                    std::unordered_set<std::string> insignificant_modes = {},
-                   std::unordered_set<std::string> dfa_modes           = {})
-      : rules_(std::move(rules))
+                   std::unordered_set<std::string> dfa_modes           = {},
+                   error_policy                    errors              = error_policy::raise)
+      : rules_(std::move(rules)),
+        errors_(errors)
     {
       build_dispatch();
       build_significance(insignificant_modes);
@@ -338,56 +358,43 @@ namespace scilex {
                    token&              out) const
     {
       while (cursor.offset < source.size()) {
-        const std::string_view rest     {source.substr(cursor.offset)};
-        const std::size_t      mode     {stack.back().mode_id};
-        std::size_t            best_len {0};
-        std::size_t            best_idx {0};
-        bool                   have     {false};
+        const std::string_view rest {source.substr(cursor.offset)};
+        const std::size_t      mode {stack.back().mode_id};
+        const munch_result     m    {munch_at(mode, rest, static_cast<unsigned char>(source[cursor.offset]))};
 
-        // Accelerated path: if this mode has an adopted DFA, one pass recognizes the
-        // winning rule (maximal munch, with the order tie-break baked into the accept
-        // tags), mapping the DFA's local rule index back to the global rules_ index.
-        // Otherwise the per-rule Pike + first-byte-dispatch munch (shared with the audit).
-        if (per_mode_dfa_[mode]) {
-          if (const std::optional<real::dfa_match> matched {per_mode_dfa_[mode]->dfa.match(rest)}) {
-            best_idx = per_mode_dfa_[mode]->to_global[matched->rule_index];
-            best_len = matched->length;
-            have     = true;
+        if (!m.have) {
+          if (errors_ == error_policy::raise) {
+            throw lex_error("no rule matches in mode '" + mode_names_[mode] + "' (entered at "
+                            + position_label(stack.back().entry_pos) + ")", cursor); // #1
           }
+          // Recovery (error_policy::token): accumulate the maximal run of bytes that no rule in this
+          // mode can begin into ONE reserved-kind error token, then resume — no throw, no transition
+          // (the run stays in its mode). The run ends at the first position where a rule matches (>0);
+          // may_start is an O(1) first-byte pre-filter that skips the bulk of the noise without a full
+          // match attempt. The lexeme is the exact offending bytes.
+          const position err_start {cursor};
+          advance(source, cursor, 1); // the byte at err_start is unmatched by definition
+          while (cursor.offset < source.size()
+                 && !starts_a_match(mode, source, cursor.offset)) {
+            advance(source, cursor, 1);
+          }
+          out = token {scilex::error, source.substr(err_start.offset, cursor.offset - err_start.offset),
+                       err_start, mode};
+          return true;
         }
-        else {
-          const munch_result munched {
-            pike_munch_in_mode(mode, rest, static_cast<unsigned char>(source[cursor.offset]))};
-          have     = munched.have;
-          best_idx = munched.idx;
-          best_len = munched.len;
-        }
-
-        if (!have) {
-          throw lex_error("no rule matches in mode '" + mode_names_[mode] + "' (entered at "
-                          + position_label(stack.back().entry_pos) + ")", cursor); // #1
-        }
-        if (best_len == 0) {
-          // A rule won with a zero-length match (a nullable rule and no longer match at
-          // this position). Advancing by 0 would spin forever, so report it as a lexical
-          // error instead — the shared advance point, so both the Pike and DFA paths are
-          // covered. A nullable rule that matches >0 is unaffected (maximal munch keeps it).
+        if (m.len == 0) {
+          // A rule won with a zero-length match (a nullable rule and no longer match at this
+          // position). Advancing by 0 would spin forever, so report it as a lexical error — fatal
+          // under either policy (recovery cannot make progress here). The shared advance point, so
+          // both the Pike and DFA paths are covered.
           throw lex_error("zero-length match in mode '" + mode_names_[mode]
                           + "' (rule never advances)", cursor); // #4
         }
 
-        const position start {cursor};
-        // Advance the line/column tracker across the consumed bytes.
-        for (std::size_t i {0}; i < best_len; ++i) {
-          if (source[cursor.offset + i] == '\n') {
-            ++cursor.line;
-            cursor.column = 1;
-          }
-          else {
-            ++cursor.column;
-          }
-        }
-        cursor.offset += best_len;
+        const std::size_t best_idx {m.idx};
+        const std::size_t best_len {m.len};
+        const position    start    {cursor};
+        advance(source, cursor, best_len);
 
         apply_transition(rules_[best_idx], start, stack); // advances, then transitions (#2 on a bad pop)
 
@@ -400,8 +407,16 @@ namespace scilex {
         // Skip rule: keep scanning for the next emitted token (possibly in a new mode).
       }
       if (stack.size() > 1) {
-        throw lex_error("unterminated mode '" + mode_names_[stack.back().mode_id] + "' (entered at "
-                        + position_label(stack.back().entry_pos) + ")", stack.back().entry_pos); // #3
+        if (errors_ == error_policy::raise) {
+          throw lex_error("unterminated mode '" + mode_names_[stack.back().mode_id] + "' (entered at "
+                          + position_label(stack.back().entry_pos) + ")", stack.back().entry_pos); // #3
+        }
+        // Recovery (error_policy::token): a mode was still pushed at end of input. Emit one zero-width
+        // error token positioned at the EOF (the partial tokens already emitted stay), then unwind to
+        // the root so the next call reports a clean end of input.
+        out = token {scilex::error, source.substr(cursor.offset, 0), cursor, stack.back().mode_id};
+        stack.resize(1);
+        return true;
       }
       return false;
     }
@@ -546,6 +561,72 @@ namespace scilex {
       std::size_t idx  {0};
       std::size_t len  {0};
     };
+
+    //! \brief The winning munch in \p mode at the start of \p rest (\p lead is rest's first byte),
+    //!        dispatching to the mode's DFA when it has one, else the Pike + first-byte munch. The
+    //!        single match primitive both the forward scan and the error-recovery probe call, so the
+    //!        two never diverge on which rule wins.
+    munch_result munch_at(std::size_t      mode,
+                          std::string_view rest,
+                          unsigned char    lead) const
+    {
+      if (per_mode_dfa_[mode]) {
+        if (const std::optional<real::dfa_match> matched {per_mode_dfa_[mode]->dfa.match(rest)}) {
+          return munch_result {.have = true, .idx = per_mode_dfa_[mode]->to_global[matched->rule_index],
+                               .len = matched->length};
+        }
+        return munch_result {};
+      }
+      return pike_munch_in_mode(mode, rest, lead);
+    }
+
+    //! \brief O(1) pre-filter for error recovery: can a fixed-lead rule in \p mode begin with \p byte?
+    //!        A false is conclusive (no rule can match, so the byte is error text); a true still needs a
+    //!        full \ref munch_at to confirm a real match. This is what skips the bulk of noise cheaply.
+    //!
+    //! Only the first-byte buckets are consulted, not the mode's general (nullable) rules: a nullable
+    //! rule matches the empty string at every position, so a mode that had one could never reach the
+    //! no-match case (#1) that starts a recovery run — it would report a zero-length error (#4) at the
+    //! very first byte instead. So during recovery the active mode provably has no general rule.
+    bool may_start(std::size_t   mode,
+                   unsigned char byte) const
+    {
+      return !per_mode_[mode].first_byte_index[byte].empty();
+    }
+
+    //! \brief Does a rule in \p mode match at \p offset in \p source? The error-recovery loop's stop
+    //!        test — the smallest such offset ends an error run. Since recovery never runs in a mode
+    //!        with a nullable rule (see \ref may_start), any match here has positive length, so
+    //!        `have` alone is the stop condition (a zero-length win is impossible in this context).
+    bool starts_a_match(std::size_t      mode,
+                        std::string_view source,
+                        std::size_t      offset) const
+    {
+      const unsigned char lead {static_cast<unsigned char>(source[offset])};
+      if (!may_start(mode, lead)) {
+        return false;
+      }
+      return munch_at(mode, source.substr(offset), lead).have;
+    }
+
+    //! \brief Advances \p cursor by \p n bytes of \p source, maintaining the 1-based line/column
+    //!        tracker (a newline resets the column). The shared advance point for a matched token, a
+    //!        recovery step, and the error-run scan.
+    static void advance(std::string_view source,
+                        position&        cursor,
+                        std::size_t      n)
+    {
+      for (std::size_t i {0}; i < n; ++i) {
+        if (source[cursor.offset] == '\n') {
+          ++cursor.line;
+          cursor.column = 1;
+        }
+        else {
+          ++cursor.column;
+        }
+        ++cursor.offset;
+      }
+    }
 
     //! \brief The per-rule Pike + first-byte-dispatch munch in \p mode at the start of
     //!        \p rest (\p lead is rest's first byte). Zero allocation; shared by
@@ -745,7 +826,7 @@ namespace scilex {
       }
     }
 
-    //! \brief Per-mode dispatch index: the ⑤ first-byte buckets scoped to one mode.
+    //! \brief Per-mode dispatch index: the first-byte buckets scoped to one mode.
     struct dispatch
     {
       std::array<std::vector<std::size_t>, 256> first_byte_index; //!< Rule indices by leading byte.
@@ -753,6 +834,7 @@ namespace scilex {
     };
 
     std::vector<rule>                            rules_;            //!< The ordered token rules.
+    error_policy                                 errors_;           //!< What to do at an unmatched byte.
     std::vector<std::string>                     mode_names_;       //!< Mode id -> name ("default" is id 0).
     std::map<std::string, std::size_t>           mode_id_;          //!< Mode name -> id.
     std::vector<dispatch>                        per_mode_;         //!< Dispatch index, one per mode (by id).

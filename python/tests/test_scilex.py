@@ -646,5 +646,44 @@ class BindingErrorMessageTests(unittest.TestCase):
         self.assertIn("dfa_modes must be a sequence", str(caught.exception))
 
 
+class ErrorRecoveryTests(unittest.TestCase):
+    """errors="token": a run of unlexable bytes becomes one ERROR token, not an exception."""
+
+    @staticmethod
+    def _word_lexer(errors="raise"):
+        return scilex.Lexer([(1, "[a-z]+"), (2, r"\s+", True)], errors=errors)
+
+    def test_default_is_raise_unchanged(self):
+        with self.assertRaises(scilex.error):
+            self._word_lexer().tokenize("ab @# cd")
+
+    def test_token_policy_emits_one_error_token_per_run(self):
+        toks = self._word_lexer("token").tokenize("ab @# cd")
+        self.assertEqual([t.kind for t in toks], [1, scilex.ERROR, 1])
+        self.assertEqual(toks[1].lexeme, "@#")
+        self.assertEqual(toks[1].position.offset, 3)
+
+    def test_error_lexeme_is_exact_bytes(self):
+        toks = self._word_lexer("token").tokenize("ab\x01\x02cd")
+        self.assertEqual(toks[1].kind, scilex.ERROR)
+        self.assertEqual(toks[1].lexeme, "\x01\x02")
+
+    def test_eof_inside_a_pushed_mode_yields_zero_width_error(self):
+        rules = [
+            (1, "[a-z]+"),
+            (2, r"\s+", True),
+            (3, '"', False, (), ("push", "str")),
+            (4, "[a-z]+", False, ("str",)),
+            (5, '"', False, ("str",), ("pop",)),
+        ]
+        toks = scilex.Lexer(rules, errors="token").tokenize('"ab')
+        self.assertEqual(toks[-1].kind, scilex.ERROR)
+        self.assertEqual(toks[-1].lexeme, "")
+
+    def test_invalid_errors_value_rejected(self):
+        with self.assertRaises(ValueError):
+            scilex.Lexer([(1, "a")], errors="skip")
+
+
 if __name__ == "__main__":
     unittest.main()

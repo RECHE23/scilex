@@ -226,6 +226,15 @@ namespace {
       std::fprintf(stderr, "oracle violation [%s]: %s\n", label, outcome.invariant);
       std::abort();
     }
+    // Error recovery: the token lexer must equal the recovery reference on the same input (the
+    // continuous counterpart of fuzz-check's token pass). dfa_modes = {"default"} exercises both scan
+    // paths' ERROR handling.
+    const scilex::lexer        token_lex {rules, {}, {"default"}, scilex::error_policy::token};
+    const scilex::fuzz::result recovered {scilex::fuzz::check_recover(rules, token_lex, input)};
+    if (!recovered.ok) {
+      std::fprintf(stderr, "oracle violation [%s token]: %s\n", label, recovered.invariant);
+      std::abort();
+    }
   }
 } // namespace
 
