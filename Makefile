@@ -174,8 +174,12 @@ format:
 # Build against $(REAL_INCLUDE) (the sibling by default) via SCILEX_REAL_INCLUDE, so
 # local co-development uses the current REAL headers — not a stale installed package.
 # A wheel/pip build (no env set) resolves REAL through setup.py instead.
+# --force: the extension depends on REAL's *headers*, which setuptools does not track, so a bump of
+# the pinned real (or an edit to a sibling checkout) must not leave a stale .so behind — that would
+# silently run old semantics and false-pass the tests (the stale-REAL guard in tests/_realpin.py is
+# the second net). Always rebuild.
 python:
-	SCIFORGE_INCLUDE=$(SCIFORGE_INCLUDE) SCILEX_REAL_INCLUDE=$(REAL_INCLUDE) $(PYTHON) setup.py -q build_ext --inplace
+	SCIFORGE_INCLUDE=$(SCIFORGE_INCLUDE) SCILEX_REAL_INCLUDE=$(REAL_INCLUDE) $(PYTHON) setup.py -q build_ext --inplace --force
 
 python-test: python
 	$(PYRUN) -m unittest discover -s python/tests

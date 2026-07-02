@@ -5,10 +5,12 @@ import unittest
 
 import scilex
 
+from _realpin import assert_real_pinned
+
 
 def sql_rules():
     return [
-        (0, r"\s+", True),                      # whitespace, skipped
+        (0, r"(?a)\s+", True),                      # whitespace, skipped
         (1, r"select", False),                  # keyword
         (2, r"from", False),                    # keyword
         (3, r"[A-Za-z_][A-Za-z0-9_]*", False),  # identifier (overlaps keywords)
@@ -22,6 +24,9 @@ def fields(tokens):
 
 
 class DfaModesTests(unittest.TestCase):
+    def setUp(self):
+        assert_real_pinned(self)  # a stale REAL would silently demote these DFA modes
+
     def test_default_mode_is_accelerated(self):
         lex = scilex.Lexer(sql_rules(), dfa_modes=("default",))
         self.assertIn("default", lex.dfa_modes_active)
@@ -39,14 +44,14 @@ class DfaModesTests(unittest.TestCase):
             scilex.Lexer(sql_rules(), dfa_modes=("nonexistent",))
 
     def test_assertion_rule_falls_back_to_pike(self):
-        rules = [(0, r"\s+", True), (1, r"end$", False), (2, r"[a-z]+", False)]
+        rules = [(0, r"(?a)\s+", True), (1, r"end$", False), (2, r"[a-z]+", False)]
         lex = scilex.Lexer(rules, dfa_modes=("default",))
         self.assertNotIn("default", lex.dfa_modes_active)  # real::dfa_error -> Pike
         off = scilex.Lexer(rules)
         self.assertEqual(fields(off.tokenize("foo end")), fields(lex.tokenize("foo end")))
 
     def test_lazy_rule_falls_back_to_pike(self):
-        rules = [(0, r"\s+", True), (1, r'(?s)""".*?"""', False), (2, r"[a-z]+", False)]
+        rules = [(0, r"(?a)\s+", True), (1, r'(?s)""".*?"""', False), (2, r"[a-z]+", False)]
         lex = scilex.Lexer(rules, dfa_modes=("default",))
         self.assertNotIn("default", lex.dfa_modes_active)  # audit divergence -> Pike
         off = scilex.Lexer(rules)

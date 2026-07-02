@@ -58,14 +58,18 @@ from scilex._scilex import (
     dfa_modes_active as _dfa_modes_active,
     error,
     layout as _layout,
+    real_version,
     scan_next as _scan_next,
     scan_start as _scan_start,
     tokenize as _tokenize,
 )
+# real_version() returns the REAL version this compiled extension was built against
+# (from real/version.hpp) -- compare it to the pinned real-regex version to detect a stale build.
 
 __all__ = [
     "Lexer", "Token", "Position", "Layout", "tokenize", "scan", "layout", "error",
     "LexerError", "END_OF_INPUT", "NEWLINE", "INDENT", "DEDENT", "get_include", "get_config",
+    "real_version",
 ]
 
 __version__ = "2026.6.9"

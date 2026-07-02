@@ -4,6 +4,8 @@ import unittest
 
 import scilex
 
+import _realpin  # noqa: F401 - stale-REAL guard runs at import
+
 
 def sample_lexer():
     return scilex.Lexer([

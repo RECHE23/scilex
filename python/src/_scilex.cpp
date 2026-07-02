@@ -594,6 +594,14 @@ PyObject* scilex_layout(PyObject* /*self*/, PyObject* args)
     return result;
 }
 
+// The REAL version this extension was COMPILED against (baked from real/version.hpp at build time).
+// Consumers assert it is at least the pinned version so a stale build/install fails loudly rather than
+// silently running old semantics (e.g. ASCII shorthands after REAL made them Unicode).
+PyObject* scilex_real_version(PyObject* /*self*/, PyObject* /*unused*/)
+{
+    return PyUnicode_FromString(REAL_VERSION_STRING);
+}
+
 } // namespace
 
 // The per-binding capsule caster (the documented pattern): extracts the owned lexer from
@@ -640,6 +648,10 @@ SCIFORGE_MODULE(_scilex, "scilex.error", m)
                              "dfa_modes_active(handle) -> list[str]\n"
                              "The mode names actually accelerated by a DFA (a requested mode that fell back\n"
                              "to Pike — an un-DFA-able assertion or a failed audit — is absent).");
+    m.raw("real_version", scilex_real_version, METH_NOARGS,
+          "real_version() -> str\n"
+          "The REAL version this compiled extension was built against (real/version.hpp), so a stale\n"
+          "build or install can be detected by comparing it to the pinned real-regex version.");
     m.raw("tokenize", scilex_tokenize, METH_VARARGS,
           "tokenize(handle, text, eof=False)\n"
           "Eagerly tokenize text with a compiled-lexer handle.\n\n"

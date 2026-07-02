@@ -6,6 +6,8 @@ import unittest
 
 import scilex
 
+import _realpin  # noqa: F401 - stale-REAL guard runs at import
+
 # Matches gil_release_collect_min_bytes in python/src/_scilex.cpp.
 _GIL_THRESHOLD = 4096
 
