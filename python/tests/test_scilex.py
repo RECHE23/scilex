@@ -685,5 +685,30 @@ class ErrorRecoveryTests(unittest.TestCase):
             scilex.Lexer([(1, "a")], errors="skip")
 
 
+class ColumnUnitTests(unittest.TestCase):
+    """columns="bytes"|"codepoints"|"utf16": the token stream is identical; only column changes."""
+
+    @staticmethod
+    def _lexer(columns):
+        return scilex.Lexer([(1, "[a-z]+"), (2, r"\s+", True), (3, ".")], columns=columns)
+
+    def test_default_is_bytes(self):
+        self.assertEqual(scilex.Lexer([(1, "[a-z]+")]).column_unit, "bytes")
+
+    def test_the_three_units_diverge_after_an_astral_codepoint(self):
+        text = "ab\U0001F600cd"  # ab<emoji>cd
+        self.assertEqual(self._lexer("bytes").tokenize(text)[-1].position.column, 7)       # 2 + 4 bytes
+        self.assertEqual(self._lexer("codepoints").tokenize(text)[-1].position.column, 4)  # 3 codepoints
+        self.assertEqual(self._lexer("utf16").tokenize(text)[-1].position.column, 5)       # emoji = 2
+
+    def test_column_unit_is_introspectable(self):
+        for unit in ("bytes", "codepoints", "utf16"):
+            self.assertEqual(self._lexer(unit).column_unit, unit)
+
+    def test_invalid_columns_value_rejected(self):
+        with self.assertRaises(ValueError):
+            scilex.Lexer([(1, "a")], columns="graphemes")
+
+
 if __name__ == "__main__":
     unittest.main()

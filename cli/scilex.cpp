@@ -107,6 +107,17 @@ namespace {
     }
   }
 
+  //! \brief The name of a lexer's column unit, for the output header.
+  const char* column_unit_name(scilex::column_unit unit)
+  {
+    switch (unit) {
+      case scilex::column_unit::codepoints: return "codepoints";
+      case scilex::column_unit::utf16:      return "utf16";
+      case scilex::column_unit::bytes:      break;
+    }
+    return "bytes";
+  }
+
   //! \brief Tokenizes \p source with \p lex and prints each token as
   //!        KIND<TAB>lexeme<TAB>line:col. \p name_of names ordinary kinds; layout
   //!        and EOF kinds are named directly. With \p layout, runs the indentation
@@ -116,6 +127,9 @@ namespace {
             const std::function<const char* (int)>& name_of,
             bool                                    layout)
   {
+    // Header: positions do not carry their column unit, so the tool declares it (KIND<TAB>lexeme<TAB>
+    // line:col, columns counted in the named unit).
+    std::cout << "# columns: " << column_unit_name(lex.columns()) << '\n';
     const auto print = [&](const scilex::token& tok) {
                          const char* const special {layout_name(tok.kind)};
                          std::cout << (special != nullptr ? special : name_of(tok.kind)) << '\t'
@@ -292,6 +306,7 @@ namespace {
         << "options:\n"
         << "  --layout                          emit indentation tokens (NEWLINE / INDENT / DEDENT)\n"
         << "  --errors=token                    recover from unlexable bytes (emit ERROR tokens; default: raise)\n"
+        << "  --columns=bytes|codepoints|utf16  unit for token columns (default: bytes)\n"
         << "grammar file: one rule per line   name<TAB>regex[<TAB>skip]   ('#' comments, blank lines ok)\n"
         << "output: one token per line        KIND<TAB>lexeme<TAB>line:col\n";
   }
@@ -299,7 +314,8 @@ namespace {
   //! \brief Lexes with a built-in grammar (`--example <lang> [file|-]`).
   int run_example(const std::vector<std::string_view>& args,
                   bool                                 layout,
-                  scilex::error_policy                 errors)
+                  scilex::error_policy                 errors,
+                  scilex::column_unit                  columns)
   {
     if (args.size() < 2) {
       std::cerr << "scilex --example needs a language (try --list)\n";
@@ -310,11 +326,11 @@ namespace {
       std::cerr << "unknown example grammar: " << args[1] << " (try --list)\n";
       return 2;
     }
-    // Under recovery, rebuild from the rule list with the token policy; otherwise the grammar's own
-    // lexer (with its dfa/layout config) is used unchanged.
-    const scilex::lexer lex {errors == scilex::error_policy::token
-                             ? scilex::lexer {lang->make_rules(), {}, {}, errors}
-                             : lang->make_lexer()};
+    // With a non-default error or column policy, rebuild from the rule list with it; otherwise the
+    // grammar's own lexer (with its dfa/layout config) is used unchanged.
+    const bool          plain  {errors == scilex::error_policy::raise && columns == scilex::column_unit::bytes};
+    const scilex::lexer lex    {plain ? lang->make_lexer()
+                             : scilex::lexer {lang->make_rules(), {}, {}, errors, columns}};
     const std::string   source {args.size() >= 3 ? read_input(args[2]) : std::string {lang->sample}};
     dump(lex, source, [lang](int kind) {
            return lang->kind_name(kind);
@@ -325,11 +341,12 @@ namespace {
   //! \brief Lexes with a user grammar file (`<grammar.lex> [file|-]`).
   int run_grammar(const std::vector<std::string_view>& args,
                   bool                                 layout,
-                  scilex::error_policy                 errors)
+                  scilex::error_policy                 errors,
+                  scilex::column_unit                  columns)
   {
     grammar                        parsed {parse_grammar(std::string {args[0]})};
     const std::vector<std::string> names  {std::move(parsed.names)};
-    const scilex::lexer            lex    {std::move(parsed.rules), {}, {}, errors};
+    const scilex::lexer            lex    {std::move(parsed.rules), {}, {}, errors, columns};
     const std::string              source {read_input(args.size() >= 2 ? args[1] : std::string_view {"-"})};
     dump(lex, source, [&names](int kind) {
            return (kind >= 0 && static_cast<std::size_t>(kind) < names.size())
@@ -344,8 +361,9 @@ int main(int    argc,
          char** argv)
 {
   std::vector<std::string_view> args;
-  bool                          layout {false};
-  scilex::error_policy          errors {scilex::error_policy::raise};
+  bool                          layout  {false};
+  scilex::error_policy          errors  {scilex::error_policy::raise};
+  scilex::column_unit           columns {scilex::column_unit::bytes};
   for (int i {1}; i < argc; ++i) {
     const std::string_view arg {argv[i]};
     if (arg == "--layout") {
@@ -356,6 +374,15 @@ int main(int    argc,
     }
     else if (arg == "--errors=raise") {
       errors = scilex::error_policy::raise;
+    }
+    else if (arg == "--columns=bytes") {
+      columns = scilex::column_unit::bytes;
+    }
+    else if (arg == "--columns=codepoints") {
+      columns = scilex::column_unit::codepoints;
+    }
+    else if (arg == "--columns=utf16") {
+      columns = scilex::column_unit::utf16;
     }
     else {
       args.push_back(arg);
@@ -379,9 +406,9 @@ int main(int    argc,
       return check();
     }
     if (command == "--example") {
-      return run_example(args, layout, errors);
+      return run_example(args, layout, errors, columns);
     }
-    return run_grammar(args, layout, errors);
+    return run_grammar(args, layout, errors, columns);
   }
   catch (const scilex::lex_error& error) {
     std::cerr << "lex error at " << error.where().line << ':' << error.where().column << '\n';

@@ -98,6 +98,77 @@ namespace scilex::fuzz {
     return false;
   }
 
+  //! \brief The byte length (1–4) of a valid UTF-8 codepoint at \p off, else 0 — the oracle's OWN
+  //!        decoder (a table on the lead's high bits, deliberately not the lexer's branch chain), so
+  //!        the two agree only if both are right on the boundary cases (overlong, surrogate, 0xF5+).
+  inline std::size_t ref_utf8_len(std::string_view s,
+                                  std::size_t      off)
+  {
+    const unsigned char lead {static_cast<unsigned char>(s[off])};
+    std::size_t         len  {0};
+    if (lead < 0x80U) {
+      return 1;
+    }
+    if (lead >= 0xC2U && lead <= 0xDFU) {
+      len = 2;
+    }
+    else if (lead >= 0xE0U && lead <= 0xEFU) {
+      len = 3;
+    }
+    else if (lead >= 0xF0U && lead <= 0xF4U) {
+      len = 4;
+    }
+    else {
+      return 0; // 0x80–0xC1 (continuation or overlong 2-byte lead) or 0xF5–0xFF
+    }
+    if (off + len > s.size()) {
+      return 0;
+    }
+    unsigned int cp {lead & (0x7FU >> len)};
+    for (std::size_t k {1}; k < len; ++k) {
+      const unsigned char cont {static_cast<unsigned char>(s[off + k])};
+      if (cont < 0x80U || cont > 0xBFU) {
+        return 0;
+      }
+      cp = (cp << 6U) | (cont & 0x3FU);
+    }
+    const bool overlong  {(len == 3 && cp < 0x800U) || (len == 4 && cp < 0x10000U)};
+    const bool surrogate {cp >= 0xD800U && cp <= 0xDFFFU};
+    return (overlong || surrogate || cp > 0x10FFFFU) ? 0 : len;
+  }
+
+  //! \brief The per-byte column weight of \p source under \p unit, by an independent FORWARD UTF-8
+  //!        walk (the lexer decides per byte by looking *back*; this decides once, scanning *forward* —
+  //!        so an off-by-one in either, e.g. an astral miscount, shows up as a disagreement).
+  //!
+  //! A valid codepoint's lead byte scores its unit weight (utf16: 2 for a 4-byte astral, else 1;
+  //! codepoints: 1) and its continuation bytes score 0; every malformed byte scores 1. \c bytes is a
+  //! flat 1. A newline is left at its weight and reset by the caller.
+  inline std::vector<std::size_t> column_weights(std::string_view       source,
+                                                 scilex::column_unit    unit)
+  {
+    std::vector<std::size_t> weight(source.size(), 1);
+    if (unit == scilex::column_unit::bytes) {
+      return weight; // every byte is one column
+    }
+    std::size_t i {0};
+    while (i < source.size()) {
+      const std::size_t len {ref_utf8_len(source, i)};
+      if (len == 0) {
+        weight[i] = 1; // a malformed byte stands alone
+        ++i;
+      }
+      else {
+        weight[i] = (unit == scilex::column_unit::utf16 && len == 4) ? 2 : 1;
+        for (std::size_t j {1}; j < len; ++j) {
+          weight[i + j] = 0; // continuations fold into their lead
+        }
+        i += len;
+      }
+    }
+    return weight;
+  }
+
   //! \brief Tokenizes \p source by the SciLex spec, brute-force (no dispatch).
   //!
   //! Mode-aware: keeps its own mode stack, considers only the rules active in the
@@ -117,8 +188,9 @@ namespace scilex::fuzz {
   //!         the root, via apply_transition), or #3 (input ends inside a mode).
   inline std::vector<scilex::token> reference_tokenize(const std::vector<scilex::rule>& rules,
                                                        std::string_view                 source,
-                                                       bool                             emit_skipped = false,
-                                                       std::vector<std::string>*        modes_out    = nullptr)
+                                                       bool                             emit_skipped  = false,
+                                                       std::vector<std::string>*        modes_out     = nullptr,
+                                                       scilex::column_unit              unit          = scilex::column_unit::bytes)
   {
     // A local copy with each transition's target id pre-resolved (independently, from
     // the oracle's own mode map), so the shared apply_transition reads the same field
@@ -130,9 +202,10 @@ namespace scilex::fuzz {
         candidate.action->target_id = modes.ids.at(candidate.action->target);
       }
     }
-    std::vector<scilex::token> out;
-    scilex::position           cursor {0, 1, 1};
-    std::vector<scilex::frame> stack  {scilex::frame {.mode_id = 0, .entry_pos = cursor}};
+    const std::vector<std::size_t> weight {column_weights(source, unit)};
+    std::vector<scilex::token>     out;
+    scilex::position               cursor {0, 1, 1};
+    std::vector<scilex::frame>     stack  {scilex::frame {.mode_id = 0, .entry_pos = cursor}};
     while (cursor.offset < source.size()) {
       const std::string_view rest      {source.substr(cursor.offset)};
       const std::string&     mode_name {modes.names[stack.back().mode_id]};
@@ -161,7 +234,7 @@ namespace scilex::fuzz {
           cursor.column = 1;
         }
         else {
-          ++cursor.column;
+          cursor.column += weight[cursor.offset + i];
         }
       }
       cursor.offset += best_len;
@@ -214,8 +287,9 @@ namespace scilex::fuzz {
   //! \throws scilex::lex_error on #4 (zero-length) or #2 (pop at the root) — the fatal cases.
   inline std::vector<scilex::token> reference_tokenize_recover(const std::vector<scilex::rule>& rules,
                                                                std::string_view                 source,
-                                                               bool                             emit_skipped = false,
-                                                               std::vector<std::string>*        modes_out    = nullptr)
+                                                               bool                             emit_skipped  = false,
+                                                               std::vector<std::string>*        modes_out     = nullptr,
+                                                               scilex::column_unit              unit          = scilex::column_unit::bytes)
   {
     std::vector<scilex::rule> local {rules};
     const mode_map            modes {derive_modes(local)};
@@ -224,25 +298,26 @@ namespace scilex::fuzz {
         candidate.action->target_id = modes.ids.at(candidate.action->target);
       }
     }
-    std::vector<scilex::token> out;
-    scilex::position           cursor {0, 1, 1};
-    std::vector<scilex::frame> stack  {scilex::frame {.mode_id = 0, .entry_pos = cursor}};
-    const auto                 emit   {[&](const scilex::token& tok, const std::string& mode_name) {
-                                         out.push_back(tok);
-                                         if (modes_out != nullptr) {
-                                           modes_out->push_back(mode_name);
-                                         }
-                                       }};
-    const auto                 step   {[&source](scilex::position& at) {
-                                         if (source[at.offset] == '\n') {
-                                           ++at.line;
-                                           at.column = 1;
-                                         }
-                                         else {
-                                           ++at.column;
-                                         }
-                                         ++at.offset;
-                                       }};
+    const std::vector<std::size_t> weight {column_weights(source, unit)};
+    std::vector<scilex::token>     out;
+    scilex::position               cursor {0, 1, 1};
+    std::vector<scilex::frame>     stack  {scilex::frame {.mode_id = 0, .entry_pos = cursor}};
+    const auto                     emit   {[&](const scilex::token& tok, const std::string& mode_name) {
+                                             out.push_back(tok);
+                                             if (modes_out != nullptr) {
+                                               modes_out->push_back(mode_name);
+                                             }
+                                           }};
+    const auto                     step   {[&source, &weight](scilex::position& at) {
+                                             if (source[at.offset] == '\n') {
+                                               ++at.line;
+                                               at.column = 1;
+                                             }
+                                             else {
+                                               at.column += weight[at.offset];
+                                             }
+                                             ++at.offset;
+                                           }};
     while (cursor.offset < source.size()) {
       const std::string_view rest      {source.substr(cursor.offset)};
       const std::string&     mode_name {modes.names[stack.back().mode_id]};
@@ -344,7 +419,7 @@ namespace scilex::fuzz {
     std::vector<scilex::token> reference;
     std::vector<std::string>   reference_modes; // the mode each reference token was lexed in
     try {
-      reference = reference_tokenize(rules, input, false, &reference_modes);
+      reference = reference_tokenize(rules, input, false, &reference_modes, lex.columns());
     }
     catch (const scilex::lex_error& error) {
       reference_threw = true;
@@ -393,7 +468,7 @@ namespace scilex::fuzz {
     }
 
     // --- #3 total coverage: every byte consumed exactly once, contiguously ---
-    const std::vector<scilex::token> all     {reference_tokenize(rules, input, true)};
+    const std::vector<scilex::token> all     {reference_tokenize(rules, input, true, nullptr, lex.columns())};
     std::size_t                      covered {0};
     for (const scilex::token& tok : all) {
       if (tok.start.offset != covered) {
@@ -481,7 +556,7 @@ namespace scilex::fuzz {
     std::size_t                reference_pos   {0};
     std::vector<scilex::token> reference;
     try {
-      reference = reference_tokenize_recover(rules, input);
+      reference = reference_tokenize_recover(rules, input, false, nullptr, token_lex.columns());
     }
     catch (const scilex::lex_error& error) {
       reference_threw = true;
@@ -525,7 +600,7 @@ namespace scilex::fuzz {
     }
 
     // Total coverage: every byte consumed exactly once, contiguously (error runs and skips included).
-    const std::vector<scilex::token> all     {reference_tokenize_recover(rules, input, true)};
+    const std::vector<scilex::token> all     {reference_tokenize_recover(rules, input, true, nullptr, token_lex.columns())};
     std::size_t                      covered {0};
     for (const scilex::token& tok : all) {
       if (tok.start.offset != covered) {

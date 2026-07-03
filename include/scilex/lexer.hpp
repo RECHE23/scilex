@@ -197,6 +197,24 @@ namespace scilex {
   };
 
   /*!
+   * \brief The unit a token's \ref position::column is counted in.
+   *
+   * The default \c bytes is the historical behaviour, bit-for-bit. \c codepoints counts Unicode
+   * scalar values (each valid UTF-8 codepoint is one column), and \c utf16 counts UTF-16 code units
+   * (a BMP codepoint is 1, an astral codepoint 2) — the unit an LSP client expects. A malformed byte
+   * (an orphan continuation, an overlong or out-of-range sequence) counts as one unit in every mode, so
+   * the column stays defined on the error runs \ref error_policy::token emits. The chosen unit is not
+   * carried on \ref position (one field, not self-describing) — the lexer declares it via
+   * \ref lexer::columns, a named trade-off rather than a silent default.
+   */
+  enum class column_unit
+  {
+    bytes,      //!< One column per byte (the default; column == byte offset within the line + 1).
+    codepoints, //!< One column per Unicode scalar value (a valid UTF-8 codepoint).
+    utf16,      //!< One column per UTF-16 code unit (BMP = 1, astral = 2) — the LSP unit.
+  };
+
+  /*!
    * \brief A lexer built from an ordered list of rules.
    *
    * Order matters only as a tie-breaker between rules whose matches have equal
@@ -223,6 +241,10 @@ namespace scilex {
      * \param[in] errors What to do at a byte no rule can lex: \ref error_policy::raise (the default —
      *            throw) or \ref error_policy::token (recover, emitting an \ref scilex::error token). The
      *            recovery path never throws per byte; the token stream under \c raise is unchanged.
+     * \param[in] columns The unit each token's \ref position::column is counted in:
+     *            \ref column_unit::bytes (the default, unchanged), \ref column_unit::codepoints, or
+     *            \ref column_unit::utf16. The unit is not stored on the position — read it back with
+     *            \ref columns().
      * \throws std::invalid_argument If a transition rule is malformed (empty
      *         pattern or target), or \p insignificant_modes / \p dfa_modes names an
      *         unknown mode.
@@ -230,13 +252,22 @@ namespace scilex {
     explicit lexer(std::vector<rule>               rules,
                    std::unordered_set<std::string> insignificant_modes = {},
                    std::unordered_set<std::string> dfa_modes           = {},
-                   error_policy                    errors              = error_policy::raise)
+                   error_policy                    errors              = error_policy::raise,
+                   column_unit                     columns             = column_unit::bytes)
       : rules_(std::move(rules)),
-        errors_(errors)
+        errors_(errors),
+        columns_(columns)
     {
       build_dispatch();
       build_significance(insignificant_modes);
       build_dfa_modes(dfa_modes);
+    }
+
+    //! \brief The unit this lexer counts \ref position::column in (positions do not carry it, so a
+    //!        consumer that needs to interpret a column reads the unit here).
+    [[nodiscard]] column_unit columns() const noexcept
+    {
+      return columns_;
     }
 
     /*!
@@ -612,9 +643,9 @@ namespace scilex {
     //! \brief Advances \p cursor by \p n bytes of \p source, maintaining the 1-based line/column
     //!        tracker (a newline resets the column). The shared advance point for a matched token, a
     //!        recovery step, and the error-run scan.
-    static void advance(std::string_view source,
-                        position&        cursor,
-                        std::size_t      n)
+    void advance(std::string_view source,
+                 position&        cursor,
+                 std::size_t      n) const
     {
       for (std::size_t i {0}; i < n; ++i) {
         if (source[cursor.offset] == '\n') {
@@ -622,10 +653,85 @@ namespace scilex {
           cursor.column = 1;
         }
         else {
-          ++cursor.column;
+          cursor.column += column_step(source, cursor.offset, columns_);
         }
         ++cursor.offset;
       }
+    }
+
+    //! \brief The length (1–4) of a valid UTF-8 codepoint starting at \p off in \p s, or 0 when the
+    //!        byte there is not a valid lead — a continuation byte, a truncated/over­long/surrogate/
+    //!        out-of-range sequence, or an invalid lead. The column stepper's UTF-8 validator.
+    static std::size_t valid_utf8_len(std::string_view s,
+                                      std::size_t      off)
+    {
+      const unsigned char b0  {static_cast<unsigned char>(s[off])};
+      std::size_t         len {0};
+      unsigned int        cp  {0};
+      if (b0 < 0x80U) {
+        return 1; // ASCII
+      }
+      if ((b0 & 0xE0U) == 0xC0U) {
+        len = 2;
+        cp  = b0 & 0x1FU;
+      }
+      else if ((b0 & 0xF0U) == 0xE0U) {
+        len = 3;
+        cp  = b0 & 0x0FU;
+      }
+      else if ((b0 & 0xF8U) == 0xF0U) {
+        len = 4;
+        cp  = b0 & 0x07U;
+      }
+      else {
+        return 0; // a continuation byte (0x80–0xBF) or an invalid lead (0xF8–0xFF)
+      }
+      if (off + len > s.size()) {
+        return 0; // truncated
+      }
+      for (std::size_t i {1}; i < len; ++i) {
+        const unsigned char bi {static_cast<unsigned char>(s[off + i])};
+        if ((bi & 0xC0U) != 0x80U) {
+          return 0; // a missing continuation
+        }
+        cp = (cp << 6U) | (bi & 0x3FU);
+      }
+      static constexpr unsigned int min_for_len[5] {0, 0, 0x80U, 0x800U, 0x10000U};
+      if (cp < min_for_len[len] || (cp >= 0xD800U && cp <= 0xDFFFU) || cp > 0x10FFFFU) {
+        return 0; // overlong, a UTF-16 surrogate, or beyond U+10FFFF
+      }
+      return len;
+    }
+
+    //! \brief How much the column advances when the byte at \p off in \p source is consumed, under
+    //!        \p unit. \c bytes is always 1 (so the byte mode is the historical column == byte offset).
+    //!        \c codepoints counts one per valid codepoint (its lead scores 1, its continuations 0);
+    //!        \c utf16 scores 2 for an astral (4-byte) codepoint, 1 otherwise. A malformed byte —
+    //!        including an orphan continuation — scores 1 in every unit, so the column stays defined
+    //!        across the error runs recovery emits.
+    static std::size_t column_step(std::string_view        source,
+                                   std::size_t             off,
+                                   scilex::column_unit     unit)
+    {
+      if (unit == scilex::column_unit::bytes) {
+        return 1;
+      }
+      const unsigned char byte {static_cast<unsigned char>(source[off])};
+      if ((byte & 0xC0U) == 0x80U) { // a continuation byte
+        // Score 0 only if it belongs to a valid codepoint whose lead is 1–3 bytes back; an orphan
+        // continuation is malformed and scores 1. (A codepoint never spans a newline, so this
+        // fixed look-back cannot cross a line boundary in a way that matters.)
+        for (std::size_t back {1}; back <= 3 && back <= off; ++back) {
+          if (valid_utf8_len(source, off - back) > back) {
+            return 0;
+          }
+        }
+        return 1;
+      }
+      if (unit == scilex::column_unit::utf16) {
+        return valid_utf8_len(source, off) == 4 ? 2 : 1; // an astral codepoint is a surrogate pair
+      }
+      return 1; // codepoints: an ASCII byte or a lead (its continuations already scored 0)
     }
 
     //! \brief The per-rule Pike + first-byte-dispatch munch in \p mode at the start of
@@ -835,6 +941,7 @@ namespace scilex {
 
     std::vector<rule>                            rules_;            //!< The ordered token rules.
     error_policy                                 errors_;           //!< What to do at an unmatched byte.
+    scilex::column_unit                          columns_;          //!< The unit position::column is counted in.
     std::vector<std::string>                     mode_names_;       //!< Mode id -> name ("default" is id 0).
     std::map<std::string, std::size_t>           mode_id_;          //!< Mode name -> id.
     std::vector<dispatch>                        per_mode_;         //!< Dispatch index, one per mode (by id).

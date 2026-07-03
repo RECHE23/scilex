@@ -277,7 +277,8 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
     PyObject*   rules_obj     = nullptr;
     PyObject*   dfa_modes_obj  = nullptr; // optional sequence of mode names (borrowed)
     const char* errors_str     = nullptr; // optional "raise" (default) or "token"
-    if (PyArg_ParseTuple(args, "O|Oz", &rules_obj, &dfa_modes_obj, &errors_str) == 0) {
+    const char* columns_str    = nullptr; // optional "bytes" (default) / "codepoints" / "utf16"
+    if (PyArg_ParseTuple(args, "O|Ozz", &rules_obj, &dfa_modes_obj, &errors_str, &columns_str) == 0) {
         return nullptr;
     }
     std::vector<std::string> dfa_modes;
@@ -292,6 +293,21 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
         }
         else if (name != "raise") {
             PyErr_Format(PyExc_ValueError, "errors must be 'raise' or 'token', not '%s'", errors_str);
+            return nullptr;
+        }
+    }
+    scilex::column_unit columns = scilex::column_unit::bytes;
+    if (columns_str != nullptr) {
+        const std::string name {columns_str};
+        if (name == "codepoints") {
+            columns = scilex::column_unit::codepoints;
+        }
+        else if (name == "utf16") {
+            columns = scilex::column_unit::utf16;
+        }
+        else if (name != "bytes") {
+            PyErr_Format(PyExc_ValueError,
+                         "columns must be 'bytes', 'codepoints', or 'utf16', not '%s'", columns_str);
             return nullptr;
         }
     }
@@ -340,7 +356,7 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
         }
         auto* lexer = new scilex::lexer(std::move(rules), {},
                                         std::unordered_set<std::string>(dfa_modes.begin(), dfa_modes.end()),
-                                        errors);
+                                        errors, columns);
         PyObject* capsule = PyCapsule_New(lexer, CAPSULE_NAME, capsule_free);
         if (capsule == nullptr) {
             delete lexer;
@@ -361,6 +377,18 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
 std::vector<std::string> dfa_modes_active(scilex::lexer* lexer)
 {
     return lexer->dfa_modes_active();
+}
+
+// _scilex.column_unit(handle) -> the unit position columns are counted in ("bytes",
+// "codepoints", or "utf16"). The position does not carry the unit; the lexer declares it here.
+std::string column_unit(scilex::lexer* lexer)
+{
+    switch (lexer->columns()) {
+        case scilex::column_unit::codepoints: return "codepoints";
+        case scilex::column_unit::utf16:      return "utf16";
+        case scilex::column_unit::bytes:      break;
+    }
+    return "bytes";
 }
 
 // _scilex.tokenize(handle, text, eof=False) -> list of (kind, lexeme, offset, line,
@@ -643,7 +671,7 @@ struct caster<scilex::lexer*> {
 SCIFORGE_MODULE(_scilex, "scilex.error", m)
 {
     m.raw("compile", scilex_compile, METH_VARARGS,
-          "compile(rules, dfa_modes=(), errors='raise')\n"
+          "compile(rules, dfa_modes=(), errors='raise', columns='bytes')\n"
           "Compile an ordered list of rules into a lexer handle.\n\n"
           "Args:\n"
           "    rules (sequence): Each rule is (kind:int, pattern:str, skip:bool) and may\n"
@@ -653,7 +681,10 @@ SCIFORGE_MODULE(_scilex, "scilex.error", m)
           "    dfa_modes (sequence): Mode names to accelerate with a DFA fast path. Best-\n"
           "        effort: an un-DFA-able mode silently stays on Pike (see dfa_modes_active).\n"
           "    errors (str): 'raise' (default, unchanged: raise at the first unlexable byte)\n"
-          "        or 'token' (recover, emitting one ERROR-kind token per unlexable run).\n\n"
+          "        or 'token' (recover, emitting one ERROR-kind token per unlexable run).\n"
+          "    columns (str): the unit a token's column is counted in — 'bytes' (default,\n"
+          "        unchanged), 'codepoints', or 'utf16' (the LSP unit). Read it back with\n"
+          "        column_unit(handle); the position does not carry it.\n\n"
           "Returns:\n"
           "    capsule: An opaque compiled-lexer handle for tokenize()/scan_start().\n\n"
           "Raises:\n"
@@ -664,6 +695,10 @@ SCIFORGE_MODULE(_scilex, "scilex.error", m)
                              "dfa_modes_active(handle) -> list[str]\n"
                              "The mode names actually accelerated by a DFA (a requested mode that fell back\n"
                              "to Pike — an un-DFA-able assertion or a failed audit — is absent).");
+    m.def<&column_unit>("column_unit",
+                        "column_unit(handle) -> str\n"
+                        "The unit each token's column is counted in: 'bytes', 'codepoints', or 'utf16'.\n"
+                        "Positions do not carry the unit; the lexer declares it here.");
     m.raw("real_version", scilex_real_version, METH_NOARGS,
           "real_version() -> str\n"
           "The REAL version this compiled extension was built against (real/version.hpp), so a stale\n"

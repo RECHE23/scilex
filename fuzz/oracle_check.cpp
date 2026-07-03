@@ -104,6 +104,9 @@ namespace {
     parasitic(1024),                                        // parasitic delimiters
     "12 @#$ 34 \xff\xff 56 }{ 78",                          // valid tokens interleaved with noise
     std::string {'\0', '\x01', 'a', 'b', '\x7f', '1', '2'}, // control bytes among real tokens
+    "ab\xF0\x9F\x98\x80\ncd\xC3\xA9""ef",                   // an astral emoji + a BMP e-acute across lines
+    "\xF0\x9F\x98\x80@\xC3\xA9#\xE2\x9C\x93",               // multibyte codepoints interleaved with noise
+    "x\xC3\x28y\xE2\x28z\xF0\x28w",                         // truncated/broken sequences among ASCII
   };
 
   // Escapes non-printable bytes for a readable failure report.
@@ -285,6 +288,36 @@ namespace {
           std::cerr << "FAIL [" << gram.name << " token] " << outcome.invariant << '\n'
                     << "  input (" << input.size() << " bytes): " << preview(input) << '\n';
           ++failures;
+        }
+      }
+
+      // The same grammar under the non-default column units (bytes is done above): the token stream
+      // is unchanged; only position::column differs, and the reference counts each unit independently
+      // (its own forward UTF-8 walk). Layout is checked only in the bytes pass — the indentation is
+      // ASCII, so the unit does not move INDENT/DEDENT.
+      for (const scilex::column_unit unit : {scilex::column_unit::codepoints, scilex::column_unit::utf16}) {
+        const scilex::lexer raise_u {gram.rules(), {}, {}, scilex::error_policy::raise, unit};
+        const scilex::lexer token_u {gram.rules(), {}, {"default"}, scilex::error_policy::token, unit};
+        for (const std::string& input : inputs) {
+          cases += 2;
+          const scilex::fuzz::result r {scilex::fuzz::check(rules, raise_u, input, false)};
+          if (!r.ok) {
+            std::cerr << "FAIL [" << gram.name << " col] " << r.invariant << '\n';
+            ++failures;
+          }
+          const scilex::fuzz::result t {scilex::fuzz::check_recover(rules, token_u, input)};
+          if (!t.ok) {
+            std::cerr << "FAIL [" << gram.name << " col token] " << t.invariant << '\n';
+            ++failures;
+          }
+        }
+        for (const std::string& input : token_corpus) {
+          ++cases;
+          const scilex::fuzz::result t {scilex::fuzz::check_recover(rules, token_u, input)};
+          if (!t.ok) {
+            std::cerr << "FAIL [" << gram.name << " col token] " << t.invariant << '\n';
+            ++failures;
+          }
         }
       }
     }

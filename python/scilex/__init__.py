@@ -56,6 +56,7 @@ import os
 from scilex._scilex import (
     compile as _compile,
     dfa_modes_active as _dfa_modes_active,
+    column_unit as _column_unit,
     error,
     layout as _layout,
     real_version,
@@ -250,6 +251,12 @@ class Lexer:
             leading byte — pays that scan at every position of a long error run (on the order
             of 200 µs per position over an 8 KB run in the worst case). Prefer rules with a
             definite leading byte if recovery speed on hostile input matters.
+        columns (str): The unit each token's column is counted in. The default ``"bytes"``
+            is unchanged (column == byte offset within the line + 1). ``"codepoints"``
+            counts Unicode scalar values; ``"utf16"`` counts UTF-16 code units (an astral
+            codepoint is 2 — the unit an LSP client expects). A malformed byte counts as one
+            unit in every mode. The unit is not stored on a :class:`Position` — read it back
+            from :attr:`column_unit`.
 
     Raises:
         error: If a pattern is an invalid regex, a transition targets an empty mode, or
@@ -257,9 +264,11 @@ class Lexer:
         ValueError: If ``insignificant_modes`` names a mode the rules do not use.
     """
 
-    def __init__(self, rules, insignificant_modes=(), dfa_modes=(), errors="raise"):
+    def __init__(self, rules, insignificant_modes=(), dfa_modes=(), errors="raise", columns="bytes"):
         if errors not in ("raise", "token"):
             raise ValueError(f"errors must be 'raise' or 'token', not {errors!r}")
+        if columns not in ("bytes", "codepoints", "utf16"):
+            raise ValueError(f"columns must be 'bytes', 'codepoints', or 'utf16', not {columns!r}")
         normalized = []
         for entry in rules:
             kind, pattern = entry[0], entry[1]
@@ -286,9 +295,10 @@ class Lexer:
         self._rules = normalized
         self._dfa_modes = [str(mode) for mode in dfa_modes]
         self._errors = errors
+        self._columns = columns
         # The C++ ctor validates dfa_modes against the interned modes (raising error on
         # an unknown one) and builds the per-mode DFA fast path.
-        self._handle = _compile(normalized, self._dfa_modes, errors)
+        self._handle = _compile(normalized, self._dfa_modes, errors, columns)
         known = {"default"}
         for entry in normalized:
             if len(entry) > 3:
@@ -325,6 +335,17 @@ class Lexer:
         rejected set is ``set(dfa_modes) - set(dfa_modes_active)``.
         """
         return list(_dfa_modes_active(self._handle))
+
+    @property
+    def column_unit(self):
+        """The unit each token's ``position.column`` is counted in: ``"bytes"`` (the
+        default), ``"codepoints"``, or ``"utf16"``.
+
+        A :class:`Position` does not carry its unit — this is where the lexer declares it,
+        a deliberate one-field trade-off. Read it when a consumer (an editor, an LSP
+        server) must interpret a column.
+        """
+        return _column_unit(self._handle)
 
     def layout(self, tokens):
         """Insert NEWLINE / INDENT / DEDENT from indentation, mode-aware.
