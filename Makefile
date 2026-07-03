@@ -147,7 +147,7 @@ coverage-html:
 # --- QA tools (wrappers; no compilation policy here) ----------------------
 
 lint:
-	@ls tests/*.cpp | xargs -P $(JOBS) -I{} clang-tidy {} -- $(CXXSTD) $(INCLUDES) -I$(SCIFORGE_INCLUDE)
+	@ls tests/*.cpp | xargs -P $(JOBS) -I{} clang-tidy {} -- $(CXXSTD) $(INCLUDES) -I$(SCIFORGE_INCLUDE) -Ifuzz
 
 misra:
 	mkdir -p $(BUILD)

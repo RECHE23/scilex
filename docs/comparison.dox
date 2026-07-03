@@ -1,0 +1,49 @@
+/*!
+\page comparison Where SciLex sits — axes, both ways
+
+SciLex is one point in a wide design space. This page states, as facts rather than claims, what SciLex
+is built around and what each neighbouring tool is built around — including where those tools do things
+SciLex does not. No adjectives, no numbers (throughput figures live in the performance baseline,
+`BENCHMARKS.md`); just the axes and where each design lands on them.
+
+\section cmp_axes The axes SciLex is organised around
+
+- **Grammar as data.** A grammar is an ordered list of `(kind, pattern)` rules built at runtime; adding
+  or changing a rule needs no code-generation or build step. Patterns are `real::regex` strings.
+- **Linear-time, ReDoS-safe.** Every rule runs on REAL's linear-time engine and the cursor only
+  advances, so tokenizing is linear in the input for every input — no backtracking cliff.
+- **Modes and layout.** A per-scan mode stack (push/pop/set) does contextual lexing; a mode-aware layout
+  pass emits NEWLINE/INDENT/DEDENT for indentation-significant languages, with implicit continuation
+  inside insignificant modes.
+- **Error recovery.** A recovery policy emits one `error` token per unlexable run and resumes, so a
+  whole document tokenizes in one pass.
+- **Bindings.** The same lexer is used from C++ and from Python (an abi3 extension), with a CLI over the
+  built-in grammars and a thin `.lex` format.
+
+\section cmp_others What the neighbours are built around
+
+Each entry names what that tool does that SciLex does not, alongside where they differ.
+
+- **flex / re2c / Logos.** Compile-time **code generation**: the grammar is turned into a DFA and
+  emitted as source compiled into your program. That is a build step (a `.l` / generator run) and a
+  fixed grammar, in exchange for a lexer specialised to native code — raw scanner throughput is their
+  axis. SciLex keeps the grammar as runtime data (no codegen), runs on an NFA with a linear guarantee,
+  and adds modes/layout/recovery/bindings; the DFA fast path is an opt-in, not the delivery model.
+- **tree-sitter.** A parser generator (not just a lexer) built for editors: **incremental** re-parsing
+  of edited buffers and error-tolerant tree construction over hand-written C parsers. Its axis is
+  incremental, resilient *parsing* of source as it changes. SciLex is a lexer (tokens, not trees), does
+  a single forward pass rather than incremental re-lexing, and expresses grammars as data rather than
+  generated C.
+- **Pygments.** A Python library whose axis is **coverage**: a large, ready-made ecosystem of lexers for
+  hundreds of languages, tuned for highlighting. SciLex ships a handful of example grammars and expects
+  you to write your own rule list; it targets linear-time lexing with modes/layout and a C++ core,
+  where Pygments targets breadth of existing language support in pure Python.
+
+\section cmp_reading Reading this
+
+If your need is raw scanner throughput on one fixed grammar compiled into a binary, a code-generator
+(flex / re2c / Logos) is on the right axis. If it is incremental, error-tolerant parsing inside an
+editor, tree-sitter is. If it is a ready lexer for an existing language for highlighting, Pygments is.
+SciLex is on the axis of a **grammar-as-data, linear-time, ReDoS-safe** lexer with modes, layout,
+recovery, and first-class C++/Python use — the trade it makes deliberately.
+*/

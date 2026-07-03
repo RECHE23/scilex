@@ -148,6 +148,9 @@ add_executable(scilex_tests_bin ${SCILEX_TEST_SOURCES})
 target_link_libraries(scilex_tests_bin PRIVATE scilex::scilex)
 # The harness include path comes from SciForge, not from a local tests/ copy.
 target_include_directories(scilex_tests_bin PRIVATE "${SCIFORGE_INCLUDE_DIR}")
+# tests/test_spec.cpp pins the spec.dox examples against the independent oracle in fuzz/reference.hpp
+# (it is not under include/, so it stays out of the coverage report).
+target_include_directories(scilex_tests_bin PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/fuzz")
 set_target_properties(scilex_tests_bin PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 
 # Warnings-as-errors everywhere. AppleClang accepts the Clang flag set.
