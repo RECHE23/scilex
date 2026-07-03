@@ -208,7 +208,7 @@ namespace scilex {
   };
 
   /*!
-   * \brief The unit a token's \ref position::column is counted in.
+   * \brief The unit a token's \c position::column is counted in.
    *
    * The default \c bytes is the historical behaviour, bit-for-bit. \c codepoints counts Unicode
    * scalar values (each valid UTF-8 codepoint is one column), and \c utf16 counts UTF-16 code units
@@ -252,7 +252,7 @@ namespace scilex {
      * \param[in] errors What to do at a byte no rule can lex: \ref error_policy::raise (the default —
      *            throw) or \ref error_policy::token (recover, emitting an \ref scilex::error token). The
      *            recovery path never throws per byte; the token stream under \c raise is unchanged.
-     * \param[in] columns The unit each token's \ref position::column is counted in:
+     * \param[in] columns The unit each token's \c position::column is counted in:
      *            \ref column_unit::bytes (the default, unchanged), \ref column_unit::codepoints, or
      *            \ref column_unit::utf16. The unit is not stored on the position — read it back with
      *            \ref columns().
@@ -274,7 +274,7 @@ namespace scilex {
       build_dfa_modes(dfa_modes);
     }
 
-    //! \brief The unit this lexer counts \ref position::column in (positions do not carry it, so a
+    //! \brief The unit this lexer counts \c position::column in (positions do not carry it, so a
     //!        consumer that needs to interpret a column reads the unit here).
     [[nodiscard]] column_unit columns() const noexcept
     {
