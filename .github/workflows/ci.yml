@@ -22,7 +22,7 @@ jobs:
   # this repo's make format-check / misra against the shared lint/ config. SciLex's
   # MISRA TU needs REAL's headers, so real-regex is checked out as a dep sibling.
   lint:
-    uses: RECHE23/sciforge/.github/workflows/lint-cpp.yml@v2026.6.7
+    uses: RECHE23/sciforge/.github/workflows/lint-cpp.yml@v2026.7.0
     with:
       deps: '[{"repo":"RECHE23/real-regex","path":"real-regex"}]'
       sciforge-ref: v2026.7.0
@@ -34,7 +34,7 @@ jobs:
   # — matching SciLex's prior coverage exactly. The single REAL dependency (public,
   # so no ci-pat) is installed first so find_package(scilex) resolves real::.
   build:
-    uses: RECHE23/sciforge/.github/workflows/build-cpp.yml@v2026.6.7
+    uses: RECHE23/sciforge/.github/workflows/build-cpp.yml@v2026.7.0
     with:
       deps: '[{"repo":"RECHE23/real-regex","path":"real-regex"}]'
       sciforge-ref: v2026.7.0
@@ -47,7 +47,7 @@ jobs:
   # coverage: linux x {3.10, 3.14}). It compiles against REAL's headers, passed as a
   # dependency sibling (public, so no ci-pat).
   python:
-    uses: RECHE23/sciforge/.github/workflows/python-cpp.yml@v2026.6.7
+    uses: RECHE23/sciforge/.github/workflows/python-cpp.yml@v2026.7.0
     with:
       python-versions: '["3.10","3.14"]'
       sciforge-ref: v2026.7.0
