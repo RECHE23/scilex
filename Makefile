@@ -54,7 +54,7 @@ FORMAT_FILES := $(shell find include tests examples fuzz benchmarks cli -name '*
 
 .PHONY: all build test sanitize coverage coverage-build coverage-html \
         lint misra doc doc-no-coverage doc-check format format-check full-local-gate \
-        python python-test bench bench-lex cli example fuzz-check fuzz version-check install uninstall install-cli uninstall-cli release clean help
+        python python-test bench bench-lex cli example fuzz-check exhaustive-lex fuzz version-check install uninstall install-cli uninstall-cli release clean help
 
 .DEFAULT_GOAL := help
 
@@ -226,6 +226,17 @@ fuzz-check:
 	c++ $(CXXSTD) -O2 -Wall -Wextra -Wpedantic -Werror $(INCLUDES) -Iexamples -Ifuzz fuzz/oracle_check.cpp -o $(BUILD)/fuzz/oracle_check
 	@$(BUILD)/fuzz/oracle_check
 
+# Exhaustive lexer-oracle gate: scilex::lexer vs reference.hpp over every small rule-set (1..3 rules
+# from a fixed non-nullable palette, order + skip significant) crossed with every input up to length
+# EL_N (the shared Python enumerator, plus a multi-byte code point), under BOTH error policies. The
+# generalisation of fuzz-check's fixed grammars. Deterministic; the default EL_N is the ~10 s PR tier.
+EL_N ?= 6
+exhaustive-lex:
+	@mkdir -p $(BUILD)/fuzz
+	@$(PYRUN) -c "from sciforge.corpus.exhaustive import enumerate_inputs as I; open('$(BUILD)/fuzz/el_inps.txt','w').write(chr(10).join(I($(EL_N))))"
+	c++ $(CXXSTD) -O2 -Wall -Wextra -Wpedantic -Werror $(INCLUDES) -Iexamples -Ifuzz fuzz/exhaustive_lex.cpp -o $(BUILD)/fuzz/exhaustive_lex
+	@$(BUILD)/fuzz/exhaustive_lex $(BUILD)/fuzz/el_inps.txt
+
 # Continuous, coverage-guided fuzzing carrying the property oracle (fuzz/reference.hpp):
 # Clang + libFuzzer + ASan/UBSan. NOT part of the gate (it runs unbounded) — the bounded,
 # deterministic gate is `make fuzz-check`. FUZZ_TIME bounds a local run; the corpus lives
@@ -268,6 +279,7 @@ full-local-gate:
 	@$(MAKE) python-test
 	@$(MAKE) example
 	@$(MAKE) fuzz-check
+	@$(MAKE) exhaustive-lex
 	@$(MAKE) lint | tee $(BUILD)/lint.log; ! grep -qE 'warning:|error:' $(BUILD)/lint.log
 	@$(MAKE) coverage | tee $(BUILD)/coverage.log
 	# Gate on a flag, not a bare exit 1 in the rule: that exit is overridden by END's exit,
