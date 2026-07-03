@@ -70,6 +70,12 @@ namespace {
     {"python",
      &scilex::examples::python::make_rules, &scilex::examples::python::make_lexer, &scilex::examples::python::kind_name,
      scilex::examples::python::sample, &scilex::examples::python::self_check, true},
+    // The Unicode-identifier variant: the SAME grammar (kind names and sample reused), only the
+    // identifier rule differs — it reads café / 変数. Its self-check pins that and the DFA demote.
+    {"python-unicode",
+     &scilex::examples::python::make_rules_unicode, &scilex::examples::python::make_lexer_unicode,
+     &scilex::examples::python::kind_name, scilex::examples::python::sample,
+     &scilex::examples::python::self_check_unicode, true},
     {"cpp",
      &scilex::examples::cpp::make_rules, &scilex::examples::cpp::make_lexer, &scilex::examples::cpp::kind_name,
      scilex::examples::cpp::sample, &scilex::examples::cpp::self_check, false},

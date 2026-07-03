@@ -88,12 +88,23 @@ namespace scilex {
    * \ref in_mode empty means the rule is active in the implicit "default" mode only,
    * so a plain `{kind, pattern, skip}` rule keeps working unchanged.
    *
-   * The pattern is a fully-formed `real::regex`, so the grammar author owns its flags: pass
-   * `real::flags::ascii` to keep `\w \d \s \b` and case folding ASCII (small, DFA-representable — the
-   * right choice for ASCII-by-spec grammars like JSON/SQL, and what the `examples/` grammars use), or
-   * leave the default to recognise Unicode word/digit/space (e.g. a language whose identifiers are
-   * Unicode). A Unicode shorthand is not DFA-representable, so a `dfa_modes` mode containing one is
-   * transparently demoted to the general scan (same tokens; see `lexer::dfa_modes_active`).
+   * The pattern is a fully-formed `real::regex`, so the grammar author owns its flags.
+   *
+   * ## Unicode identifiers vs DFA speed — the grammar author's choice
+   *
+   * This is a real trade-off, not a footnote. `\w+` (or `[^\W\d]\w*`) with the default flags reads
+   * **Unicode identifiers** — `café`, `変数` — the faithful behaviour for a language like Python 3.
+   * But a Unicode `\w \d \s \b` compiles to a match-time **code-point predicate**, which no DFA can
+   * represent, so a mode that requests DFA acceleration (`dfa_modes`) and contains one is **transparently
+   * demoted** to the general Pike engine (same tokens; the demotion is visible via
+   * `lexer::dfa_modes_active`). Concretely: the general engine lexes at roughly **8–13 MB/s**, while a
+   * DFA-accelerated mode runs about **20× that** — so the Unicode identifier costs the DFA fast path.
+   *
+   * If your identifiers are ASCII by specification (JSON, SQL, C), pin `(?a)` inline in the pattern
+   * (or pass `real::flags::ascii`) to keep `\w \d \s \b` ASCII and small, DFA-representable, and fast —
+   * this is what the `examples/` grammars do. If you want Unicode identifiers, write `\w+` and accept
+   * the general-engine floor. The two spellings tokenize the same ASCII input identically; they differ
+   * only on non-ASCII input and on whether the mode can be a DFA.
    */
   struct rule
   {

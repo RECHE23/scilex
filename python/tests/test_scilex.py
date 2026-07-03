@@ -710,5 +710,30 @@ class ColumnUnitTests(unittest.TestCase):
             scilex.Lexer([(1, "a")], columns="graphemes")
 
 
+class UnicodeIdentifierTests(unittest.TestCase):
+    r"""\w+ reads Unicode identifiers (café); (?a)\w+ stays ASCII and keeps the DFA."""
+
+    IDENT = 1
+    WS = 2
+
+    def _lexer(self, word_pattern, dfa_modes=()):
+        return scilex.Lexer([(self.IDENT, word_pattern), (self.WS, r"(?a)\s+", True)],
+                            dfa_modes=dfa_modes)
+
+    def test_text_word_reads_a_unicode_identifier(self):
+        toks = self._lexer(r"\w+").tokenize("café 変数")
+        self.assertEqual(toks[0].kind, self.IDENT)
+        self.assertEqual(toks[0].lexeme, "café")   # decoded back to str
+        self.assertEqual(toks[-1].lexeme, "変数")
+
+    def test_ascii_pinned_word_does_not_span_non_ascii(self):
+        with self.assertRaises(scilex.error):
+            self._lexer(r"(?a)\w+").tokenize("café")  # stops at 'caf', é is unlexable
+
+    def test_unicode_shorthand_demotes_the_dfa(self):
+        self.assertIn("default", self._lexer(r"(?a)\w+", ("default",)).dfa_modes_active)
+        self.assertNotIn("default", self._lexer(r"\w+", ("default",)).dfa_modes_active)
+
+
 if __name__ == "__main__":
     unittest.main()

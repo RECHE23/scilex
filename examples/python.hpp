@@ -144,8 +144,12 @@ namespace scilex::examples::python {
     return r;
   }
 
-  //! \brief Builds the modal Python lexer (see the file header for the design).
-  inline std::vector<scilex::rule> make_rules()
+  //! \brief Builds the rule list. \p unicode_identifiers swaps ONLY the identifier rule: the default
+  //!        ASCII class, or a Unicode word identifier (`[^\W\d]\w*`, text mode) that recognizes `café`
+  //!        and `変数` — the faithful Python 3 behaviour. The Unicode form is a match-time code-point
+  //!        predicate, so a DFA-accelerated mode containing it demotes to the general engine (visible
+  //!        via \ref scilex::lexer::dfa_modes_active) — the identifier-Unicode vs DFA-speed trade-off.
+  inline std::vector<scilex::rule> build_rules(bool unicode_identifiers)
   {
     using op_t = scilex::mode_action::op;
     // Code runs at the top level, inside an interpolation, and inside a bracket
@@ -168,7 +172,11 @@ namespace scilex::examples::python {
                              "while", "with", "yield"}) {
       rules.push_back(rule(keyword, word, code));
     }
-    rules.push_back(rule(ident, R"re([A-Za-z_][A-Za-z0-9_]*)re", code));
+    // ASCII by default (DFA-friendly); the Unicode form recognizes café / 変数 but is a code-point
+    // predicate, so it leaves the DFA fast path — the author's identifier-Unicode vs speed choice.
+    rules.push_back(rule(ident,
+                         unicode_identifiers ? R"re([^\W\d]\w*)re" : R"re([A-Za-z_][A-Za-z0-9_]*)re",
+                         code));
     // --- numbers: hex / oct / bin / decimal+float+imaginary / leading-dot -----
     rules.push_back(rule(number, R"re(0[xX][0-9a-fA-F_]+)re", code));
     rules.push_back(rule(number, R"re(0[oO][0-7_]+)re", code));
@@ -211,12 +219,32 @@ namespace scilex::examples::python {
     return rules;
   }
 
+  //! \brief The standard (ASCII-identifier) rule list — the registry entry point.
+  inline std::vector<scilex::rule> make_rules()
+  {
+    return build_rules(false);
+  }
+
+  //! \brief The Unicode-identifier variant's rule list: identical to \ref make_rules but for the
+  //!        identifier rule, which recognizes Unicode word identifiers (café, 変数). See \ref build_rules
+  //!        for the DFA trade-off.
+  inline std::vector<scilex::rule> make_rules_unicode()
+  {
+    return build_rules(true);
+  }
+
   //! \brief Builds the lexer from its rule list (see \ref make_rules).
   inline scilex::lexer make_lexer()
   {
     // "bracket" is layout-insignificant (Layout Awareness Level A): code spanning
     // several lines inside ( ) [ ] { } is implicit line continuation — no INDENT.
     return scilex::lexer(make_rules(), {"bracket"});
+  }
+
+  //! \brief The Unicode-identifier variant lexer — same grammar, Unicode identifiers.
+  inline scilex::lexer make_lexer_unicode()
+  {
+    return scilex::lexer(make_rules_unicode(), {"bracket"});
   }
 
   //! \brief A realistic snippet exercising every covered context: a decorator, a
@@ -329,6 +357,63 @@ def stats(values, base=0x1F):
       catch (const scilex::lex_error& error) {
         if (error.where().offset != 0) {
           return false;
+        }
+      }
+    }
+    return true;
+  }
+
+  //! \brief Self-check for the Unicode-identifier variant: the distinctive invariant is that a Unicode
+  //!        word identifier is one token (café, a CJK word, a 4-byte astral letter), the ASCII grammar
+  //!        is NOT, and the mode holding the code-point predicate is not DFA-accelerated (the trade-off
+  //!        as tested behaviour, not a doc promise).
+  inline bool self_check_unicode()
+  {
+    const scilex::lexer lex {make_lexer_unicode()};
+    // café is one identifier (é, U+00E9, is a word char in text mode) — the faithful Python 3 read.
+    {
+      const std::string                cafe {"caf\xC3\xA9"};
+      const std::vector<scilex::token> toks {lex.tokenize(cafe)};
+      if (toks.size() != 1 || toks[0].kind != ident || toks[0].lexeme != cafe) {
+        return false;
+      }
+    }
+    // A CJK identifier (変数) and a 4-byte astral letter (U+20000, a CJK-Extension-B ideograph) are
+    // each a single identifier — the multi-byte cases the column policy also cares about.
+    {
+      const std::string                cjk         {"\xE5\xA4\x89\xE6\x95\xB0"};
+      const std::string                astral      {"\xF0\xA0\x80\x80"};
+      const std::vector<scilex::token> cjk_toks    {lex.tokenize(cjk)};
+      const std::vector<scilex::token> astral_toks {lex.tokenize(astral)};
+      if (cjk_toks.size() != 1 || cjk_toks[0].kind != ident) {
+        return false;
+      }
+      if (astral_toks.size() != 1 || astral_toks[0].kind != ident) {
+        return false;
+      }
+    }
+    // The distinctive contrast: the ASCII grammar does NOT read café as one identifier (é is not ASCII,
+    // so the default grammar stops at 'caf' and then cannot lex the rest).
+    {
+      const scilex::lexer ascii {make_lexer()};
+      const std::string   cafe  {"caf\xC3\xA9"};
+      try {
+        const std::vector<scilex::token> toks {ascii.tokenize(cafe)};
+        if (toks.size() == 1 && toks[0].kind == ident) {
+          return false; // the ASCII grammar must not match café as one identifier
+        }
+      }
+      catch (const scilex::lex_error&) {
+        // expected: the ASCII grammar cannot lex the non-ASCII byte
+      }
+    }
+    // The trade-off, as tested behaviour: the Unicode identifier is a code-point predicate, so a mode
+    // holding it leaves the DFA fast path — dfa_modes_active omits the requested mode.
+    {
+      const scilex::lexer dfa_requested {make_rules_unicode(), {"bracket"}, {"default"}};
+      for (const std::string& active : dfa_requested.dfa_modes_active()) {
+        if (active == "default") {
+          return false; // the code-point predicate must demote the mode
         }
       }
     }

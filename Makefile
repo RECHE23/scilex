@@ -211,6 +211,9 @@ cli:
 # `scilex --check`. A failing self-check fails the gate.
 example: cli
 	@$(BUILD)/bin/scilex --check
+	@printf 'café' | $(BUILD)/bin/scilex examples/unicode_ident.lex - | grep -q '^IDENT	café' \
+	  && echo "  .lex bare \\w+ reads a Unicode identifier: café -> IDENT" \
+	  || { echo "FAIL: examples/unicode_ident.lex did not lex café as one IDENT"; exit 1; }
 	@echo "examples: all self-checks pass"
 
 # Deterministic lexer-oracle gate (fuzz/reference.hpp): runs every property invariant

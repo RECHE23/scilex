@@ -175,6 +175,23 @@ Pike engine, absent from `dfa_modes_active()`. Either way the **token stream is 
 identical** (Pike is the floor) and `layout` is unchanged. The DFA is built once, in the
 constructor. The `sql` and `css` example grammars ship with it on.
 
+## Unicode identifiers vs DFA speed — the grammar author's choice
+
+A real trade-off worth stating plainly. Write an identifier rule as `\w+` (or `[^\W\d]\w*`)
+with the default flags and it reads **Unicode identifiers** — `café`, `変数` — the faithful
+behaviour for a language like Python 3. But a Unicode `\w \d \s \b` compiles to a match-time
+**code-point predicate** that no DFA can represent, so a mode holding one **leaves the DFA fast
+path**: it is transparently demoted to the general engine (same tokens, visible via
+`dfa_modes_active()`). Concretely the general engine runs at **~8–13 MB/s** while a DFA-able
+mode runs **~20× that** — the Unicode identifier costs you the DFA.
+
+So: if your identifiers are ASCII by specification (JSON, SQL, C), pin **`(?a)`** inline in the
+pattern (or pass `real::flags::ascii`) to keep `\w \d \s \b` ASCII, small, and DFA-representable —
+what the `examples/` grammars do. If you want Unicode identifiers, write `\w+` and accept the
+general-engine floor. The two tokenize ASCII input identically; they differ only on non-ASCII input
+and on whether the mode can be a DFA. The **`python-unicode`** example (`scilex --example
+python-unicode`) is the faithful-Python-3 variant of `python`, identical but for that one rule.
+
 ## Layout Awareness (Level A)
 
 The layout pass is positional, and by default mode-blind. **Layout Awareness Level
