@@ -7,9 +7,11 @@
 #include <vector>
 
 #include <sciforge/test/framework.hpp>
+#include <sciforge/test/strings.hpp>
 #include "scilex/scilex.hpp"
 
 using namespace std::string_view_literals;
+using test::cat; // concatenate views into an owned std::string (the source a lexeme views into)
 
 namespace {
 
@@ -33,14 +35,6 @@ namespace {
   constexpr std::string_view EMOJI  {"\xF0\x9F\x98\x80"sv}; // U+1F600, a 4-byte astral codepoint
   constexpr std::string_view EACUTE {"\xC3\xA9"sv};         // U+00E9 é, a 2-byte BMP codepoint
 
-  // Concatenates views into a std::string (the source a lexer's lexemes then view into).
-  std::string cat(std::string_view a,
-                  std::string_view b,
-                  std::string_view c = {})
-  {
-    return std::string {a} + std::string {b} + std::string {c};
-  }
-
   // The column of the last token ("cd") after a leading multibyte run, per unit.
   std::size_t trailing_column(scilex::column_unit unit,
                               const std::string&  in)
@@ -57,15 +51,15 @@ namespace {
     rules.push_back({.kind = ANY, .pattern = real::regex(".")});
     const scilex::lexer default_lex {std::move(rules)};
     EXPECT_EQ(default_lex.columns(), scilex::column_unit::bytes);
-    const std::string in            {cat("ab", EMOJI, "cd")}; // named: the lexemes view into it
+    const std::string in            {cat({"ab", EMOJI, "cd"})}; // named: the lexemes view into it
     const auto        toks = default_lex.tokenize(in);
     EXPECT_EQ(toks.back().lexeme, "cd"sv);
-    EXPECT_EQ(toks.back().start.column, 7U);                  // 2 letters + 4 emoji bytes, next at column 7
+    EXPECT_EQ(toks.back().start.column, 7U);                    // 2 letters + 4 emoji bytes, next at column 7
   }
 
   TEST(the_three_units_diverge_after_a_multibyte_codepoint)
   {
-    const std::string in {cat("ab", EMOJI, "cd")};
+    const std::string in {cat({"ab", EMOJI, "cd"})};
     EXPECT_EQ(trailing_column(scilex::column_unit::bytes, in), 7U);      // 2 + 4 bytes
     EXPECT_EQ(trailing_column(scilex::column_unit::codepoints, in), 4U); // a, b, emoji = 3 codepoints
     EXPECT_EQ(trailing_column(scilex::column_unit::utf16, in), 5U);      // emoji is a surrogate pair (2)
@@ -73,7 +67,7 @@ namespace {
 
   TEST(an_astral_codepoint_is_two_utf16_units_at_the_line_start)
   {
-    const std::string in {cat(EMOJI, "x")};                              // emoji first, then a letter
+    const std::string in {cat({EMOJI, "x"})};                            // emoji first, then a letter
     EXPECT_EQ(trailing_column(scilex::column_unit::bytes, in), 5U);      // 4 bytes, x at 5
     EXPECT_EQ(trailing_column(scilex::column_unit::codepoints, in), 2U); // one codepoint, x at 2
     EXPECT_EQ(trailing_column(scilex::column_unit::utf16, in), 3U);      // two units, x at 3
@@ -81,7 +75,7 @@ namespace {
 
   TEST(a_bmp_codepoint_is_one_unit_in_codepoints_and_utf16)
   {
-    const std::string in {cat(EACUTE, "x")};                             // é (2 bytes, BMP) then x
+    const std::string in {cat({EACUTE, "x"})};                           // é (2 bytes, BMP) then x
     EXPECT_EQ(trailing_column(scilex::column_unit::bytes, in), 3U);      // 2 bytes, x at 3
     EXPECT_EQ(trailing_column(scilex::column_unit::codepoints, in), 2U); // 1 codepoint, x at 2
     EXPECT_EQ(trailing_column(scilex::column_unit::utf16, in), 2U);      // BMP is 1 utf16 unit, x at 2
@@ -117,7 +111,7 @@ namespace {
   TEST(columns_reset_each_line)
   {
     // A multibyte run on line 1 does not leak into line 2's column (the '\n' resets it in every unit).
-    const std::string in {cat("ab", EMOJI, "\ncd")};
+    const std::string in {cat({"ab", EMOJI, "\ncd"})};
     for (const scilex::column_unit unit : {scilex::column_unit::bytes,
                                            scilex::column_unit::codepoints, scilex::column_unit::utf16}) {
       const auto toks = make_lexer(unit).tokenize(in);
@@ -177,7 +171,7 @@ namespace {
     for (const scilex::column_unit unit : {scilex::column_unit::bytes,
                                            scilex::column_unit::codepoints, scilex::column_unit::utf16}) {
       scilex::lexer     lex {make_lexer(unit)};
-      const std::string src {cat("a", EACUTE, "\n  b")}; // named: the lexemes view into it
+      const std::string src {cat({"a", EACUTE, "\n  b"})}; // named: the lexemes view into it
       const auto        flat = lex.tokenize(src, scilex::eof_policy::append);
       // The indented token "b" is on line 2 at column 3 (two ASCII spaces) in every unit.
       for (const scilex::token& tok : flat) {

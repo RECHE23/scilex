@@ -49,10 +49,11 @@ SCIFORGE_INCLUDE ?= ../sciforge/include
 # SciForge also owns the shared lint config (the MISRA base + uncrustify.cfg), in
 # its lint/ dir. Same sibling default; CI checks SciForge out alongside as ../sciforge.
 SCIFORGE_LINT ?= ../sciforge/lint
+SCIFORGE_TOOLS ?= ../sciforge/tools
 FORMAT_FILES := $(shell find include tests examples fuzz benchmarks cli -name '*.hpp' -o -name '*.cpp')
 
 .PHONY: all build test sanitize coverage coverage-build coverage-html \
-        lint misra doc doc-no-coverage format format-check full-local-gate \
+        lint misra doc doc-no-coverage doc-check format format-check full-local-gate \
         python python-test bench bench-lex cli example fuzz-check fuzz version-check install uninstall install-cli uninstall-cli release clean help
 
 .DEFAULT_GOAL := help
@@ -263,6 +264,7 @@ full-local-gate:
 	@$(MAKE) sanitize
 	@$(MAKE) misra
 	@$(MAKE) doc-no-coverage
+	@$(MAKE) doc-check
 	@$(MAKE) python-test
 	@$(MAKE) example
 	@$(MAKE) fuzz-check
@@ -272,7 +274,18 @@ full-local-gate:
 	# so the gate silently accepted coverage below 100% 4D before this fix.
 	@awk '/^TOTAL/{seen=1; if (gsub(/100\.00%/, "&") != 4) bad=1} END{exit (seen && !bad) ? 0 : 1}' $(BUILD)/coverage.log \
 	  || { echo "full-local-gate: coverage is below 100% on some dimension — see above"; exit 1; }
-	@echo "full-local-gate: ALL gates green (clang + g++-14, sanitize, MISRA, lint, doc, python, example, fuzz-check, version-check, 100% coverage)"
+	@echo "full-local-gate: ALL gates green (clang + g++-14, sanitize, MISRA, lint, doc, doc-check, python, example, fuzz-check, version-check, 100% coverage)"
+
+# doc-check builds the docs under the EXACT CI Doxygen (1.9.8, in Docker) via the shared SciForge tool,
+# so a warning the developer's newer local Doxygen tolerates cannot slip past to CI or a release (the
+# gate-hole that shipped a broken Docs build with v2026.7.0's release candidate). Skipped with a warning
+# when Docker or the tool is absent — visible, never a false green; the Docs CI job is the backstop.
+doc-check:
+	@if command -v docker >/dev/null 2>&1 && test -x $(SCIFORGE_TOOLS)/doxygen-check.sh; then \
+	   $(SCIFORGE_TOOLS)/doxygen-check.sh . Doxyfile; \
+	 else \
+	   echo "doc-check: WARN — Docker or $(SCIFORGE_TOOLS)/doxygen-check.sh absent, CI-Doxygen check skipped (the Docs CI job is the backstop)"; \
+	 fi
 
 format-check:
 	uncrustify -c $(SCIFORGE_LINT)/uncrustify.cfg --check $(FORMAT_FILES)
