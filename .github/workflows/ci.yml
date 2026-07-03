@@ -22,10 +22,10 @@ jobs:
   # this repo's make format-check / misra against the shared lint/ config. SciLex's
   # MISRA TU needs REAL's headers, so real-regex is checked out as a dep sibling.
   lint:
-    uses: RECHE23/sciforge/.github/workflows/lint-cpp.yml@v2026.7.0
+    uses: RECHE23/sciforge/.github/workflows/lint-cpp.yml@v2026.7.2
     with:
       deps: '[{"repo":"RECHE23/real-regex","path":"real-regex"}]'
-      sciforge-ref: v2026.7.0
+      sciforge-ref: v2026.7.2
       runner-mode: hosted
 
   # POSIX + CMake build via SciForge's reusable build spine: the Makefile under
@@ -34,10 +34,10 @@ jobs:
   # — matching SciLex's prior coverage exactly. The single REAL dependency (public,
   # so no ci-pat) is installed first so find_package(scilex) resolves real::.
   build:
-    uses: RECHE23/sciforge/.github/workflows/build-cpp.yml@v2026.7.0
+    uses: RECHE23/sciforge/.github/workflows/build-cpp.yml@v2026.7.2
     with:
       deps: '[{"repo":"RECHE23/real-regex","path":"real-regex"}]'
-      sciforge-ref: v2026.7.0
+      sciforge-ref: v2026.7.2
       runner-mode: hosted
       enable-windows-msvc: true
       enable-arm: true
@@ -47,9 +47,39 @@ jobs:
   # coverage: linux x {3.10, 3.14}). It compiles against REAL's headers, passed as a
   # dependency sibling (public, so no ci-pat).
   python:
-    uses: RECHE23/sciforge/.github/workflows/python-cpp.yml@v2026.7.0
+    uses: RECHE23/sciforge/.github/workflows/python-cpp.yml@v2026.7.2
     with:
       python-versions: '["3.10","3.14"]'
-      sciforge-ref: v2026.7.0
+      sciforge-ref: v2026.7.2
       deps: '[{"repo":"RECHE23/real-regex","path":"real-regex"}]'
       runner-mode: hosted
+
+  # Exhaustive lexer-oracle net, promoted from the local gate now that the enumerator substrate is
+  # pinnable: scilex::lexer vs reference.hpp over every small rule-set x input, under both error policies.
+  # Also runs the pin-drift lint on this repo's workflows. REAL (headers, at its default branch — the
+  # sibling-consumption model this repo already uses) and SciForge (framework + enumerator, at the pinned
+  # tag) are checked out as siblings; the PR tier is ~10 s.
+  exhaustive-lex:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: scilex
+      - uses: actions/checkout@v4
+        with:
+          repository: RECHE23/real-regex
+          path: real-regex
+      - uses: actions/checkout@v4
+        with:
+          repository: RECHE23/sciforge
+          ref: v2026.7.2
+          path: sciforge
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - name: Install cmake + clang
+        run: sudo apt-get update && sudo apt-get install -y cmake clang
+      - name: Pin-drift lint (SciForge pins consistent)
+        run: bash sciforge/tools/check-pins.sh scilex
+      - name: Exhaustive lexer-oracle check (scilex::lexer vs reference.hpp)
+        run: make -C scilex exhaustive-lex

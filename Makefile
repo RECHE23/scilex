@@ -54,7 +54,7 @@ FORMAT_FILES := $(shell find include tests examples fuzz benchmarks cli -name '*
 
 .PHONY: all build test sanitize coverage coverage-build coverage-html \
         lint misra doc doc-no-coverage doc-check format format-check full-local-gate \
-        python python-test bench bench-lex cli example fuzz-check exhaustive-lex fuzz version-check install install-smoke uninstall install-cli uninstall-cli release clean help
+        python python-test bench bench-lex cli example fuzz-check exhaustive-lex check-pins fuzz version-check install install-smoke uninstall install-cli uninstall-cli release clean help
 
 .DEFAULT_GOAL := help
 
@@ -267,9 +267,16 @@ version-check:
 # of record. Runs every check this machine owns and fails on any issue, including a
 # lint warning or any coverage dimension below 100%. If an incremental coverage build
 # is ever suspect, `rm -rf $(COV_DIR)` first to force a clean re-measure.
+# Pin-drift lint: fail if this repo's workflows pin more than one SciForge version (the shared
+# tools/check-pins.sh, owned by SciForge). Skipped with a warning when the sibling tool is absent.
+check-pins:
+	@if test -x $(SCIFORGE_TOOLS)/check-pins.sh; then $(SCIFORGE_TOOLS)/check-pins.sh .; \
+	 else echo "check-pins: WARN — $(SCIFORGE_TOOLS)/check-pins.sh absent, skipped (CI covers it)"; fi
+
 full-local-gate:
 	@$(MAKE) format-check
 	@$(MAKE) version-check
+	@$(MAKE) check-pins
 	@$(MAKE) test
 	@$(MAKE) test CXX=g++-14 BUILD=$(BUILD)/gcc
 	@$(MAKE) sanitize
