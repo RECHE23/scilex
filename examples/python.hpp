@@ -136,9 +136,10 @@ namespace scilex::examples::python {
                            const char*                        pattern,
                            std::vector<std::string>           modes,
                            bool                               skip   = false,
-                           std::optional<scilex::mode_action> action = std::nullopt)
+                           std::optional<scilex::mode_action> action = std::nullopt,
+                           real::flags                        fl     = real::flags::none)
   {
-    scilex::rule r {.kind = kind, .pattern = real::regex(pattern), .skip = skip};
+    scilex::rule r {.kind = kind, .pattern = real::regex(pattern, fl), .skip = skip};
     r.in_mode = std::move(modes);
     r.action  = action;
     return r;
@@ -160,10 +161,18 @@ namespace scilex::examples::python {
 
     std::vector<scilex::rule> rules;
     // --- trivia (shared by code and interpolations) --------------------------
-    rules.push_back(rule(ws, R"re(\s+)re", code, /*skip=*/ true));
+    // ascii-pinned so `\s` is a byte class (DFA-representable): Python whitespace is ASCII, so the token
+    // stream is unchanged and the default (ASCII-identifier) grammar becomes DFA-eligible.
+    rules.push_back(rule(ws, R"re(\s+)re", code, /*skip=*/ true, std::nullopt, real::flags::ascii));
     rules.push_back(rule(comment, R"re(#[^\n]*)re", code, /*skip=*/ true));
     // --- triple-quoted strings (dotall + lazy: up to the closing triple) ------
-    rules.push_back(rule(tstr, R"re((?s)""".*?"""|'''.*?''')re", code));
+    // Greedy DFA-safe form of the lazy `(?s)""".*?"""`: match up to the FIRST closing triple-quote via
+    // a body that can hold one or two quotes but never three. Token-identical to the lazy version
+    // (verified by the oracle), and — with `\s`/`.` gone and ascii-pinned so `[^"]` is a byte class — it
+    // carries no lazy op and no Unicode cp-class, so the mode stays DFA-eligible (the scilex lazy audit
+    // no longer trips). `[^"]`/`[^']` already span newlines, so the old `(?s)` dotall is not needed.
+    rules.push_back(rule(tstr, R"re("""(?:[^"]|"[^"]|""[^"])*"""|'''(?:[^']|'[^']|''[^'])*''')re", code,
+                         false, std::nullopt, real::flags::ascii));
     // --- keywords (full set; before ident so an exact keyword wins the tie) ---
     for (const char* word : {"False", "None", "True", "and", "as", "assert", "async", "await",
                              "break", "class", "continue", "def", "del", "elif", "else", "except",

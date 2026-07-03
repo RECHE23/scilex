@@ -109,9 +109,10 @@ namespace scilex::examples::yaml {
                            const char*                        pattern,
                            std::vector<std::string>           modes,
                            bool                               skip   = false,
-                           std::optional<scilex::mode_action> action = std::nullopt)
+                           std::optional<scilex::mode_action> action = std::nullopt,
+                           real::flags                        fl     = real::flags::none)
   {
-    scilex::rule r {.kind = kind, .pattern = real::regex(pattern), .skip = skip};
+    scilex::rule r {.kind = kind, .pattern = real::regex(pattern, fl), .skip = skip};
     r.in_mode = std::move(modes);
     r.action  = action;
     return r;
@@ -128,7 +129,7 @@ namespace scilex::examples::yaml {
     std::vector<scilex::rule> rules;
     // --- shared by block and flow --------------------------------------------
     // Whitespace (newlines included — layout() recovers structure from positions).
-    rules.push_back(rule(ws, R"re(\s+)re", both, /*skip=*/ true));
+    rules.push_back(rule(ws, R"re(\s+)re", both, /*skip=*/ true, std::nullopt, real::flags::ascii));
     rules.push_back(rule(flow_open, R"re([{[])re", both, false, go(op_t::push, "flow"))); // nests
     rules.push_back(rule(dq, R"re("(\\.|[^"\\])*")re", both));
     rules.push_back(rule(sq, R"re('([^']|'')*')re", both));
@@ -138,12 +139,12 @@ namespace scilex::examples::yaml {
     rules.push_back(rule(anchor, R"re(&[A-Za-z0-9_-]+)re", root));
     rules.push_back(rule(alias, R"re(\*[A-Za-z0-9_-]+)re", root));
     rules.push_back(rule(tag, R"re(![A-Za-z0-9_/-]*)re", root));
-    rules.push_back(rule(dash, R"re(-)re", root));                            // before the scalar (see the dash note)
-    rules.push_back(rule(scalar, R"re([^\s#&*!"'{\[:][^\s#:{\[]*)re", root)); // block plain scalar (approx)
+    rules.push_back(rule(dash, R"re(-)re", root));                                                                     // before the scalar (see the dash note)
+    rules.push_back(rule(scalar, R"re([^\s#&*!"'{\[:][^\s#:{\[]*)re", root, false, std::nullopt, real::flags::ascii)); // block plain scalar (approx; ascii \s = DFA-eligible)
     // --- flow only -----------------------------------------------------------
     rules.push_back(rule(flow_close, R"re([}\]])re", flow, false, go(op_t::pop)));
     rules.push_back(rule(comma, R"re(,)re", flow));
-    rules.push_back(rule(scalar, R"re([^\s#&*!"'{}\[\]:,][^\s#:{}\[\],]*)re", flow)); // flow plain scalar (approx)
+    rules.push_back(rule(scalar, R"re([^\s#&*!"'{}\[\]:,][^\s#:{}\[\],]*)re", flow, false, std::nullopt, real::flags::ascii)); // flow plain scalar (approx; ascii \s = DFA-eligible)
     return rules;
   }
 

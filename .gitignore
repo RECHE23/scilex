@@ -17,3 +17,4 @@ build/doc/
 
 # Deterministically regenerated cross-tool benchmark corpus
 benchmarks/data/
+include/scilex/*.gch

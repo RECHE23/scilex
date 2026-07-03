@@ -63,7 +63,9 @@ namespace scilex::examples::lisp {
     rules.push_back({str, real::regex(R"re("(\\.|[^"\\])*")re"), false});
     rules.push_back({number, real::regex("[+-]?[0-9]+(\\.[0-9]+)?"), false});
     rules.push_back({quote, real::regex("'"), false});
-    rules.push_back({symbol, real::regex(R"re([^\s()";']+)re"), false});
+    // ascii-pinned so `\s` is a byte class (DFA-representable): Lisp delimiters are ASCII whitespace, so
+    // the token stream is unchanged, and the default mode becomes DFA-eligible (see dfa_modes_active).
+    rules.push_back({symbol, real::regex(R"re([^\s()";']+)re", real::flags::ascii), false});
     return rules;
   }
 
