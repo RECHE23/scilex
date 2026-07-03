@@ -54,7 +54,7 @@ FORMAT_FILES := $(shell find include tests examples fuzz benchmarks cli -name '*
 
 .PHONY: all build test sanitize coverage coverage-build coverage-html \
         lint misra doc doc-no-coverage doc-check format format-check full-local-gate \
-        python python-test bench bench-lex cli example fuzz-check exhaustive-lex fuzz version-check install uninstall install-cli uninstall-cli release clean help
+        python python-test bench bench-lex cli example fuzz-check exhaustive-lex fuzz version-check install install-smoke uninstall install-cli uninstall-cli release clean help
 
 .DEFAULT_GOAL := help
 
@@ -304,6 +304,26 @@ format-check:
 
 install:
 	$(PYTHON) -m pip install .
+
+# Local downstream-consumer smoke: install REAL then SciLex to a throwaway prefix, then build the
+# existing cmake/smoke project purely through find_package(scilex CONFIG) — proving the installed config
+# package and its transitive real:: dependency resolve from one prefix. Mirrors REAL's install-smoke;
+# reuses the cmake/smoke fixture CI already drives, so nothing new is invented.
+install-smoke:
+	@set -e; \
+	 pfx=$$(mktemp -d); cfg=$$(mktemp -d); work=$$(mktemp -d); \
+	 trap 'rm -rf "$$pfx" "$$cfg" "$$work"' EXIT; \
+	 real_src=$$(cd $$(dirname $(REAL_INCLUDE)) && pwd); \
+	 echo "install-smoke: install REAL ($$real_src) + SciLex -> $$pfx, consume via find_package(scilex)"; \
+	 $(CMAKE) -S "$$real_src" -B "$$cfg/real" -DCMAKE_INSTALL_PREFIX="$$pfx" -DCMAKE_INSTALL_LIBDIR=lib -DBUILD_TESTING=OFF >/dev/null; \
+	 $(CMAKE) --install "$$cfg/real" >/dev/null; \
+	 $(CMAKE) -S . -B "$$cfg/scilex" $(CMAKE_REAL) -DCMAKE_INSTALL_PREFIX="$$pfx" -DCMAKE_INSTALL_LIBDIR=lib -DBUILD_TESTING=OFF >/dev/null; \
+	 $(CMAKE) --install "$$cfg/scilex" >/dev/null; \
+	 echo "  find_package(scilex CONFIG REQUIRED) -> scilex::scilex + transitive real::real"; \
+	 $(CMAKE) -S cmake/smoke -B "$$work/b" -DCMAKE_PREFIX_PATH="$$pfx" >/dev/null; \
+	 $(CMAKE) --build "$$work/b" >/dev/null; \
+	 (cd "$$work/b" && $(CTEST) --output-on-failure); \
+	 echo "install-smoke: OK (find_package(scilex) + transitive real::real from one prefix)"
 
 uninstall:
 	$(PYTHON) -m pip uninstall -y scilex
