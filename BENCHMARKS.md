@@ -270,11 +270,55 @@ literals) — see the C++ engine table above, where it lifted the engine 3–7×
 dispatch. The figures here predate that switch (they are the Python-binding study via
 `bench.py`). Aho-Corasick / a fuller prefilter remain not warranted (no data demands them).
 
+## Cross-tool comparison — other lexers on the same input
+
+The C++ tables above are SciLex's own engine. This section places the **Python-embedded** lexer
+(`scilex` the extension) beside other tokenizers on the *same* files and the *same* task — a full
+tokenization pass — timed on the shared `sciforge.bench` substrate (warmed, best-of-N, 95% bootstrap
+CI). The numbers are **not cherry-picked**: where a tool beats SciLex, its number is here as measured.
+
+Corpus: a ~515 KB JSON document and a ~512 KB block of ordinary Python source, both generated
+deterministically by the harness (`benchmarks/bench_compare.py`, cached under `benchmarks/data/`).
+
+| Tool | `big.json` (MB/s) | `sample.py` (MB/s) | What it produces |
+| --- | --- | --- | --- |
+| **scilex** `tokenize()` | 5.4 | 6.9 | a token stream as Python objects |
+| **scilex** `scan()` (lazy) | 5.3 | 6.6 | the same, lazily (fully consumed here) |
+| Pygments | 10.4 | 0.8 | pure-Python styled (type, text) pairs — a highlighting superset |
+| tree-sitter | 12.9 | 10.6 | a full parse tree in C, returned as a handle |
+| flex (codegen) | 162.6 | — | a compile-time DFA scanner (C), best-of-30 internal |
+
+**Read this with the comparability notes — the tools do different amounts of work:**
+
+- **SciLex's figure includes materialising a Python object per token** (the binding cost). The C++
+  engine itself, without the binding, runs far faster — that is the per-grammar table at the top of
+  this page, not these rows. As an *embedded Python lexer producing Python tokens*, SciLex is mid-pack.
+- **tree-sitter** builds a full parse tree in C and returns a handle; no per-token Python object is
+  created (walking the tree would add that), which is much of why its number is high. It is also
+  **incremental** — a capability this one-shot pass does not exercise, and a genuine tree-sitter win.
+- **Pygments** is pure Python and produces styled pairs for highlighting; it leads on JSON and trails
+  badly on Python here (its Python lexer does substantially more per token).
+- **flex** is the raw-throughput **ceiling**: a code-generated native DFA with a build step and a fixed
+  grammar — exactly the axis SciLex does *not* compete on (grammar-as-data, linear-safe, modes/layout).
+  It is ~15–30× any Python-embedded option, which is the honest shape of that trade.
+- **Not measured:** Logos and re2c (Rust / a separate C-codegen toolchain) — named, not benchmarked.
+
+**The honest reading.** On raw embedded-Python throughput SciLex is neither the fastest nor the
+slowest: tree-sitter's C-tree return beats it, Pygments beats it on JSON and loses on Python, and a
+code generator (flex) beats everyone. SciLex's case is not this number — it is a linear-time,
+ReDoS-safe lexer whose grammar is runtime data, with modes, layout, and recovery, callable from C++
+and Python. The comparison confirms the positioning in the [axes page](@ref comparison), it does not
+overturn it.
+
 ## Methodology & reproduction
 
 - **Goal:** a regression tripwire plus an honest win/lose map — not a throughput
   contest. Compare a fresh `make bench` to this table **on the same machine**; a clear,
   repeatable change is the signal.
+- **Cross-tool:** `python3 benchmarks/bench_compare.py` (optionally `--json`). Its competitor
+  dependencies are **optional** — Pygments, `tree_sitter` + the grammar packs, and `flex` + a C
+  compiler are each skipped with a note if absent, never a hard failure. Figures above were taken with
+  all present.
 - **Reproduce:** `make bench-lex` compiles and runs the C++ per-grammar table (no
   Python needed); `make bench` runs that and then builds the extension in place and runs
   `benchmarks/bench.py`. The pathological sweep stops `re` once a single match passes one

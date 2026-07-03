@@ -14,3 +14,6 @@ build/fuzz/
 
 # Doxygen output
 build/doc/
+
+# Deterministically regenerated cross-tool benchmark corpus
+benchmarks/data/

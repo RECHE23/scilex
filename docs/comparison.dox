@@ -3,8 +3,8 @@
 
 SciLex is one point in a wide design space. This page states, as facts rather than claims, what SciLex
 is built around and what each neighbouring tool is built around — including where those tools do things
-SciLex does not. No adjectives, no numbers (throughput figures live in the performance baseline,
-`BENCHMARKS.md`); just the axes and where each design lands on them.
+SciLex does not. It leads with the axes, no adjectives; the measured throughput (with its
+comparability caveats) is at the end and in full in the performance baseline, `BENCHMARKS.md`.
 
 \section cmp_axes The axes SciLex is organised around
 
@@ -46,4 +46,23 @@ If your need is raw scanner throughput on one fixed grammar compiled into a bina
 editor, tree-sitter is. If it is a ready lexer for an existing language for highlighting, Pygments is.
 SciLex is on the axis of a **grammar-as-data, linear-time, ReDoS-safe** lexer with modes, layout,
 recovery, and first-class C++/Python use — the trade it makes deliberately.
+
+\section cmp_numbers What the measurements show
+
+Measured on the same inputs and the same task (a full tokenization pass), best-of-N with a bootstrap
+CI (`benchmarks/bench_compare.py`; full table and caveats in `BENCHMARKS.md`). Read them **with** the
+note that the tools produce different things:
+
+- On raw throughput SciLex is **mid-pack** among embedded-Python lexers, not the fastest: on a ~515 KB
+  JSON, the SciLex extension runs ~5 MB/s versus Pygments ~10 and tree-sitter ~13; on ~512 KB of Python
+  source it runs ~7 MB/s versus Pygments ~0.8 and tree-sitter ~11. Where a tool wins, it wins — that is
+  published as measured.
+- SciLex's figure **includes materialising a Python object per token** (the binding cost); the C++
+  engine itself, without the binding, is far faster (the per-grammar table in `BENCHMARKS.md`).
+  tree-sitter returns a C tree handle without per-token Python objects; flex, a code-generated native
+  DFA, is the **ceiling** at ~160 MB/s — ~15–30× any Python-embedded option, exactly the codegen axis
+  SciLex does not compete on.
+
+The numbers **confirm** the axes above rather than overturn them: SciLex's case is linear-time safety,
+grammar-as-data, modes/layout/recovery, and dual C++/Python use — not raw scanner throughput.
 */
