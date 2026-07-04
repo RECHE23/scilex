@@ -146,6 +146,13 @@ coverage-html:
 
 # --- QA tools (wrappers; no compilation policy here) ----------------------
 
+# Shipped headers must not hash memory through libc++'s std::hash / std::unordered_*: their out-of-line
+# __hash_memory symbol (LLVM 19+) fails to resolve against an older runtime libc++ — a toolchain drift that
+# is invisible on the build machine and bit real-regex's trie memo. Use in-house hashing or sorted vectors.
+symbol-hygiene:
+	@! grep -rnE 'std::hash<|std::unordered_(map|set)<' include/scilex/ \
+	  || { echo "symbol-hygiene: std::hash / std::unordered_* in a shipped header (see design.dox)"; exit 1; }
+
 lint:
 	@ls tests/*.cpp | xargs -P $(JOBS) -I{} clang-tidy {} -- $(CXXSTD) $(INCLUDES) -I$(SCIFORGE_INCLUDE) -Ifuzz
 
@@ -277,6 +284,7 @@ full-local-gate:
 	@$(MAKE) format-check
 	@$(MAKE) version-check
 	@$(MAKE) check-pins
+	@$(MAKE) symbol-hygiene
 	@$(MAKE) test
 	@$(MAKE) test CXX=g++-14 BUILD=$(BUILD)/gcc
 	@$(MAKE) sanitize

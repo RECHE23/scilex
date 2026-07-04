@@ -4,7 +4,6 @@
 // and DFA-representable. The token stream is identical on ASCII input; it differs only on non-ASCII.
 #include <string>
 #include <string_view>
-#include <unordered_set>
 #include <vector>
 
 #include <sciforge/test/framework.hpp>
@@ -19,8 +18,8 @@ namespace {
 
   // A one-mode grammar whose identifier rule is either ASCII-pinned or Unicode.
   scilex::lexer word_lexer(std::string_view                 word_pattern,
-                           std::unordered_set<std::string>  dfa     = {},
-                           scilex::error_policy             errors  = scilex::error_policy::raise)
+                           std::vector<std::string>         dfa            = {},
+                           scilex::error_policy             errors         = scilex::error_policy::raise)
   {
     std::vector<scilex::rule> rules;
     rules.push_back({.kind = WORD, .pattern = real::regex(std::string {word_pattern})});

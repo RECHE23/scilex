@@ -34,7 +34,6 @@
 #include <optional>
 #include <string>
 #include <string_view>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -540,7 +539,7 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
             }
         }
         auto* lexer = new scilex::lexer(std::move(rules), {},
-                                        std::unordered_set<std::string>(dfa_modes.begin(), dfa_modes.end()),
+                                        std::vector<std::string>(dfa_modes.begin(), dfa_modes.end()),
                                         errors, columns);
         PyObject* capsule = PyCapsule_New(lexer, CAPSULE_NAME, capsule_free);
         if (capsule == nullptr) {

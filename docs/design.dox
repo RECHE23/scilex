@@ -197,4 +197,13 @@ lay = scilex.Lexer([(0, r"\s+", True), (1, r"\w+", False), (2, r":", False)])
 For the performance baseline (honest: `re` wins benign throughput, SciLex wins on
 linearity / ReDoS), see BENCHMARKS.md. For the regex engine underneath, see REAL's
 own "How REAL Works" guided tour.
+
+\section x_portability 9. A portability rule: no libc++ std::hash in shipped headers
+
+The public headers use no `std::hash` and no `std::unordered_map`/`set`. libc++'s hashing for those goes
+through an out-of-line symbol (`__hash_memory`, LLVM 19+) that a mismatched *compiled-with-recent-headers* /
+*linked-against-older-libc++* pair fails to resolve at load time — a toolchain drift invisible on the machine
+that built the header (it surfaced as an `ImportError` elsewhere in the ecosystem). Where a set of mode names
+is wanted (`insignificant_modes`, `dfa_modes`), a `std::vector<std::string>` with linear membership serves —
+the sets hold a handful of modes — and the `symbol-hygiene` gate enforces the rule on every shipped header.
 */

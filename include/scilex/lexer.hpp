@@ -29,7 +29,6 @@
 #include <string>
 #include <string_view>
 #include <tuple>
-#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -261,10 +260,10 @@ namespace scilex {
      *         unknown mode.
      */
     explicit lexer(std::vector<rule>               rules,
-                   std::unordered_set<std::string> insignificant_modes = {},
-                   std::unordered_set<std::string> dfa_modes           = {},
-                   error_policy                    errors              = error_policy::raise,
-                   column_unit                     columns             = column_unit::bytes)
+                   std::vector<std::string>        insignificant_modes        = {},
+                   std::vector<std::string>        dfa_modes                  = {},
+                   error_policy                    errors                     = error_policy::raise,
+                   column_unit                     columns                    = column_unit::bytes)
       : rules_(std::move(rules)),
         errors_(errors),
         columns_(columns)
@@ -573,7 +572,7 @@ namespace scilex {
     //!        names (validated against the interned modes). With none, the policy
     //!        stays empty — every mode significant, so \ref scilex::layout is the
     //!        positional pass (invariant 1).
-    void build_significance(const std::unordered_set<std::string>& insignificant_modes)
+    void build_significance(const std::vector<std::string>& insignificant_modes)
     {
       if (insignificant_modes.empty()) {
         return;
@@ -922,7 +921,7 @@ namespace scilex {
     //! \param[in] dfa_modes The opted-in mode names. The build-time equivalence audit
     //!            always runs; its outcome is observable via \ref dfa_modes_active.
     //! \throws std::invalid_argument If \p dfa_modes names an unknown mode.
-    void build_dfa_modes(const std::unordered_set<std::string>& dfa_modes)
+    void build_dfa_modes(const std::vector<std::string>& dfa_modes)
     {
       per_mode_dfa_.assign(mode_names_.size(), nullptr);
       for (const std::string& name : dfa_modes) {

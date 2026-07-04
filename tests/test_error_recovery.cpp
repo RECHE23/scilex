@@ -5,7 +5,6 @@
 // default policy (raise) is unchanged — the rest of the suite pins that.
 #include <string>
 #include <string_view>
-#include <unordered_set>
 #include <vector>
 
 #include <sciforge/test/framework.hpp>
@@ -21,7 +20,7 @@ namespace {
 
   // A default-mode grammar: lowercase words, whitespace skipped. Anything else is error text.
   scilex::lexer word_lexer(scilex::error_policy            policy,
-                           std::unordered_set<std::string> dfa = {})
+                           std::vector<std::string>        dfa = {})
   {
     std::vector<scilex::rule> rules;
     rules.push_back({.kind = WORD, .pattern = real::regex("[a-z]+")});
