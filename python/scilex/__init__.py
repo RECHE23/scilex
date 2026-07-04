@@ -54,6 +54,8 @@ rule raises :class:`scilex.error` (aka :class:`LexerError`) carrying the failure
 import os
 
 from scilex._scilex import (
+    Position,
+    Token,
     compile as _compile,
     dfa_modes_active as _dfa_modes_active,
     column_unit as _column_unit,
@@ -98,77 +100,11 @@ ERROR = -2147483644
 LexerError = error
 
 
-class Position:
-    """A source position: 0-based byte ``offset``, 1-based ``line`` and byte ``column``."""
-
-    __slots__ = ("offset", "line", "column")
-
-    def __init__(self, offset, line, column):
-        self.offset = offset
-        self.line = line
-        self.column = column
-
-    def __repr__(self):
-        return f"Position(line={self.line}, column={self.column}, offset={self.offset})"
-
-    def __eq__(self, other):
-        if not isinstance(other, Position):
-            return NotImplemented
-        return (self.offset, self.line, self.column) == (other.offset, other.line, other.column)
-
-    def __hash__(self):
-        return hash((self.offset, self.line, self.column))
-
-
-class Token:
-    """A lexical token: ``kind`` (int), ``lexeme`` (str), ``position`` (:class:`Position`)
-    and ``mode`` (the name of the mode it was lexed in, ``"default"`` at the root).
-
-    ``offset``, ``line`` and ``column`` are exposed directly as read-only shortcuts
-    for ``position.offset`` / ``.line`` / ``.column``.
-    """
-
-    __slots__ = ("kind", "lexeme", "position", "mode")
-
-    def __init__(self, kind, lexeme, position, mode="default"):
-        self.kind = kind
-        self.lexeme = lexeme
-        self.position = position
-        self.mode = mode
-
-    @property
-    def offset(self):
-        """0-based byte offset of the token's first byte (``position.offset``)."""
-        return self.position.offset
-
-    @property
-    def line(self):
-        """1-based line of the token's first byte (``position.line``)."""
-        return self.position.line
-
-    @property
-    def column(self):
-        """1-based byte column of the token's first byte (``position.column``)."""
-        return self.position.column
-
-    def __repr__(self):
-        return (f"Token(kind={self.kind}, lexeme={self.lexeme!r}, "
-                f"line={self.position.line}, column={self.position.column}, mode={self.mode!r})")
-
-    def __eq__(self, other):
-        if not isinstance(other, Token):
-            return NotImplemented
-        return (self.kind == other.kind and self.lexeme == other.lexeme
-                and self.position == other.position and self.mode == other.mode)
-
-    def __hash__(self):
-        return hash((self.kind, self.lexeme, self.position, self.mode))
-
-
-def _token(fields):
-    """Build a :class:`Token` from a (kind, lexeme, offset, line, column, mode) tuple."""
-    kind, lexeme, offset, line, column, mode = fields
-    return Token(kind, lexeme, Position(offset, line, column), mode)
+# Token and Position are C-native heap types exported by the extension (imported above): built once,
+# in C, during tokenize/scan/layout — no per-token Python object construction. Their surface is
+# identical to the former pure-Python classes: Position(offset, line, column) with .offset/.line/.column;
+# Token(kind, lexeme, position, mode="default") with .kind/.lexeme/.position/.mode and the
+# .offset/.line/.column shortcuts; both with __eq__/__hash__/__repr__ and working manual constructors.
 
 
 def _attach_position(exc, source=None):
@@ -385,7 +321,7 @@ class Lexer:
         except error as exc:
             _attach_position(exc, text)
             raise
-        return [_token(fields) for fields in raw]
+        return raw  # raw is already a list of C-native Token objects
 
     def scan(self, text, eof=False):
         """Lazily scan ``text``, yielding one :class:`Token` at a time.
@@ -427,7 +363,7 @@ class Lexer:
                     raise
                 if fields is None:
                     return
-                yield _token(fields)
+                yield fields  # a C-native Token
 
         return _iterate()
 
@@ -485,7 +421,7 @@ class Layout:
         except error as exc:
             _attach_position(exc)
             raise
-        return [_token(item) for item in raw]
+        return raw  # a list of C-native Token objects
 
 
 def tokenize(rules, text, eof=False):

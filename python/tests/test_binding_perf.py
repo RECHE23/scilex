@@ -121,3 +121,59 @@ class GuardTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TokenObjectTests(unittest.TestCase):
+    """The C-native Token/Position types: refcount hygiene, mode interning, API equivalence."""
+
+    def _lexer(self):
+        return scilex.Lexer([(0, r"[ \t\n]+", True), (1, r"[A-Za-z_][A-Za-z0-9_]*", False),
+                             (2, r"[0-9]+", False), (3, r"[+\-*/=(),:.]", False)])
+
+    def test_refcount_no_growth_under_stress(self):
+        # Tokenize + fully exercise each Token (attributes, eq, hash, repr, set membership) in a loop; a
+        # per-token refcount leak in the C bulk path would show as steady growth. tracemalloc measures the
+        # Python-object footprint (Token/Position/lexeme/mode are all Python objects).
+        import gc
+        import tracemalloc
+        lex = self._lexer()
+        src = "def foo ( x , y ) : return x + y * 42 - 1\n" * 100
+        for _ in range(30):
+            lex.tokenize(src)
+        gc.collect()
+        tracemalloc.start()
+        base = tracemalloc.take_snapshot()
+        for _ in range(1000):
+            toks = lex.tokenize(src)
+            t = toks[0]
+            _ = (t.kind, t.lexeme, t.position, t.offset, t.line, t.column, t.mode,
+                 repr(t), hash(t), t == toks[1], t in {toks[1]})
+            del toks, t
+        gc.collect()
+        grew = sum(s.size_diff for s in tracemalloc.take_snapshot().compare_to(base, "lineno")
+                   if s.size_diff > 0)
+        tracemalloc.stop()
+        self.assertLess(grew, 50_000, f"apparent per-token leak: {grew} bytes over 1000 cycles")
+
+    def test_mode_strings_are_interned(self):
+        # One PyUnicode per mode, shared across every token in the mode — not a fresh string per token.
+        toks = self._lexer().tokenize("a b c d e f g h\n" * 50)
+        self.assertLessEqual(len({id(t.mode) for t in toks}), 2)
+
+    def test_token_position_api_equivalence(self):
+        lex = self._lexer()
+        toks = lex.tokenize("foo 42")
+        t = toks[0]
+        self.assertIsInstance(t, scilex.Token)
+        self.assertIsInstance(t.position, scilex.Position)
+        self.assertEqual((t.kind, t.lexeme, t.mode), (1, "foo", "default"))
+        self.assertEqual((t.offset, t.line, t.column),
+                         (t.position.offset, t.position.line, t.position.column))
+        # equality by value, hashable, usable in sets/dicts, repr round-tripping the fields
+        u = scilex.Token(1, "foo", scilex.Position(0, 1, 1), "default")
+        self.assertEqual(t, u)
+        self.assertEqual(hash(t), hash(u))
+        self.assertEqual(len({t, u}), 1)
+        self.assertNotEqual(t, 42)          # foreign type -> not equal (NotImplemented -> False)
+        self.assertIn("kind=1", repr(t))
+        self.assertEqual(scilex.Position(0, 1, 1), scilex.Position(0, 1, 1))

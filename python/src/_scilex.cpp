@@ -121,14 +121,154 @@ int read_source(PyObject* obj, const char** data, Py_ssize_t* len, bool* is_byte
     return -1;
 }
 
+// ---------- C-native Token / Position (the bulk-tokenization diet) ----------
+// A token is built ONCE, as a C heap type, instead of a C tuple that Python then re-wraps. The API is
+// identical (attributes, __eq__/__hash__/__repr__, and the manual constructors still work).
+
+// A minimal owning PyObject reference — used only under the GIL. Move transfers ownership; copy INCREFs,
+// so a wrapped C++ Token stays value-correct through class_wrap's move-construct and any Python-level
+// copy of the instance.
+struct py_ref {
+    PyObject* p {nullptr};
+
+    py_ref() = default;
+    static py_ref steal(PyObject* newref) noexcept { py_ref r; r.p = newref; return r; }
+    static py_ref borrow(PyObject* obj) noexcept { py_ref r; r.p = obj; Py_XINCREF(obj); return r; }
+    py_ref(const py_ref& o) noexcept : p(o.p) { Py_XINCREF(p); }
+    py_ref(py_ref&& o) noexcept : p(o.p) { o.p = nullptr; }
+    py_ref& operator=(const py_ref& o) noexcept
+    {
+        PyObject* q = o.p;
+        Py_XINCREF(q);
+        Py_XDECREF(p);
+        p = q;
+        return *this;
+    }
+    py_ref& operator=(py_ref&& o) noexcept
+    {
+        if (this != &o) {
+            Py_XDECREF(p);
+            p   = o.p;
+            o.p = nullptr;
+        }
+        return *this;
+    }
+    ~py_ref() { Py_XDECREF(p); }
+    [[nodiscard]] PyObject* get() const noexcept { return p; }
+};
+
+struct Position {
+    long long offset {};
+    long long line {};
+    long long column {};
+};
+
+Position    make_position(long long offset, long long line, long long column)
+{
+    return Position {offset, line, column};
+}
+long long   position_offset(const Position& p) { return p.offset; }
+long long   position_line(const Position& p) { return p.line; }
+long long   position_column(const Position& p) { return p.column; }
+std::string position_repr(const Position& p)
+{
+    // Matches the former Python Position.__repr__ order exactly: line, column, offset.
+    return "Position(line=" + std::to_string(p.line) + ", column=" + std::to_string(p.column)
+           + ", offset=" + std::to_string(p.offset) + ")";
+}
+bool        position_eq(const Position& a, const Position& b)
+{
+    return a.offset == b.offset && a.line == b.line && a.column == b.column;
+}
+std::size_t position_hash(const Position& p)
+{
+    std::size_t h = 0x345678U;
+    h = (h ^ static_cast<std::size_t>(p.offset)) * 1000003U;
+    h = (h ^ static_cast<std::size_t>(p.line)) * 1000003U;
+    h = (h ^ static_cast<std::size_t>(p.column)) * 1000003U;
+    return h;
+}
+
+struct Token {
+    int    kind {};
+    py_ref lexeme;   // str/bytes
+    py_ref position; // a Position instance
+    py_ref mode;     // str
+};
+
+// The manual constructor Token(kind, lexeme, position, mode="default"): borrow the object args (INCREF
+// into the held py_refs) and intern the mode string. Mirrors the former Python Token.__init__.
+Token       make_token(int kind, PyObject* lexeme, PyObject* position, std::string mode)
+{
+    return Token {kind, py_ref::borrow(lexeme), py_ref::borrow(position),
+                  py_ref::steal(PyUnicode_FromStringAndSize(mode.data(),
+                                                            static_cast<Py_ssize_t>(mode.size())))};
+}
+long long   token_kind(const Token& t) { return t.kind; }
+PyObject*   token_lexeme(const Token& t) { return Py_NewRef(t.lexeme.get()); }
+PyObject*   token_position(const Token& t) { return Py_NewRef(t.position.get()); }
+PyObject*   token_mode(const Token& t) { return Py_NewRef(t.mode.get()); }
+// The offset/line/column shortcuts delegate to position (like the former Token.offset property),
+// returning the position's own attribute — a new ref, straight through the getset protocol.
+PyObject*   token_offset(const Token& t) { return PyObject_GetAttrString(t.position.get(), "offset"); }
+PyObject*   token_line(const Token& t) { return PyObject_GetAttrString(t.position.get(), "line"); }
+PyObject*   token_column(const Token& t) { return PyObject_GetAttrString(t.position.get(), "column"); }
+std::string token_repr(const Token& t)
+{
+    py_ref line {py_ref::steal(PyObject_GetAttrString(t.position.get(), "line"))};
+    py_ref col {py_ref::steal(PyObject_GetAttrString(t.position.get(), "column"))};
+    py_ref s {py_ref::steal(PyUnicode_FromFormat("Token(kind=%d, lexeme=%R, line=%S, column=%S, mode=%R)",
+                                                 t.kind, t.lexeme.get(), line.get(), col.get(),
+                                                 t.mode.get()))};
+    if (s.get() == nullptr) {
+        throw std::runtime_error("Token repr failed");
+    }
+    Py_ssize_t  size {0};
+    const char* utf8 {PyUnicode_AsUTF8AndSize(s.get(), &size)};
+    if (utf8 == nullptr) {
+        throw std::runtime_error("Token repr encode failed");
+    }
+    return std::string(utf8, static_cast<std::size_t>(size));
+}
+bool        token_eq(const Token& a, const Token& b)
+{
+    if (a.kind != b.kind) {
+        return false;
+    }
+    const int rl {PyObject_RichCompareBool(a.lexeme.get(), b.lexeme.get(), Py_EQ)};
+    const int rp {PyObject_RichCompareBool(a.position.get(), b.position.get(), Py_EQ)};
+    const int rm {PyObject_RichCompareBool(a.mode.get(), b.mode.get(), Py_EQ)};
+    if (rl < 0 || rp < 0 || rm < 0) {
+        throw std::runtime_error("Token comparison failed");
+    }
+    return rl != 0 && rp != 0 && rm != 0;
+}
+std::size_t token_hash(const Token& t)
+{
+    const Py_hash_t hl {PyObject_Hash(t.lexeme.get())};
+    const Py_hash_t hp {PyObject_Hash(t.position.get())};
+    const Py_hash_t hm {PyObject_Hash(t.mode.get())};
+    if (hl == -1 || hp == -1 || hm == -1) {
+        throw std::runtime_error("Token hash failed");
+    }
+    std::size_t h = 0x9E3779B9U;
+    h = (h ^ static_cast<std::size_t>(t.kind)) * 1000003U;
+    h = (h ^ static_cast<std::size_t>(hl)) * 1000003U;
+    h = (h ^ static_cast<std::size_t>(hp)) * 1000003U;
+    h = (h ^ static_cast<std::size_t>(hm)) * 1000003U;
+    return h;
+}
+
 // Builds the (kind, lexeme, offset, line, column, mode) tuple for one token. The
 // lexeme is a str (decoded from the UTF-8 bytes) when the source was str, or bytes
 // when it was bytes — matching the input type. `mode` is the name of the mode the
 // token was lexed in. Returns a new reference, or null on error.
-PyObject* token_tuple(const scilex::token& token, bool is_bytes, const std::string& mode)
+// Builds a C-native Token for one token: a Position, the lexeme (a str decoded from UTF-8 when the
+// source was str, or bytes when it was bytes), and the mode string (already interned — passed borrowed,
+// INCREF'd into the Token). A synthetic token (newline/indent/dedent) carries a null-data view; "" makes
+// an empty lexeme rather than tripping on null. Returns a new reference, or null on error.
+PyObject* build_token_object(const scilex::token& token, bool is_bytes, PyObject* mode)
 {
-    // A synthetic token (newline/indent/dedent) carries a default, null-data view;
-    // use "" so an empty lexeme becomes an empty str/bytes rather than tripping on null.
     const char*      data   = token.lexeme.data() != nullptr ? token.lexeme.data() : "";
     const Py_ssize_t size   = static_cast<Py_ssize_t>(token.lexeme.size());
     PyObject*        lexeme = is_bytes ? PyBytes_FromStringAndSize(data, size)
@@ -136,11 +276,56 @@ PyObject* token_tuple(const scilex::token& token, bool is_bytes, const std::stri
     if (lexeme == nullptr) {
         return nullptr;
     }
-    return Py_BuildValue("(iNnnns)", token.kind, lexeme, // N steals the lexeme ref
-                         static_cast<Py_ssize_t>(token.start.offset),
-                         static_cast<Py_ssize_t>(token.start.line),
-                         static_cast<Py_ssize_t>(token.start.column),
-                         mode.c_str());
+    PyObject* position = sb::class_wrap<Position>(
+        Position {static_cast<long long>(token.start.offset), static_cast<long long>(token.start.line),
+                  static_cast<long long>(token.start.column)});
+    if (position == nullptr) {
+        Py_DECREF(lexeme);
+        return nullptr;
+    }
+    // The Token owns the lexeme and position (steal), and takes a ref on the interned mode (borrow); on
+    // an allocation failure inside class_wrap the moved-in Token's destructor releases all three.
+    return sb::class_wrap<Token>(Token {token.kind, py_ref::steal(lexeme), py_ref::steal(position),
+                                        py_ref::borrow(mode)});
+}
+
+// Builds a Python list of C-native Tokens from a token vector, interning the mode string per mode id
+// (one PyUnicode per mode, reused across every token in it — the 22% the attribution charged to a
+// fresh-per-token mode string). `mode_of(id)` returns the mode NAME for an id. The cache owns the master
+// ref; each Token takes its own via build_token_object's borrow. Returns a new list ref, or null (with
+// the Python error set) after clearing any partial result.
+template <class ModeOf>
+PyObject* build_token_list(const std::vector<scilex::token>& tokens,
+                           bool                              is_bytes,
+                           ModeOf                            mode_of)
+{
+    PyObject* result = PyList_New(static_cast<Py_ssize_t>(tokens.size()));
+    if (result == nullptr) {
+        return nullptr;
+    }
+    std::vector<py_ref> mode_cache;
+    for (std::size_t i = 0; i < tokens.size(); ++i) {
+        const std::size_t mode_id {static_cast<std::size_t>(tokens[i].mode_id)};
+        if (mode_id >= mode_cache.size()) {
+            mode_cache.resize(mode_id + 1);
+        }
+        if (mode_cache[mode_id].get() == nullptr) {
+            const std::string& name {mode_of(tokens[i].mode_id)};
+            mode_cache[mode_id] = py_ref::steal(
+                PyUnicode_FromStringAndSize(name.data(), static_cast<Py_ssize_t>(name.size())));
+            if (mode_cache[mode_id].get() == nullptr) {
+                Py_DECREF(result);
+                return nullptr;
+            }
+        }
+        PyObject* tok {build_token_object(tokens[i], is_bytes, mode_cache[mode_id].get())};
+        if (tok == nullptr) {
+            Py_DECREF(result);
+            return nullptr;
+        }
+        PyList_SetItem(result, static_cast<Py_ssize_t>(i), tok); // steals ref
+    }
+    return result;
 }
 
 // Capsule destructor: frees the lexer when the Python handle is collected.
@@ -428,17 +613,8 @@ PyObject* scilex_tokenize(PyObject* /*self*/, PyObject* args)
         else {
             tokens = lexer->tokenize(text, policy);
         }
-        result = PyList_New(static_cast<Py_ssize_t>(tokens.size()));
-        if (result != nullptr) {
-            for (std::size_t i = 0; i < tokens.size(); ++i) {
-                PyObject* tuple {token_tuple(tokens[i], is_bytes, lexer->mode_name(tokens[i].mode_id))};
-                if (tuple == nullptr) {
-                    Py_CLEAR(result);
-                    break;
-                }
-                PyList_SetItem(result, static_cast<Py_ssize_t>(i), tuple); // steals ref
-            }
-        }
+        result = build_token_list(tokens, is_bytes,
+                                  [&](std::size_t id) -> const std::string& { return lexer->mode_name(id); });
     }
     catch (const scilex::lex_error& error) {
         set_positioned_error(error.what(), error.where());
@@ -534,7 +710,16 @@ PyObject* scilex_scan_next(PyObject* /*self*/, PyObject* args)
         }
     }
     state->needs_advance = true;
-    return token_tuple(*state->it, state->is_bytes, state->lexer->mode_name(state->it->mode_id));
+    // The lazy path builds one Token per call (no bulk interning — the scan contract is per-token); the
+    // mode string is created here and handed to the Token, which takes its own reference.
+    const std::string& mode_name {state->lexer->mode_name(state->it->mode_id)};
+    const py_ref       mode {py_ref::steal(
+                                 PyUnicode_FromStringAndSize(mode_name.data(),
+                                                             static_cast<Py_ssize_t>(mode_name.size())))};
+    if (mode.get() == nullptr) {
+        return nullptr;
+    }
+    return build_token_object(*state->it, state->is_bytes, mode.get());
 }
 
 // _scilex.layout(tokens) -> list. Rewrites an end_of_input-terminated sequence of
@@ -611,19 +796,9 @@ PyObject* scilex_layout(PyObject* /*self*/, PyObject* args)
                                   == insignificant.end();
         }
         const std::vector<scilex::token> out {scilex::layout(input, mode_significant)};
-        result = PyList_New(static_cast<Py_ssize_t>(out.size()));
-        if (result != nullptr) {
-            for (std::size_t i = 0; i < out.size(); ++i) {
-                // Layout is a str/indentation pass (its input lexemes parse via "s#"),
-                // so its synthetic and re-emitted tokens are str lexemes.
-                PyObject* tuple {token_tuple(out[i], /*is_bytes=*/false, names[out[i].mode_id])};
-                if (tuple == nullptr) {
-                    Py_CLEAR(result);
-                    break;
-                }
-                PyList_SetItem(result, static_cast<Py_ssize_t>(i), tuple); // steals ref
-            }
-        }
+        // Layout is a str/indentation pass, so its synthetic and re-emitted tokens are str lexemes.
+        result = build_token_list(out, /*is_bytes=*/false,
+                                  [&](std::size_t id) -> const std::string& { return names[id]; });
     }
     catch (const scilex::layout_error& error) {
         set_positioned_error(error.what(), error.where());
@@ -746,4 +921,30 @@ SCIFORGE_MODULE(_scilex, "scilex.error", m)
           "    list: The layout-aware tuples (still end_of_input-terminated).\n\n"
           "Raises:\n"
           "    error: On a dedent to an indentation no open block used (with .offset/.line/.column).");
+
+    // C-native value types (the bulk-tokenization diet): built once, in C, instead of a C tuple that
+    // Python re-wraps. The attribute surface, __eq__/__hash__/__repr__ and the manual constructors match
+    // the former pure-Python classes exactly.
+    m.type<Position>("scilex.Position")
+    .def_init<&make_position>(sb::arg("offset"), sb::arg("line"), sb::arg("column"))
+    .def_prop_ro<&position_offset>("offset", "0-based byte offset of the position")
+    .def_prop_ro<&position_line>("line", "1-based line of the position")
+    .def_prop_ro<&position_column>("column", "1-based byte column of the position")
+    .def_repr<&position_repr>()
+    .def_richcompare<&position_eq>()
+    .def_hash<&position_hash>();
+
+    m.type<Token>("scilex.Token")
+    .def_init<&make_token>(sb::arg("kind"), sb::arg("lexeme"), sb::arg("position"),
+                           sb::arg("mode") = "default")
+    .def_prop_ro<&token_kind>("kind", "the token kind (int)")
+    .def_prop_ro<&token_lexeme>("lexeme", "the matched text (str or bytes)")
+    .def_prop_ro<&token_position>("position", "the Position of the first byte")
+    .def_prop_ro<&token_mode>("mode", "the name of the mode the token was lexed in")
+    .def_prop_ro<&token_offset>("offset", "position.offset — 0-based byte offset")
+    .def_prop_ro<&token_line>("line", "position.line — 1-based line")
+    .def_prop_ro<&token_column>("column", "position.column — 1-based byte column")
+    .def_repr<&token_repr>()
+    .def_richcompare<&token_eq>()
+    .def_hash<&token_hash>();
 }
