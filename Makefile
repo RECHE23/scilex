@@ -361,20 +361,41 @@ uninstall-cli:
 # pushes from a clean main. Pushing the tag IS the release. PyPI publishing is a
 # separate, per-package opt-in (add a release.yml workflow + a PyPI Trusted
 # Publisher); without it, this just creates a versioned git tag.
+# One-shot release. Auto-computes the CalVer version, rolls the CHANGELOG's Unreleased section into it,
+# stamps an ANNOTATED tag from that section, and pushes. DRY_RUN=1 runs the whole computation and the two
+# guards (empty-Unreleased FAIL, stale-bench WARN) with no commit/tag/push — the only way to audit a
+# one-shot that publishes. Portable awk/sed (BSD + GNU); never runs itself from a test (that would push).
 release:
 	@test "$$(git symbolic-ref --short HEAD)" = main || { echo "release from main only"; exit 1; }
 	@test -z "$$(git status --porcelain)" || { echo "working tree not clean"; exit 1; }
 	@git fetch --tags --quiet origin
-	@year=$$(date -u +%Y); month=$$(date -u +%m | sed 's/^0//'); \
+	@year=$$(date -u +%Y); month=$$(date -u +%m | sed 's/^0//'); today=$$(date -u +%Y-%m-%d); \
 	 patch=$$(git tag -l "v$$year.$$month.*" | wc -l | tr -d ' '); \
 	 version="$$year.$$month.$$patch"; \
-	 echo "Releasing v$$version"; \
+	 echo "Releasing v$$version ($$today)$${DRY_RUN:+  [DRY_RUN — no commit/tag/push]}"; \
+	 awk '/^## Unreleased$$/{f=1;next} f&&/^## /{exit 1} f&&NF{found=1;exit 0} END{if(!found)exit 1}' CHANGELOG.md \
+	   || { echo "release: '## Unreleased' is empty — add a CHANGELOG line (even 'maintenance release') first"; exit 1; }; \
+	 stamped=$$(grep -oE 'real-regex [0-9]+\.[0-9]+\.[0-9]+' BENCHMARKS.md | head -1 | awk '{print $$2}'); \
+	 pinned=$$(sed -nE 's/.*real-regex>=([0-9.]+).*/\1/p' pyproject.toml | head -1); \
+	 if [ -n "$$stamped" ] && [ "$$stamped" != "$$pinned" ]; then \
+	   echo "release: WARN — BENCHMARKS.md stamped against real-regex $$stamped, pyproject pins >= $$pinned; benchmarks may be stale (re-run 'make bench-lex', or proceed knowingly)"; fi; \
+	 tb=$$(mktemp); \
+	 awk -v v="$$version" -v d="$$today" '/^## Unreleased$$/{print; print ""; print "## " v " — " d; next} {print}' CHANGELOG.md > CHANGELOG.md.tmp && mv CHANGELOG.md.tmp CHANGELOG.md; \
+	 awk -v h="## $$version " 'index($$0,h)==1{f=1;print;next} f&&/^## /{exit} f{print}' CHANGELOG.md > $$tb; \
 	 sed -i.bak -E "s/^version = \".*\"/version = \"$$version\"/" pyproject.toml && rm -f pyproject.toml.bak; \
 	 sed -i.bak -E "s/^__version__ = \".*\"/__version__ = \"$$version\"/" python/scilex/__init__.py && rm -f python/scilex/__init__.py.bak; \
-	 git add pyproject.toml python/scilex/__init__.py; \
-	 git commit -m "release: v$$version"; \
-	 git tag "v$$version"; \
-	 git push origin HEAD "v$$version"
+	 if [ -n "$$DRY_RUN" ]; then \
+	   echo "would commit 'release: v$$version' (pyproject, __init__, CHANGELOG); annotated tag v$$version, body:"; \
+	   sed 's/^/    | /' $$tb; \
+	   echo "would run: git push origin HEAD v$$version"; \
+	   git checkout -- pyproject.toml python/scilex/__init__.py CHANGELOG.md; \
+	 else \
+	   git add pyproject.toml python/scilex/__init__.py CHANGELOG.md; \
+	   git commit -m "release: v$$version"; \
+	   git tag -a "v$$version" -F $$tb; \
+	   git push origin HEAD "v$$version"; \
+	 fi; \
+	 rm -f $$tb
 
 clean:
 	rm -rf $(BUILD)
