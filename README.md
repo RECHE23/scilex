@@ -29,7 +29,7 @@ measured optimality.
 - Ordered token rules: `(kind, real::regex, skip)`
 - Maximal-munch matching (longest match wins, rule order for ties)
 - **Contextual lexing (modes)** — per-rule `in_mode` + a push / pop / set mode stack
-- **DFA fast path (opt-in)** — `dfa_modes` accelerates DFA-able modes ~20× with one `real::dfa` pass; best-effort (Pike is the floor, with fallback), identical token stream
+- **DFA fast path (opt-in)** — `dfa_modes` accelerates DFA-able modes 3–27× (dense grammars ~15–27×) with one `real::dfa` pass; best-effort (Pike is the floor, with fallback), identical token stream
 - **Layout Awareness** — mode-aware indentation (NEWLINE / INDENT / DEDENT)
 - Source positions (byte offset, line, column); each token carries its mode
 - Eager (`tokenize`) and lazy (`scan`) APIs
@@ -61,7 +61,7 @@ std::vector<scilex::rule> rules = {
 };
 
 scilex::lexer lexer(std::move(rules));
-// Opt a mode into the DFA fast path (best-effort; ~20× on DFA-able modes):
+// Opt a mode into the DFA fast path (best-effort; 3–27× on DFA-able modes):
 //   scilex::lexer lexer(std::move(rules), /*insignificant=*/ {}, /*dfa_modes=*/ {"default"});
 
 // Eager
@@ -85,7 +85,7 @@ lx = scilex.Lexer([
     (1, r"[0-9]+", False),             # number
     (2, r"[A-Za-z_][A-Za-z0-9_]*", False),
 ])
-# Opt a mode into the DFA fast path (best-effort; ~20× on DFA-able modes):
+# Opt a mode into the DFA fast path (best-effort; 3–27× on DFA-able modes):
 #   lx = scilex.Lexer([...], dfa_modes=("default",))   # lx.dfa_modes_active -> the modes accelerated
 
 # Eager
@@ -161,7 +161,7 @@ the three modal profiles in full.
 A mode can be accelerated by a `real::dfa`: instead of trying each candidate rule at
 every position, one DFA pass recognizes the winning rule — the same maximal munch,
 with the order tie-break baked into the automaton. On a mode where many rules share
-leading bytes that is **~20× the regular path** on the full token path.
+leading bytes that is **3–27× the regular path** on the full token path (dense grammars ~15–27×).
 
 ```cpp
 scilex::lexer lexer(std::move(rules), /*insignificant=*/ {}, /*dfa_modes=*/ {"default"});
@@ -182,8 +182,8 @@ with the default flags and it reads **Unicode identifiers** — `café`, `変数
 behaviour for a language like Python 3. But a Unicode `\w \d \s \b` compiles to a match-time
 **code-point predicate** that no DFA can represent, so a mode holding one **leaves the DFA fast
 path**: it is transparently demoted to the general engine (same tokens, visible via
-`dfa_modes_active()`). Concretely the general engine runs at **~8–13 MB/s** while a DFA-able
-mode runs **~20× that** — the Unicode identifier costs you the DFA.
+`dfa_modes_active()`). Concretely the general engine runs at **~6–9.5 MB/s** while a DFA-able
+mode runs **3–27× that** — the Unicode identifier costs you the DFA.
 
 So: if your identifiers are ASCII by specification (JSON, SQL, C), pin **`(?a)`** inline in the
 pattern (or pass `real::flags::ascii`) to keep `\w \d \s \b` ASCII, small, and DFA-representable —

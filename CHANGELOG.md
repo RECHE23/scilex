@@ -9,6 +9,13 @@ fuzz oracle.
 
 ## 2026.7.3
 
+### Added
+- **Every example grammar now DFA-accelerates (3–27×).** Bumping to real-regex 2026.7.25 (below) makes
+  `lisp`, `yaml` and `python`'s default modes DFA-representable — previously they fell back to Pike. With the
+  SCILEX-1 example fixes, all nine example grammars now accelerate on `dfa_modes` (dense grammars ~15–27×,
+  sparser ones 3–5×; full-set geomean ~13×). See BENCHMARKS.md, refreshed with a full environment stamp. The
+  transparent Pike fallback is unchanged and covered by the `dfa_modes_fallback_on_assertion` test.
+
 ### Fixed
 - **Lexer mode sets are a `std::vector<std::string>`, not a `std::unordered_set`.** The unordered-set
   instantiation drifted symbols across the libc++ ABI boundary (the binding is abi3); an ordered vector is
@@ -25,8 +32,9 @@ fuzz oracle.
 - **DFA fast path (opt-in).** `lexer(rules, insignificant_modes={}, dfa_modes={})` plus
   `dfa_modes_active()`; the Python `Lexer(rules, insignificant_modes=(), dfa_modes=())`
   with `dfa_modes` / `dfa_modes_active` properties. A named mode is accelerated by a
-  `real::dfa` — one maximal-munch pass replacing the per-rule dispatch (~20× on the full
-  token path for DFA-able modes). Additive and invisible: the Pike engine stays the
+  `real::dfa` — one maximal-munch pass replacing the per-rule dispatch (a large speed-up on the
+  full token path for DFA-able modes; see BENCHMARKS.md for current, stamped per-grammar figures).
+  Additive and invisible: the Pike engine stays the
   floor, a mode whose rules need an assertion no DFA can represent or whose DFA fails a
   build-time audit (a lazy quantifier) silently falls back to Pike, and the token stream
   is byte-identical either way. The `sql` and `css` example grammars opt in.

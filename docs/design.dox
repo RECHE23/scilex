@@ -158,7 +158,8 @@ lay = scilex.Lexer([(0, r"\s+", True), (1, r"\w+", False), (2, r":", False)])
   mode stack is per-scan, so the lexer stays immutable and shareable.
 - **DFA fast path (opt-in).** A mode opted into `dfa_modes` is recognized by a single
   \c real::dfa pass (a capture-free maximal-munch DFA over the mode's rules) instead of
-  the per-rule scan — ≈20× on the full token path where many rules share leading bytes.
+  the per-rule scan — 3–27× on the full token path (dense grammars ~15–27×, geomean ~20×; sparser
+  ones 3–5×), most where many rules share leading bytes.
   Best-effort: at construction each opted mode's DFA is built and **audited** against the
   Pike munch on bounded deterministic probes; a rule needing a zero-width assertion (no
   DFA) or a lazy quantifier (the audit catches the shortest-vs-longest divergence) leaves

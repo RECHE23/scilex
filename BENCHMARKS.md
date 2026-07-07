@@ -13,6 +13,14 @@ Both are informational only — they print tables, are never invoked by
 For *why* the numbers look the way they do — the linear-scan engine and the REAL
 foundation — see the [design tour](https://github.com/RECHE23/scilex/blob/main/docs/design.dox).
 
+## Measurement stamp
+
+Every table below was measured on **Apple M1 Pro** (arm64, 8 cores), **Apple LLVM 16.0.0**
+(`clang-1600.0.26.6`), `-O2`, against **real-regex 2026.7.25** (`16ff722`), on **2026-07-07**. Each case
+is the **best of 9** timed passes per run, reported as the **median of N = 6 runs** (IQR quoted where it
+matters). The durable content is the **ratios** (DFA-over-Pike speed-up, machine-invariant); absolute MB/s
+track the host and are meaningful only under this stamp — never a bare number. Reproduce with `make bench-lex`.
+
 ## The honest headline
 
 SciLex is **not** built to beat `re` on raw throughput, and it does not. `re` is a
@@ -52,39 +60,39 @@ they run different match-time machinery:
   to *code-point predicates* (decode a code point, then test membership). An earlier
   measurement put these at a **0.8–2.5 MB/s** floor when the shorthands expanded to a
   byte-automaton alternative per code-point range; with the current code-point-predicate
-  path both regimes now sit in the **same 8–13 MB/s band** — the floor is gone.
+  path both regimes now sit in the **same ~6–9.5 MB/s band** — the floor is gone.
 
 | ASCII-pinned grammar | rules | tokens | eager MB/s | lazy MB/s |
 | --- | ---: | ---: | ---: | ---: |
-| json | 12 | 58 793  | 11.24 | 11.54 |
-| cpp  | 41 | 52 228  | 11.28 | 11.77 |
-| sql  | 39 | 38 760  | 11.21 | 11.58 |
-| css  | 17 | 64 224  |  8.92 |  9.21 |
-| lisp |  8 | 96 600  |  8.97 |  9.56 |
-| math | 12 | 123 376 |  7.95 |  8.46 |
+| json | 12 | 58 793  | 8.77 | 9.02 |
+| cpp  | 41 | 52 228  | 8.39 | 8.70 |
+| sql  | 39 | 38 760  | 8.04 | 8.13 |
+| css  | 17 | 64 224  | 6.64 | 6.86 |
+| lisp |  8 | 96 600  | 7.77 | 8.16 |
+| math | 12 | 123 376 | 5.76 | 6.01 |
 
 | Unicode text-mode grammar | rules | tokens | eager MB/s | lazy MB/s |
 | --- | ---: | ---: | ---: | ---: |
-| xml    | 12 | 65 588 | 13.27 | 14.39 |
-| yaml   | 14 | 56 829 | 12.64 | 13.29 |
-| python | 65 | 53 960 | 10.62 | 10.96 |
+| xml    | 12 | 65 588 | 9.44 | 9.84 |
+| yaml   | 14 | 56 829 | 7.14 | 7.29 |
+| python | 65 | 53 960 | 7.39 | 7.62 |
 
 Three grammars are **modal** (contextual lexing): `python` (f-strings — five modes), `xml`
 (content ↔ tag), `yaml` (block ↔ flow). They sit in the same band as the flat grammars —
 the dispatch runs *per mode*, so modes cost throughput nothing structural. `python` carries
-**65** rules (35 keywords + the modal machinery) yet holds ~10.6 MB/s: the first-byte
+**65** rules (35 keywords + the modal machinery) yet holds ~7.4 MB/s: the first-byte
 dispatch keeps it rule-count-independent.
 
-Method: lexer built once, warmup then **min of 9** timed passes, `-O2`, every result
-consumed through a volatile sink. Sizes are KiB (1024 B), throughput is MB/s (10⁶ B/s),
-same machine as the conditions below. Reproduce with `make bench-lex`.
+Method: lexer built once, warmup then **min of 9** timed passes per run, reported as the **median of
+N = 6 runs** (the stamp above), `-O2`, every result consumed through a volatile sink. Sizes are KiB
+(1024 B), throughput is MB/s (10⁶ B/s). Reproduce with `make bench-lex`.
 
 **Reading — what sets the pace.** Dispatch is **exact**: the lexer builds a 256-bucket
 first-byte index from REAL's first-byte API (`has_first_byte_set` / `unique_first_byte` /
 `may_start_with`), so a rule is tried at a position **only if its pattern can begin there**.
 That collapses the per-position rule count, leaving throughput governed mainly by **token
 density** — the cost is paid per token (one maximal-munch decision each): `math` is densest
-(123 k tokens) and slowest (7.95), while the lower-density grammars top the tables (11–13).
+(123 k tokens) and slowest (5.76), while the lower-density grammars top the tables (~8–9.5).
 
 **Reading — eager vs lazy.** `scan()` edges out `tokenize()` (it never materializes the
 token vector), but only just: both pay REAL's per-position NFA scan, which dominates. The
@@ -95,10 +103,10 @@ inputs:
 
 | KiB | eager MB/s |
 | ---: | ---: |
-| 64  | 11.65 |
-| 128 | 11.40 |
-| 256 | 11.30 |
-| 512 | 11.17 |
+| 64  | 8.54 |
+| 128 | 8.41 |
+| 256 | 8.39 |
+| 512 | 8.38 |
 
 Flat MB/s means time scales **linearly** with input — the linear, ReDoS-safe bound holds
 for the lexer too, not only for the pathological contrast with `re` (below).
@@ -106,38 +114,42 @@ for the lexer too, not only for the pathological contrast with `re` (below).
 **Reading — modes & Layout Awareness.** Contextual lexing is throughput-neutral by
 construction (the dispatch runs per mode). `make bench-lex` also contrasts the modal
 `python` grammar with a mono-mode baseline — the same rules with the f-string modes stripped
-— on the same sample: **modal 10.62 vs mono-mode 11.02 MB/s** (~4%), and the modal path does
+— on the same sample: **modal 7.46 vs mono-mode 7.89 MB/s** (~5%), and the modal path does
 materially more work (53 960 vs 44 872 tokens — full f-string structure, not an opaque
 string). The mode stack is per-scan; Layout Awareness reads each token's mode but adds
 nothing when no mode is insignificant (an empty policy is byte-for-byte the positional pass).
 
-## DFA fast path (opt-in) — and which modes actually accelerate
+## DFA fast path (opt-in) — every example grammar accelerates, 3–27×
 
-A DFA-able mode (mono-mode, greedy, assertion- and lazy-free, no code-point predicate) opts
-into a `real::dfa`: one automaton pass replaces the per-rule scan. Whether a mode qualifies is
-a **measured fact, not a property of the grammar's segment** — a Unicode code-point predicate
-or a lazy/assertion rule makes the DFA reject the mode, which then stays on Pike. On the full
-token path (`tokenize`), DFA versus the Pike row above, and the observed default-mode outcome:
+A DFA-able mode (mono-mode, greedy, assertion- and lazy-free, no code-point predicate) opts into a
+`real::dfa`: one automaton pass replaces the per-rule scan. Whether a mode qualifies is a **measured
+fact** — a rule the DFA cannot represent makes it reject the mode, which then stays on Pike (the
+fallback below). On the full token path (`tokenize`), DFA versus the Pike baseline:
 
-| grammar | Pike MB/s | DFA MB/s | speed-up | default mode |
-| --- | ---: | ---: | ---: | --- |
-| json | 11.00 | 146.68 | **13.3×** | accelerates |
-| sql  | 11.15 | 156.54 | **14.0×** | accelerates |
-| css  |  9.00 | 133.39 | **14.8×** | accelerates |
-| math |  8.00 |  81.99 | **10.2×** | accelerates |
-| xml  | 13.27 | 340.29 | **25.7×** | accelerates |
-| lisp |  9.05 |  9.12  | 1.0×      | stays on Pike (rejected) |
-| yaml | 12.67 | 12.74  | 1.0×      | stays on Pike (rejected) |
-| python\* | 10.45 | 10.61 | 1.0×  | stays on Pike (rejected) |
+| grammar | Pike MB/s | DFA MB/s | speed-up |
+| --- | ---: | ---: | ---: |
+| xml      | 9.45 | 251.48 | **26.7×** |
+| css      | 6.71 | 142.52 | **21.4×** |
+| sql      | 8.00 | 157.80 | **19.6×** |
+| json     | 8.75 | 149.18 | **17.0×** |
+| math     | 5.75 |  87.34 | **15.2×** |
+| lisp     | 7.73 |  98.64 | **12.8×** |
+| yaml     | 7.22 |  35.53 |  **4.9×** |
+| python\* | 7.48 |  23.01 |  **3.1×** |
 
-The split is **not** the ASCII/Unicode segment boundary: `xml` keeps Unicode shorthands yet
-its default mode is DFA-representable (**25.7×**, the largest), while `lisp` is ASCII-pinned
-yet its default mode carries a construct the DFA cannot represent and stays on Pike. `yaml`
-and `python` (a lazy default rule) likewise stay on Pike — a transparent fallback: the token
-stream is identical, only the fast path is skipped. `python\*` is the **0-regression control**
-(the per-mode DFA check is free when the mode is rejected). The DFA is built once in the
-constructor (≈0.3–4.2 ms one-time — a vigilance point only on very short inputs). Reproduce
-with `make bench-lex`.
+**Every one of the example grammars now accelerates — 3.1× to 26.7×** (the dense ASCII grammars and
+`xml` gain the most, ~15–27×; sparse or lightly-tokenized modes like `yaml` and the `python*` control
+gain least, ~3–5×; full-set geomean ~13×, dense-set ~20×). This is **new in this release**: real-regex
+2026.7.25's DFA, together with the SCILEX-1 example fixes, made `lisp`, `yaml` and `python`'s default
+modes DFA-representable where they previously stayed on Pike.
+
+The **transparent fallback** is unchanged — a mode the DFA cannot represent (a non-head assertion, a lazy
+quantifier) is caught at build time (`real::dfa_error` or the longest-vs-shortest audit) and lexes on Pike
+with a byte-identical token stream. Since 2026.7.25 no shipped example grammar needs it, so it lives as a
+**deterministic test** rather than a benchmark row: `dfa_modes_fallback_on_assertion` forces a `$` assertion
+into a mode, asserts the eligibility report drops it (`dfa_modes_active()` empty), and checks the tokens
+still match a brute-force maximal munch. The DFA is built once in the constructor (≈0.4–4.3 ms one-time — a
+vigilance point only on very short inputs). Reproduce with `make bench-lex`.
 
 ## Failure-cost — the recover-and-resync loop on adversarial input
 

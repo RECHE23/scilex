@@ -96,8 +96,8 @@ namespace scilex {
    * But a Unicode `\w \d \s \b` compiles to a match-time **code-point predicate**, which no DFA can
    * represent, so a mode that requests DFA acceleration (`dfa_modes`) and contains one is **transparently
    * demoted** to the general Pike engine (same tokens; the demotion is visible via
-   * `lexer::dfa_modes_active`). Concretely: the general engine lexes at roughly **8–13 MB/s**, while a
-   * DFA-accelerated mode runs about **20× that** — so the Unicode identifier costs the DFA fast path.
+   * `lexer::dfa_modes_active`). Concretely: the general engine lexes at roughly **6–9.5 MB/s**, while a
+   * DFA-accelerated mode runs **3–27× that** — so the Unicode identifier costs the DFA fast path.
    *
    * If your identifiers are ASCII by specification (JSON, SQL, C), pin `(?a)` inline in the pattern
    * (or pass `real::flags::ascii`) to keep `\w \d \s \b` ASCII and small, DFA-representable, and fast —
