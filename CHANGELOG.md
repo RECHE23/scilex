@@ -7,6 +7,20 @@ fuzz oracle.
 
 ## Unreleased
 
+## 2026.7.3
+
+### Fixed
+- **Lexer mode sets are a `std::vector<std::string>`, not a `std::unordered_set`.** The unordered-set
+  instantiation drifted symbols across the libc++ ABI boundary (the binding is abi3); an ordered vector is
+  symbol-stable, a mode set is tiny so membership cost is unchanged, and the token stream is identical.
+
+### Changed
+- **Build requires `real-regex >= 2026.7.25`** (was `>= 2026.7.5`), tracking the current REAL release —
+  the linear POSIX grammars, bounded lookarounds, Unicode `\w \d \s`, and the per-operation ReDoS-safety
+  guarantee the lexer builds on.
+
+## 2026.6.6
+
 ### Added
 - **DFA fast path (opt-in).** `lexer(rules, insignificant_modes={}, dfa_modes={})` plus
   `dfa_modes_active()`; the Python `Lexer(rules, insignificant_modes=(), dfa_modes=())`
@@ -16,6 +30,9 @@ fuzz oracle.
   floor, a mode whose rules need an assertion no DFA can represent or whose DFA fails a
   build-time audit (a lazy quantifier) silently falls back to Pike, and the token stream
   is byte-identical either way. The `sql` and `css` example grammars opt in.
+
+*(Entries for 2026.6.7 – 2026.7.2 were not kept here per-release; those git tags are the record. Per-release
+entries resume above.)*
 
 ## 2026.6.5
 
