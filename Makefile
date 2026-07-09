@@ -280,28 +280,34 @@ check-pins:
 	@if test -x $(SCIFORGE_TOOLS)/check-pins.sh; then $(SCIFORGE_TOOLS)/check-pins.sh .; \
 	 else echo "check-pins: WARN — $(SCIFORGE_TOOLS)/check-pins.sh absent, skipped (CI covers it)"; fi
 
+# Fail-fast: cheap/fast first (format, version, pins, doc), expensive last (sanitize, coverage).
 full-local-gate:
+	@echo "full-local-gate: start (fail-fast — cheap first)"
 	@$(MAKE) format-check
 	@$(MAKE) version-check
 	@$(MAKE) check-pins
 	@$(MAKE) symbol-hygiene
-	@$(MAKE) test
-	@$(MAKE) test CXX=g++-14 BUILD=$(BUILD)/gcc
-	@$(MAKE) sanitize
-	@$(MAKE) misra
 	@$(MAKE) doc-no-coverage
 	@$(MAKE) doc-check
-	@$(MAKE) python-test
+	@$(MAKE) misra
+	@$(MAKE) test
 	@$(MAKE) example
 	@$(MAKE) fuzz-check
 	@$(MAKE) exhaustive-lex
-	@$(MAKE) lint | tee $(BUILD)/lint.log; ! grep -qE 'warning:|error:' $(BUILD)/lint.log
-	@$(MAKE) coverage | tee $(BUILD)/coverage.log
-	# Gate on a flag, not a bare exit 1 in the rule: that exit is overridden by END's exit,
-	# so the gate silently accepted coverage below 100% 4D before this fix.
-	@awk '/^TOTAL/{seen=1; if (gsub(/100\.00%/, "&") != 4) bad=1} END{exit (seen && !bad) ? 0 : 1}' $(BUILD)/coverage.log \
-	  || { echo "full-local-gate: coverage is below 100% on some dimension — see above"; exit 1; }
-	@echo "full-local-gate: ALL gates green (clang + g++-14, sanitize, MISRA, lint, doc, doc-check, python, example, fuzz-check, version-check, 100% coverage)"
+	@$(MAKE) python-test
+	@set -euo pipefail; \
+	  mkdir -p $(BUILD); \
+	  $(MAKE) lint 2>&1 | tee $(BUILD)/lint.log; \
+	  if grep -qE 'warning:|error:' $(BUILD)/lint.log; then \
+	    echo "full-local-gate: FAIL at lint (see $(BUILD)/lint.log)"; exit 1; \
+	  fi
+	@if command -v g++-14 >/dev/null 2>&1; then $(MAKE) test CXX=g++-14 BUILD=$(BUILD)/gcc; else echo "full-local-gate: WARN — g++-14 absent, GCC leg skipped"; fi
+	@$(MAKE) sanitize
+	@set -euo pipefail; \
+	  $(MAKE) coverage 2>&1 | tee $(BUILD)/coverage.log; \
+	  awk '/^TOTAL/{seen=1; if (gsub(/100\.00%/, "&") != 4) bad=1} END{exit (seen && !bad) ? 0 : 1}' $(BUILD)/coverage.log \
+	    || { echo "full-local-gate: coverage is below 100% on some dimension — see above"; exit 1; }
+	@echo "full-local-gate: ALL gates green (cheap→doc→tests→lint→sanitize→coverage; first red stops the train)"
 
 # doc-check builds the docs under the EXACT CI Doxygen (1.9.8, in Docker) via the shared SciForge tool,
 # so a warning the developer's newer local Doxygen tolerates cannot slip past to CI or a release (the
