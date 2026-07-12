@@ -7,6 +7,17 @@ fuzz oracle.
 
 ## Unreleased
 
+### Fixed
+- **`flags::ascii` grammars tokenized four control separators (FS/GS/RS/US, `U+001C`-`U+001F`)
+  backwards.** real-regex 2026.7.37 fixed ASCII-mode `\s` to exclude them (matching Python `re`'s own
+  `re.ASCII` contract; only text-mode `\s` includes them). Any SciLex grammar with a `\s`/`\S` rule
+  pinned to `real::flags::ascii` — every DFA-compat grammar, via `plain()`'s own convention — now
+  classifies these four bytes the same way `re` does. Regression pinned by pin-flip: fails cleanly
+  (non-crashing) against real-regex < 2026.7.37, passes against 2026.7.37+.
+
+### Changed
+- **Build requires `real-regex >= 2026.7.37`** (was `>= 2026.7.25`), for the fix above.
+
 ## 2026.7.3
 
 ### Added
