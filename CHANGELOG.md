@@ -7,6 +7,8 @@ fuzz oracle.
 
 ## Unreleased
 
+## 2026.8.0 — 2026-08-11
+
 ### Changed
 
 - **Build requires `real-regex >= 2026.8.13`** (was `>= 2026.7.37`), and the FetchContent tag moves with
