@@ -182,7 +182,7 @@ with the default flags and it reads **Unicode identifiers** — `café`, `変数
 behaviour for a language like Python 3. But a Unicode `\w \d \s \b` compiles to a match-time
 **code-point predicate** that no DFA can represent, so a mode holding one **leaves the DFA fast
 path**: it is transparently demoted to the general engine (same tokens, visible via
-`dfa_modes_active()`). Concretely the general engine runs at **~6–9.5 MB/s** while a DFA-able
+`dfa_modes_active()`). Concretely the general engine runs at **~7–14.5 MB/s** while a DFA-able
 mode runs **3–27× that** — the Unicode identifier costs you the DFA.
 
 So: if your identifiers are ASCII by specification (JSON, SQL, C), pin **`(?a)`** inline in the
@@ -332,7 +332,8 @@ C++/Python API, current scope) lives in
 
 ## Performance
 
-See [BENCHMARKS.md](BENCHMARKS.md). On normal input `re` is faster. On adversarial
+See [BENCHMARKS.md](BENCHMARKS.md). On the benign case measured there SciLex is now 1.39× faster than
+`re` (it was ~2× slower a stamp ago); on adversarial
 input SciLex stays linear while `re` explodes. See the benchmarks for details.
 
 ## License

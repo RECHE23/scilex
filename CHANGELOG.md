@@ -7,6 +7,47 @@ fuzz oracle.
 
 ## Unreleased
 
+### Changed
+
+- **Build requires `real-regex >= 2026.8.13`** (was `>= 2026.7.37`), and the FetchContent tag moves with
+  it. The sibling-checkout path already compiled against whatever REAL sat next door, so local builds had
+  been getting these gains for a month; no reproducible build, no published wheel and no CI run had.
+
+- **`BENCHMARKS.md` re-measured end to end** against real-regex 2026.8.13 on 2026-08-11, and its stamp now
+  records **AC power** as a condition. That is not decoration: this host throttles ~29 % on battery, a
+  first attempt at the refresh was measured there, and it would have published a 22 % *regression* on
+  `json` that does not exist. An A/B is immune (the same comparison read +28.6 %–+100.2 % on battery
+  against +28.9 %–+96.8 % on AC); an absolute table is not.
+
+### Performance
+
+- **The engine throughput table moves 29 % to 97 %**, measured five interleaved passes per side against
+  real-regex 2026.7.37 and 2026.8.13 (run-to-run amplitude 1.01×–1.05×): `lisp` 7.29 → 14.35 MB/s,
+  `math` 5.80 → 11.34, `css` 6.60 → 9.65, `sql` 6.91 → 9.65, `cpp` 7.27 → 10.11, `json` 7.00 → 9.02.
+  A lexer validates short tokens one at a time — `.match()` per token — which is the per-CALL regime
+  real-regex 2026.8.x spent itself on: a 4944-byte memset per state construction that only gcc emitted,
+  an anchored fixed-shape route that used to decline outright, one of two bulk slot copies per call, and
+  three routes that stopped paying a full engine entry per match. None of that shows in a throughput
+  benchmark over 100 KB corpora, which is why REAL itself could not see most of it until it grew a
+  per-call instrument. No part of the gain is attributed to any single release: the span is twenty of them.
+
+- **Benign tokenization has crossed: SciLex is now 1.39× faster than `re`**, where the previous stamp had
+  `re` ~2× ahead (0.996 ms against 1.380 ms, one run, side by side). Read narrowly — one case, 4000
+  tokens over ~10 KB — and the durable part is the ratio inside the run, not the milliseconds. The
+  headline that said SciLex "is not built to beat `re` on raw throughput, and it does not" has been
+  updated to say what the measurement says.
+
+- **The DFA speed-up range narrows to 2.8×–23.6×** (was 3.1×–26.7×) **because the Pike baseline caught
+  up, not because the DFA slowed**: the DFA column is flat (`xml` 251.48 → 249.89, `math` 87.34 → 87.66)
+  while the Pike column it is divided by rose (`lisp` 7.73 → 14.17, `math` 5.75 → 11.24). Full-set geomean
+  ~9.7×, dense-set ~17.5×.
+
+- The non-fail-fast O(remaining) figure reads **~451 000 ns/position** against the previous stamp's
+  ~199 000, and that is **not** the engine: measured against real-regex 2026.7.37 and 2026.8.13 in one
+  session it reads 446 284 and 452 417, a 1.4 % spread. Stable here across four passes, not
+  reconstructible, so reported rather than explained; the quadratic shape this finding is about is
+  unchanged.
+
 ## 2026.7.4 — 2026-07-12
 
 ### Fixed

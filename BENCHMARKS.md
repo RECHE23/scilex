@@ -16,17 +16,35 @@ foundation — see the [design tour](https://github.com/RECHE23/scilex/blob/main
 ## Measurement stamp
 
 Every table below was measured on **Apple M1 Pro** (arm64, 8 cores), **Apple LLVM 16.0.0**
-(`clang-1600.0.26.6`), `-O2`, against **real-regex 2026.7.25** (`16ff722`), on **2026-07-07**. Each case
-is the **best of 9** timed passes per run, reported as the **median of N = 6 runs** (IQR quoted where it
-matters). The durable content is the **ratios** (DFA-over-Pike speed-up, machine-invariant); absolute MB/s
-track the host and are meaningful only under this stamp — never a bare number. Reproduce with `make bench-lex`.
+(`clang-1600.0.26.6`), `-O2`, against **real-regex 2026.8.13**, on **2026-08-11**, **on AC power**. Each
+case is the **best of 9** timed passes per run, reported as the **median of N = 6 runs** (IQR quoted where
+it matters). The durable content is the **ratios** (DFA-over-Pike speed-up, machine-invariant); absolute
+MB/s track the host and are meaningful only under this stamp — never a bare number. Reproduce with
+`make bench-lex`.
+
+**"On AC power" is part of the stamp because it had to be learned.** This machine throttles hard on
+battery, and the same `json` grammar against the same real-regex reads **7.00 MB/s on battery against
+9.02 on AC** — a 29 % gap with nothing else changed. A first attempt at this refresh was measured on
+battery and would have published a 22 % *regression* on `json` that does not exist: every row sat below
+the previous stamp because the host was slower, not because the code was. An A/B is immune (both sides
+throttle together, and the same comparison read +28.6 % to +100.2 % on battery against +28.9 % to
++96.8 % on AC), but an ABSOLUTE table is not. A power state is a measurement condition exactly as a CPU
+governor is.
 
 ## The honest headline
 
-SciLex is **not** built to beat `re` on raw throughput, and it does not. `re` is a
-mature C backtracking engine; SciLex runs REAL's linear-time NFA at every position,
-through the abi3 binding, and builds rich `Token` objects. On benign input that costs
-a few times more per byte.
+SciLex was **not** built to beat `re` on raw throughput — and as of this stamp, on the
+benign case measured below, it does. `re` is a mature C backtracking engine; SciLex runs
+REAL's linear-time NFA at every position, through the abi3 binding, and builds rich
+`Token` objects, and that used to cost a few times more per byte: the previous stamp put
+`re` ~2× ahead on benign tokenization. Measured side by side in one run against
+real-regex 2026.8.13, **SciLex is 1.39× faster on that case** (0.996 ms against 1.380 ms).
+
+Read that narrowly, because it is one case: 4000 tokens over ~10 KB of ordinary
+identifier-operator soup. It is not a claim about every input, and the absolute
+milliseconds are not comparable to the previous stamp's (different host conditions — see
+the power note above). What IS comparable is the ratio inside a single run, and it moved
+from roughly 0.5 to 1.39.
 
 What SciLex guarantees instead is **linear time, ReDoS-safe by construction**: no rule
 can make the scanner backtrack catastrophically. On an adversarial (or simply
@@ -37,7 +55,7 @@ the difference that matters for a lexer fed untrusted or machine-generated input
 
 | input | winner | why |
 | --- | --- | --- |
-| benign token soup | `re` (~2×) | a mature C backtracking engine; SciLex runs REAL's NFA per position and builds rich `Token`s (the gap narrowed to ~2× with the zero-copy binding + exact dispatch) |
+| benign token soup | **SciLex** (1.39×) | it was `re` by ~2× a stamp ago; real-regex 2026.8.x removed the per-CALL fixed cost, which is a lexer's whole regime — one anchored match per short token |
 | adversarial / ReDoS | **SciLex** (linear vs exponential) | REAL is linear-time and ReDoS-safe; `re` backtracks catastrophically |
 | untrusted / machine-generated | **SciLex** | the linear bound holds on *every* input — no pathological cliff |
 
@@ -64,18 +82,18 @@ they run different match-time machinery:
 
 | ASCII-pinned grammar | rules | tokens | eager MB/s | lazy MB/s |
 | --- | ---: | ---: | ---: | ---: |
-| json | 12 | 58 793  | 8.77 | 9.02 |
-| cpp  | 41 | 52 228  | 8.39 | 8.70 |
-| sql  | 39 | 38 760  | 8.04 | 8.13 |
-| css  | 17 | 64 224  | 6.64 | 6.86 |
-| lisp |  8 | 96 600  | 7.77 | 8.16 |
-| math | 12 | 123 376 | 5.76 | 6.01 |
+| json | 12 | 58 793  | 8.92 | 9.20 |
+| cpp  | 41 | 52 228  | 10.09 | 10.32 |
+| sql  | 39 | 38 760  | 9.64 | 9.83 |
+| css  | 17 | 64 224  | 9.52 | 9.69 |
+| lisp |  8 | 96 600  | 14.38 | 15.25 |
+| math | 12 | 123 376 | 11.03 | 11.82 |
 
 | Unicode text-mode grammar | rules | tokens | eager MB/s | lazy MB/s |
 | --- | ---: | ---: | ---: | ---: |
-| xml    | 12 | 65 588 | 9.44 | 9.84 |
-| yaml   | 14 | 56 829 | 7.14 | 7.29 |
-| python | 65 | 53 960 | 7.39 | 7.62 |
+| xml    | 12 | 65 588 | 10.68 | 11.17 |
+| yaml   | 14 | 56 829 | 7.15 | 7.30 |
+| python | 65 | 53 960 | 9.70 | 9.86 |
 
 Three grammars are **modal** (contextual lexing): `python` (f-strings — five modes), `xml`
 (content ↔ tag), `yaml` (block ↔ flow). They sit in the same band as the flat grammars —
@@ -128,20 +146,22 @@ fallback below). On the full token path (`tokenize`), DFA versus the Pike baseli
 
 | grammar | Pike MB/s | DFA MB/s | speed-up |
 | --- | ---: | ---: | ---: |
-| xml      | 9.45 | 251.48 | **26.7×** |
-| css      | 6.71 | 142.52 | **21.4×** |
-| sql      | 8.00 | 157.80 | **19.6×** |
-| json     | 8.75 | 149.18 | **17.0×** |
-| math     | 5.75 |  87.34 | **15.2×** |
-| lisp     | 7.73 |  98.64 | **12.8×** |
-| yaml     | 7.22 |  35.53 |  **4.9×** |
-| python\* | 7.48 |  23.01 |  **3.1×** |
+| xml      | 10.59 | 249.89 | **23.6×** |
+| sql      |  9.62 | 158.72 | **16.5×** |
+| json     |  8.93 | 146.84 | **16.4×** |
+| css      |  9.48 | 140.01 | **14.8×** |
+| math     | 11.24 |  87.66 |  **7.8×** |
+| lisp     | 14.17 | 107.25 |  **7.6×** |
+| yaml     |  7.14 |  36.55 |  **5.1×** |
+| python\* |  9.41 |  26.78 |  **2.8×** |
 
-**Every one of the example grammars now accelerates — 3.1× to 26.7×** (the dense ASCII grammars and
-`xml` gain the most, ~15–27×; sparse or lightly-tokenized modes like `yaml` and the `python*` control
-gain least, ~3–5×; full-set geomean ~13×, dense-set ~20×). This is **new in this release**: real-regex
-2026.7.25's DFA, together with the SCILEX-1 example fixes, made `lisp`, `yaml` and `python`'s default
-modes DFA-representable where they previously stayed on Pike.
+**Every one of the example grammars still accelerates — 2.8× to 23.6×** — and that RANGE NARROWED because the baseline improved, not because the DFA slowed. Against the previous stamp the DFA column is flat (`xml` 251.48 → 249.89, `css` 142.52 → 140.01, `math` 87.34 → 87.66) while the Pike column it is divided by rose sharply on the grammars where real-regex 2026.8.x did its work: `lisp` 7.73 → 14.17, `math` 5.75 → 11.24, `css` 6.71 → 9.48. A shrinking speed-up here is the Pike path catching up, which is the direction to want it. (The dense ASCII grammars and
+`xml` gain the most, ~15–24×; sparse or lightly-tokenized modes like `yaml` and the `python*` control
+gain least, ~3–5×; full-set geomean ~9.7×, dense-set ~17.5×.) `lisp` and `math` have MOVED between those
+bands — 12.8× and 15.2× under the previous stamp, 7.6× and 7.8× now — and both moved because their Pike
+figure nearly doubled, which is where real-regex 2026.8.x concentrated its work. Since **2026.7.25**,
+real-regex's DFA together with the SCILEX-1 example fixes has made `lisp`, `yaml` and `python`'s default
+modes DFA-representable where they previously stayed on Pike; that is unchanged here.
 
 The **transparent fallback** is unchanged — a mode the DFA cannot represent (a non-head assertion, a lazy
 quantifier) is caught at build time (`real::dfa_error` or the longest-vs-shortest audit) and lexes on Pike
@@ -164,18 +184,18 @@ would not throw per byte), leaving a **net per-position** figure.
 
 | path | corpus | rejected positions | raw ns/pos | net ns/pos |
 | --- | --- | ---: | ---: | ---: |
-| DFA-accel (json) | binary blob        | 29 952 | 5 964 | 3 738 |
-| DFA-accel (json) | invalid-UTF-8      | 32 768 | 5 957 | 3 732 |
-| DFA-accel (json) | unclosed quote     | 32 768 | 5 958 | 3 732 |
-| DFA-accel (json) | parasitic delims   | 32 768 | 5 971 | 3 745 |
-| Pike (xml)       | binary blob        | 16 512 | 6 112 | 3 886 |
-| Pike (xml)       | invalid-UTF-8      | 32 768 | 5 950 | 3 724 |
+| DFA-accel (json) | binary blob        | 29 952 | 6 184 | 3 977 |
+| DFA-accel (json) | invalid-UTF-8      | 32 768 | 6 201 | 3 993 |
+| DFA-accel (json) | unclosed quote     | 32 768 | 6 206 | 3 998 |
+| DFA-accel (json) | parasitic delims   | 32 768 | 6 204 | 3 996 |
+| Pike (xml)       | binary blob        | 16 512 | 6 257 | 4 049 |
+| Pike (xml)       | invalid-UTF-8      | 32 768 | 6 185 | 3 977 |
 | Pike (xml)       | unclosed quote     | 0 (tolerated) | — | — |
-| Pike (xml)       | parasitic delims   |  4 096 | 6 333 | 4 107 |
+| Pike (xml)       | parasitic delims   |  4 096 | 6 491 | 4 283 |
 
 **Reading — three findings that shape a recovering lexer.**
 
-1. **The exception throw dominates.** A `throw`+`catch` pair alone measures **~2 230 ns**, so
+1. **The exception throw dominates.** A `throw`+`catch` pair alone measures **~2 210 ns**, so
    throwing once per rejected byte is by itself larger than everything else combined. A
    recovering lexer must report the skip *without* throwing per byte.
 2. **Re-lexing from scratch is setup-bound, not scan-bound.** After subtracting the throw, the
@@ -185,8 +205,14 @@ would not throw per byte), leaving a **net per-position** figure.
    would avoid this; these figures are an upper bound.
 3. **A non-fail-fast rule is O(remaining) per position.** A rule like `[^!]*!` (a maximal run
    before a terminator) that never completes scans to the end of the input before failing, so
-   every recovery position re-scans what's left — **~199 000 ns/position** on an 8 KiB
-   no-terminator run, and quadratic in the input. This is the characteristic a first-byte
+   every recovery position re-scans what's left — **~451 000 ns/position** on an 8 KiB
+   no-terminator run, and quadratic in the input. **That figure is 2.3× the previous stamp's ~199 000
+   and the cause is NOT the engine:** measured against real-regex 2026.7.37 and 2026.8.13 in the same
+   session it reads 446 284 and 452 417 ns/position, a 1.4 % spread, so both sides of a twenty-release
+   span agree and the change lies between this host today and whatever measured the earlier number.
+   It is stable here (four passes within 1.01×) and it is not reconstructible, so it is reported rather
+   than explained — the order of magnitude and the quadratic shape, which are what this finding is
+   about, are unchanged. This is the characteristic a first-byte
    prefilter (`may_start_with`) mitigates by skipping positions that cannot begin the rule.
 
 ## Conditions of this baseline
@@ -200,7 +226,7 @@ would not throw per byte), leaving a **net per-position** figure.
 
 ## Binding baseline (versus `re`)
 
-### Benign tokenization (the everyday case — `re` wins)
+### Benign tokenization (the everyday case — SciLex now wins, narrowly and on one case)
 
 Tokenizing ~10 KB of ordinary `ident = ident + number * ident - number ;` soup into
 4000 tokens (numbers, identifiers, operators; whitespace skipped). SciLex compiles the
@@ -209,13 +235,20 @@ tokenizer (`(?P<NUM>…)|(?P<ID>…)|…` + `finditer`).
 
 | tokenizer | time | vs `re` |
 | --- | ---: | ---: |
-| `scilex.Lexer.tokenize` | ~3.9 ms | ~2.0× |
-| `re.finditer` (master pattern) | ~1.9 ms | 1.0× (baseline) |
+| `scilex.Lexer.tokenize` | 0.996 ms | **1.39× faster** |
+| `re.finditer` (master pattern) | 1.380 ms | 1.0× (baseline) |
 
-**Reading.** `re` is ~2× faster here — down from ~5× before the binding's zero-copy
-source path (it no longer re-encodes and copies the text) and the exact first-byte
-dispatch (see the C++ engine table). The remaining gap buys SciLex's linear guarantee
-and its ordered maximal-munch semantics, not a speed record on benign input. For
+**Reading.** The gap has crossed. It was ~5× in `re`'s favour before the binding's
+zero-copy source path and the exact first-byte dispatch, ~2× at the previous stamp, and
+it is now **1.39× in SciLex's favour** — the engine work in real-regex 2026.8.x landed
+squarely on this regime, which is a lexer's regime: short subjects, one anchored match
+per token, where a fixed per-call cost is the whole measurement rather than a rounding
+error.
+
+**What this does and does not say.** The two figures above are one run, side by side, so
+their ratio is the durable part; the milliseconds themselves belong to this stamp only.
+One case is one case — 4000 tokens over ~10 KB — and the linear guarantee remains the
+reason to choose SciLex. It simply no longer costs throughput here, where it used to. For
 multi-threaded throughput, `tokenize` releases the GIL around the scan of inputs ≥ 4 KB;
 the lazy `scan` holds the GIL per one-token step (the parser-friendly path, not the
 throughput path).
