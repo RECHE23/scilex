@@ -14,7 +14,7 @@
  *
  * Indentation width is, by default, the byte column of a line's first token (tabs
  * and spaces each count as one column, and mixed tabs/spaces are not policed). The
- * overload that also takes the source text accepts a \ref scilex::tab_policy:
+ * overload that also takes the source text accepts a \ref scilex::tab_policy, and
  * `tab_policy::python` measures indentation as CPython's tokenizer does and
  * refuses a line whose tabs and spaces make the comparison ambiguous.
  *
@@ -109,7 +109,7 @@ namespace scilex {
 
   namespace detail {
 
-    //! \brief A line's indentation under \ref tab_policy::python: tab stops of 8, and tabs as 1.
+    //! \brief A line's indentation under \ref tab_policy::python (tab stops of 8, and tabs as 1).
     struct indent_measure
     {
       std::size_t tab8; //!< Tabs advance to the next multiple of 8.
