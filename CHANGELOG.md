@@ -7,6 +7,8 @@ fuzz oracle.
 
 ## Unreleased
 
+## 2026.9.0 — 2026-09-23
+
 ### Fixed
 
 - **The DFA fast path could change the token stream**, in every release since it shipped (2026.6.6 to
