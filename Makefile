@@ -52,7 +52,7 @@ SCIFORGE_LINT ?= ../sciforge/lint
 SCIFORGE_TOOLS ?= ../sciforge/tools
 FORMAT_FILES := $(shell find include tests examples fuzz benchmarks cli -name '*.hpp' -o -name '*.cpp')
 
-.PHONY: all build test sanitize coverage coverage-build coverage-html \
+.PHONY: all build test sanitize coverage coverage-build coverage-html python-stubtest \
         lint misra doc doc-no-coverage doc-check format format-check full-local-gate \
         python python-test bench bench-lex cli example fuzz-check exhaustive-lex check-pins fuzz version-check install install-smoke uninstall install-cli uninstall-cli release clean help
 
@@ -192,6 +192,12 @@ python:
 python-test: python
 	$(PYRUN) -m unittest discover -s python/tests
 
+# The stub is checked against the runtime surface (mypy.stubtest): a property or function added to the
+# binding and not to scilex/__init__.pyi fails here. MYPY_PYTHON carries mypy.
+MYPY_PYTHON ?= $(PYTHON)
+python-stubtest: python
+	PYTHONPATH=python $(MYPY_PYTHON) -m mypy.stubtest scilex
+
 # Wall-time micro-benchmarks vs Python's re (informational; never gated). See BENCHMARKS.md.
 # C++ per-grammar engine throughput (MB/s) on the example grammars, scaled to
 # steady state. Standalone (no Python build); informational, never gated.
@@ -295,6 +301,7 @@ full-local-gate:
 	@$(MAKE) fuzz-check
 	@$(MAKE) exhaustive-lex
 	@$(MAKE) python-test
+	@if $(MYPY_PYTHON) -c 'import mypy' >/dev/null 2>&1; then $(MAKE) python-stubtest; else echo "full-local-gate: WARN — mypy absent from MYPY_PYTHON, python-stubtest skipped (CI runs it)"; fi
 	@set -euo pipefail; \
 	  mkdir -p $(BUILD); \
 	  $(MAKE) lint 2>&1 | tee $(BUILD)/lint.log; \
