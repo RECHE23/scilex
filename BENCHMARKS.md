@@ -46,8 +46,10 @@ milliseconds are not comparable to the previous stamp's (different host conditio
 the power note above). What IS comparable is the ratio inside a single run, and it moved
 from roughly 0.5 to 1.39.
 
-What SciLex guarantees instead is **linear time, ReDoS-safe by construction**: no rule
-can make the scanner backtrack catastrophically. On an adversarial (or simply
+What SciLex guarantees instead is **ReDoS-safety by construction**: no rule can make the
+scanner backtrack catastrophically, so no input is exponential. It is not a linear bound on every
+input — the worst case is quadratic (a rule that scans far and loses at every position; see
+`docs/spec.dox`). On an adversarial (or simply
 unlucky) pattern, `re` degrades exponentially while SciLex stays flat — and *that* is
 the difference that matters for a lexer fed untrusted or machine-generated input.
 
@@ -57,7 +59,7 @@ the difference that matters for a lexer fed untrusted or machine-generated input
 | --- | --- | --- |
 | benign token soup | **SciLex** (1.39×) | it was `re` by ~2× a stamp ago; real-regex 2026.8.x removed the per-CALL fixed cost, which is a lexer's whole regime — one anchored match per short token |
 | adversarial / ReDoS | **SciLex** (linear vs exponential) | REAL is linear-time and ReDoS-safe; `re` backtracks catastrophically |
-| untrusted / machine-generated | **SciLex** | the linear bound holds on *every* input — no pathological cliff |
+| untrusted / machine-generated | **SciLex** | no rule backtracks, so no input is exponential; the worst case is quadratic, not a cliff |
 
 ## C++ engine throughput — per grammar
 
@@ -116,7 +118,7 @@ density** — the cost is paid per token (one maximal-munch decision each): `mat
 token vector), but only just: both pay REAL's per-position NFA scan, which dominates. The
 lazy path's real win is **O(1) memory**, not speed — which is why a parser prefers it.
 
-**Reading — linearity (the guarantee, in C++).** The same `cpp` grammar over growing
+**Reading — linearity on a real grammar (C++).** The same `cpp` grammar over growing
 inputs:
 
 | KiB | eager MB/s |
@@ -126,8 +128,9 @@ inputs:
 | 256 | 8.39 |
 | 512 | 8.38 |
 
-Flat MB/s means time scales **linearly** with input — the linear, ReDoS-safe bound holds
-for the lexer too, not only for the pathological contrast with `re` (below).
+Flat MB/s means time scales **linearly** with input on this grammar, whose rules stop scanning
+near their tokens. It measures the `cpp` grammar, not a bound for every grammar: two rules (`a*b`
+and `a` on `aaa…`) reach the quadratic worst case described in `docs/spec.dox`.
 
 **Reading — modes & Layout Awareness.** Contextual lexing is throughput-neutral by
 construction (the dispatch runs per mode). `make bench-lex` also contrasts the modal
@@ -247,16 +250,17 @@ error.
 
 **What this does and does not say.** The two figures above are one run, side by side, so
 their ratio is the durable part; the milliseconds themselves belong to this stamp only.
-One case is one case — 4000 tokens over ~10 KB — and the linear guarantee remains the
+One case is one case — 4000 tokens over ~10 KB — and ReDoS-safety remains the
 reason to choose SciLex. It simply no longer costs throughput here, where it used to. For
 multi-threaded throughput, `tokenize` releases the GIL around the scan of inputs ≥ 4 KB;
 the lazy `scan` holds the GIL per one-token step (the parser-friendly path, not the
 throughput path).
 
-### Pathological input (the linearity guarantee — SciLex wins decisively)
+### Pathological input (ReDoS — SciLex wins decisively)
 
 The classic ReDoS trigger `(a+)+b` over a run of `n` `a`s with no terminating `b`. A
-backtracking engine explores `O(2ⁿ)` partitions; REAL (and therefore SciLex) is linear.
+backtracking engine explores `O(2ⁿ)` partitions; REAL never backtracks, and on this input SciLex
+scales linearly.
 
 | n | `scilex` (linear) | `re.match` (backtracking) |
 | ---: | ---: | ---: |
@@ -344,13 +348,13 @@ deterministically by the harness (`benchmarks/bench_compare.py`, cached under `b
 - **Pygments** is pure Python and produces styled pairs for highlighting; it leads on JSON and trails
   badly on Python here (its Python lexer does substantially more per token).
 - **flex** is the raw-throughput **ceiling**: a code-generated native DFA with a build step and a fixed
-  grammar — exactly the axis SciLex does *not* compete on (grammar-as-data, linear-safe, modes/layout).
+  grammar — exactly the axis SciLex does *not* compete on (grammar-as-data, ReDoS-safe, modes/layout).
   It is ~15–30× any Python-embedded option, which is the honest shape of that trade.
 - **Not measured:** Logos and re2c (Rust / a separate C-codegen toolchain) — named, not benchmarked.
 
 **The honest reading.** On raw embedded-Python throughput SciLex is neither the fastest nor the
 slowest: tree-sitter's C-tree return beats it, Pygments beats it on JSON and loses on Python, and a
-code generator (flex) beats everyone. SciLex's case is not this number — it is a linear-time,
+code generator (flex) beats everyone. SciLex's case is not this number — it is a
 ReDoS-safe lexer whose grammar is runtime data, with modes, layout, and recovery, callable from C++
 and Python. The comparison confirms the positioning in the [axes page](@ref comparison), it does not
 overturn it.

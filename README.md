@@ -2,7 +2,8 @@
 
 **A small, header-only C++20 contextual lexer built on REAL.**
 
-- Linear-time and ReDoS-safe by construction (via REAL).
+- ReDoS-safe by construction (via REAL): no rule backtracks, nothing is exponential. Linear on
+  grammars whose rules stop scanning near their tokens; quadratic in the worst case (see *Performance*).
 - **Modes** — contextual lexing: the same byte lexes differently by context
   (f-strings, XML tag/content, YAML block/flow).
 - **Layout Awareness** — mode-aware indentation (NEWLINE / INDENT / DEDENT).
@@ -14,7 +15,8 @@ Define an ordered set of token rules — each a `(kind, regex, skip)` triple —
 SciLex tokenizes by **maximal munch**: the longest anchored match wins, with rule
 order breaking ties. A rule can also opt into **modes** (contextual lexing), so the
 same byte lexes differently by context. Because it is a thin layer over REAL,
-tokenization is linear and ReDoS-safe by construction.
+every rule match is linear in what it scans and ReDoS-safe by construction; tokenizing is linear for
+the usual grammar and quadratic in the worst case (see *Performance*).
 
 What that covers today: significant indentation, plus contexts like f-strings, YAML
 flow collections, and bracket continuation (modes + **Layout Awareness Level A**).
@@ -35,7 +37,7 @@ measured optimality.
 - Eager (`tokenize`) and lazy (`scan`) APIs
 - Optional `END_OF_INPUT` token
 - Positioned errors with a context snippet
-- Linear-time / ReDoS-safe (via REAL)
+- ReDoS-safe (via REAL); linear on the usual grammar, quadratic in the worst case
 - Nine example grammars — three of them modal (f-strings, XML, YAML)
 
 The three modal grammars differ in shape and each documents its own scope; modes
@@ -338,8 +340,17 @@ C++/Python API, current scope) lives in
 ## Performance
 
 See [BENCHMARKS.md](BENCHMARKS.md). On the benign case measured there SciLex is now 1.39× faster than
-`re` (it was ~2× slower a stamp ago); on adversarial
-input SciLex stays linear while `re` explodes. See the benchmarks for details.
+`re` (it was ~2× slower a stamp ago); on a ReDoS pattern SciLex stays linear while `re` explodes. See
+the benchmarks for details.
+
+**The worst case is quadratic, not linear.** Every rule match is linear in the text it scans, but at
+each token start every candidate rule is tried, and a rule may scan far past the token that finally
+wins. Two rules reach it: `a*b` and `a` on `aaa…` — every position scans to the end looking for `b`,
+then loses to `a`. Measured on 2026-09-23 (arm64, Apple clang 16, `-O2`), each doubling of the input
+multiplies the time by 3.8–4.2 on both routes: 266 ms → 16.9 s from 4 000 to 32 000 bytes on the
+Pike path, 35 ms → 2.1 s with the DFA. The shipped grammars stay linear (flat MB/s in
+[BENCHMARKS.md](BENCHMARKS.md)); a grammar fed by users (`.lex` files) can be written into the worst
+case. See [`docs/spec.dox`](docs/spec.dox).
 
 ## License
 

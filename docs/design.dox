@@ -11,8 +11,9 @@ from the headers.
 > [REAL](https://github.com/RECHE23/real-regex): an ordered set of `(kind, regex, skip)`
 > rules; at each position the *longest* anchored match wins, rule order breaks ties
 > (maximal munch). A rule can opt into **modes** (`in_mode` + a push/pop/set mode
-> stack), so the same byte lexes differently by context. Linear-time and **ReDoS-safe
-> by construction** (inherited from REAL). Consume tokens eagerly
+> stack), so the same byte lexes differently by context. **ReDoS-safe by construction**
+> (inherited from REAL): linear on the usual grammar, quadratic in the worst case
+> (\ref spec_linearity). Consume tokens eagerly
 > (\ref scilex::lexer::tokenize) or lazily (\ref scilex::lexer::scan); add the opt-in,
 > mode-aware indentation pass (\ref scilex::layout); use it from C++ or through an abi3
 > Python binding.
@@ -27,16 +28,17 @@ classic rule for deciding where one token ends and the next begins is **maximal
 munch**: at each position, the token is the *longest* match among the rules, and
 ties are broken by rule order (so a keyword listed before the identifier rule wins
 on equal length). What makes a lexer trustworthy on untrusted or machine-generated
-input is the same property that matters for a regex engine: a *predictable*,
-linear worst case.
+input is the same property that matters for a regex engine: a *predictable* worst case —
+polynomial, never exponential, and stated (\ref spec_linearity).
 
 \section x_real 2. REAL as the foundation
 
 SciLex is a deliberately **thin layer** over REAL — it does not re-implement
 pattern matching. Each \ref scilex::rule pairs a token `kind` with a `real::regex`.
 Because REAL simulates a Thompson NFA in linear time (it never backtracks), every
-rule match is linear and **ReDoS-safe**: no token rule can make the scanner explode,
-even on adversarial input. SciLex adds only the scanning loop, source-position
+rule match is linear in the text it scans and **ReDoS-safe**: no token rule can make the
+scanner explode exponentially, even on adversarial input. The scan as a whole is bounded
+in \ref spec_linearity — linear on the usual grammar, quadratic in the worst case. SciLex adds only the scanning loop, source-position
 tracking, and an optional layout pass on top.
 
 \section x_algorithm 3. The algorithm: longest anchored match wins
@@ -197,7 +199,7 @@ lay = scilex.Lexer([(0, r"\s+", True), (1, r"\w+", False), (2, r":", False)])
 - Errors carry a position: \ref scilex::lex_error, \ref scilex::layout_error.
 
 For the performance baseline (honest: `re` wins benign throughput, SciLex wins on
-linearity / ReDoS), see BENCHMARKS.md. For the regex engine underneath, see REAL's
+ReDoS), see BENCHMARKS.md. For the regex engine underneath, see REAL's
 own "How REAL Works" guided tour.
 
 \section x_portability 9. A portability rule: no libc++ std::hash in shipped headers

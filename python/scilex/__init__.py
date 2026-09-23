@@ -1,4 +1,4 @@
-r"""SciLex — a generic, linear-time maximal-munch lexer (a thin layer over REAL).
+r"""SciLex — a generic, ReDoS-safe maximal-munch lexer (a thin layer over REAL).
 
 Define an ordered list of rules — ``(kind, pattern, skip)`` — and tokenize text:
 

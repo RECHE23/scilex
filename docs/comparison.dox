@@ -10,8 +10,10 @@ comparability caveats) is at the end and in full in the performance baseline, `B
 
 - **Grammar as data.** A grammar is an ordered list of `(kind, pattern)` rules built at runtime; adding
   or changing a rule needs no code-generation or build step. Patterns are `real::regex` strings.
-- **Linear-time, ReDoS-safe.** Every rule runs on REAL's linear-time engine and the cursor only
-  advances, so tokenizing is linear in the input for every input — no backtracking cliff.
+- **ReDoS-safe, with a stated bound.** Every rule runs on REAL's linear-time engine and never
+  backtracks, so no input is exponential; tokenizing is linear on the usual grammar and quadratic in the
+  worst case (a rule that scans far and then loses, at every position — see the spec's complexity
+  section).
 - **Modes and layout.** A per-scan mode stack (push/pop/set) does contextual lexing; a mode-aware layout
   pass emits NEWLINE/INDENT/DEDENT for indentation-significant languages, with implicit continuation
   inside insignificant modes.
@@ -27,7 +29,7 @@ Each entry names what that tool does that SciLex does not, alongside where they 
 - **flex / re2c / Logos.** Compile-time **code generation**: the grammar is turned into a DFA and
   emitted as source compiled into your program. That is a build step (a `.l` / generator run) and a
   fixed grammar, in exchange for a lexer specialised to native code — raw scanner throughput is their
-  axis. SciLex keeps the grammar as runtime data (no codegen), runs on an NFA with a linear guarantee,
+  axis. SciLex keeps the grammar as runtime data (no codegen), runs on an NFA with a linear per-match guarantee,
   and adds modes/layout/recovery/bindings; the DFA fast path is an opt-in, not the delivery model.
 - **tree-sitter.** A parser generator (not just a lexer) built for editors: **incremental** re-parsing
   of edited buffers and error-tolerant tree construction over hand-written C parsers. Its axis is
@@ -44,7 +46,7 @@ Each entry names what that tool does that SciLex does not, alongside where they 
 If your need is raw scanner throughput on one fixed grammar compiled into a binary, a code-generator
 (flex / re2c / Logos) is on the right axis. If it is incremental, error-tolerant parsing inside an
 editor, tree-sitter is. If it is a ready lexer for an existing language for highlighting, Pygments is.
-SciLex is on the axis of a **grammar-as-data, linear-time, ReDoS-safe** lexer with modes, layout,
+SciLex is on the axis of a **grammar-as-data, ReDoS-safe** lexer with modes, layout,
 recovery, and first-class C++/Python use — the trade it makes deliberately.
 
 \section cmp_numbers What the measurements show
@@ -63,6 +65,6 @@ note that the tools produce different things:
   DFA, is the **ceiling** at ~160 MB/s — ~15–30× any Python-embedded option, exactly the codegen axis
   SciLex does not compete on.
 
-The numbers **confirm** the axes above rather than overturn them: SciLex's case is linear-time safety,
+The numbers **confirm** the axes above rather than overturn them: SciLex's case is ReDoS-safety,
 grammar-as-data, modes/layout/recovery, and dual C++/Python use — not raw scanner throughput.
 */

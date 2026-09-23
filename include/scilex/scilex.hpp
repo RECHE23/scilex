@@ -4,7 +4,7 @@
  *
  * SciLex is a small, header-only C++20 lexer built on REAL. It turns an
  * ordered set of token rules (each a `real::regex`) into a maximal-munch,
- * linear-time tokenizer. Pure, dependency-light (only REAL), and honest about
+ * ReDoS-safe tokenizer. Pure, dependency-light (only REAL), and honest about
  * its scope.
  */
 #ifndef SCILEX_SCILEX_HPP

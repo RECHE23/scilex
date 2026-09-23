@@ -6,8 +6,11 @@
  * with a `real::regex`; the lexer scans the source left to right, and at each
  * position picks the rule with the **longest** anchored match (maximal munch),
  * breaking ties by rule order (earlier rules have priority). Because REAL is a
- * linear-time engine, tokenization is linear and ReDoS-safe by construction —
- * no token rule can make the scanner backtrack catastrophically.
+ * linear-time engine, every match is linear in what it scans and ReDoS-safe by
+ * construction — no token rule can make the scanner backtrack catastrophically.
+ * The scan as a whole is linear on the usual grammar and quadratic in the worst
+ * case, where a rule scans far past the token that wins at every position (see
+ * the spec's complexity section).
  *
  * Two ways to consume tokens: \ref scilex::lexer::tokenize materializes them
  * all into a vector, while \ref scilex::lexer::scan returns a lazy range that

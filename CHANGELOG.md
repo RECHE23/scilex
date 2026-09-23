@@ -28,6 +28,14 @@ fuzz oracle.
 ### Changed
 
 - **Build requires the first real-regex release carrying `real::dfa_faithful`.**
+- **The complexity claim is corrected: SciLex is ReDoS-safe, not linear on every input.** The README,
+  spec, design, comparison page, `BENCHMARKS.md`, package description and `SECURITY.md` promised
+  "linear in the input for *every* input". Every rule match is linear in what it scans, but at each
+  token start a rule may scan far past the token that wins, so tokenizing is O(n·S·m) and quadratic in
+  the worst case: `a*b` and `a` on `aaa…` multiply the time by ~4 per doubling of the input on both the
+  Pike and DFA routes (measured 2026-09-23, arm64, Apple clang 16, `-O2`). Nothing is exponential. The
+  security policy now states that bound and scopes reports to super-quadratic scaling, a quadratic case
+  in a shipped grammar, or any crash, hang or memory-safety issue.
 - **Constructing a lexer with `dfa_modes` costs ~13–16 % more** on `css` and `sql` (median of 12
   interleaved pairs on arm64 at `-O2`, 2026-09-23: 9.55 → 11.09 ms and 10.97 → 12.37 ms; `json`
   unchanged). The sampled audit was cheap; the decision is ~1 ms per grammar. Paid once per lexer, not
