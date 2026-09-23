@@ -12,9 +12,11 @@
  * and may keep skipping whitespace. Lines with no token (blank or
  * comment-only) carry no structure and are naturally ignored.
  *
- * Indentation width is the byte column of a line's first token (tabs and spaces
- * each count as one column; it does not police mixed tabs/spaces, and there is
- * no implicit line continuation inside brackets).
+ * Indentation width is, by default, the byte column of a line's first token (tabs
+ * and spaces each count as one column, and mixed tabs/spaces are not policed). The
+ * overload that also takes the source text accepts a \ref scilex::tab_policy:
+ * `tab_policy::python` measures indentation as CPython's tokenizer does and
+ * refuses a line whose tabs and spaces make the comparison ambiguous.
  *
  * This pass is positional. With no significance policy it is mode-blind — every
  * token shapes indentation — which is byte-for-byte the original behaviour. A
@@ -37,6 +39,7 @@
 
 #include <algorithm>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <span>
 #include <stdexcept>
@@ -87,6 +90,66 @@ namespace scilex {
   };
 
   /*!
+   * \brief How the overload of \ref layout that takes the source measures indentation.
+   */
+  enum class tab_policy : std::uint8_t
+  {
+    //! A tab is one column, like a space; mixed tabs and spaces are not policed (the default pass).
+    columns,
+    /*!
+     * CPython's rule. A line's indentation is measured twice over the blanks before its first token:
+     * with tabs advancing to the next multiple of 8, and with every tab counted as 1. Levels compare
+     * by the first measure; when the second does not order the same way — a deeper, equal or
+     * shallower line by one measure and not by the other — the line is refused with
+     * "inconsistent use of tabs and spaces in indentation", the message CPython's TabError carries.
+     * A form feed resets both measures, as in CPython.
+     */
+    python,
+  };
+
+  namespace detail {
+
+    //! \brief A line's indentation under \ref tab_policy::python: tab stops of 8, and tabs as 1.
+    struct indent_measure
+    {
+      std::size_t tab8; //!< Tabs advance to the next multiple of 8.
+      std::size_t tab1; //!< Tabs count as one column.
+    };
+
+    //! \brief Measures the bytes of \p source between the start of the line holding \p offset and it.
+    [[nodiscard]] inline indent_measure measure_indent(std::string_view source,
+                                                       std::size_t      offset)
+    {
+      if (offset > source.size()) {
+        throw std::invalid_argument("scilex::layout: a token's offset lies beyond the source it was given");
+      }
+      const std::size_t newline_before {source.rfind('\n', offset == 0 ? std::string_view::npos : offset - 1)};
+      const std::size_t line_start     {(offset == 0 || newline_before == std::string_view::npos) ? 0
+                                                                                                   : newline_before + 1};
+      indent_measure width             {0, 0};
+      for (const char c : source.substr(line_start, offset - line_start)) {
+        if (c == '\t') {
+          width.tab8 = ((width.tab8 / 8) + 1) * 8;
+          ++width.tab1;
+        }
+        else if (c == '\f') {
+          width = {0, 0};
+        }
+        else {
+          ++width.tab8;
+          ++width.tab1;
+        }
+      }
+      return width;
+    }
+
+    [[nodiscard]] inline std::vector<token> layout_pass(std::span<const token>   tokens,
+                                                        const std::vector<bool>& mode_significant,
+                                                        const std::string_view*  source,
+                                                        tab_policy               tabs);
+  } // namespace detail
+
+  /*!
    * \brief Rewrites \p tokens with NEWLINE / INDENT / DEDENT inserted.
    *
    * \param[in] tokens An end-of-input-terminated token sequence.
@@ -104,11 +167,42 @@ namespace scilex {
   [[nodiscard]] inline std::vector<token> layout(std::span<const token>   tokens,
                                                  const std::vector<bool>& mode_significant = {})
   {
-    std::vector<token>       out;
-    std::vector<std::size_t> levels        {0};
-    bool                     started       {false};
-    std::size_t              previous_line {0}; // last *significant* line seen
-    position                 end_position  {0, 1, 1};
+    return detail::layout_pass(tokens, mode_significant, nullptr, tab_policy::columns);
+  }
+
+  /*!
+   * \brief Rewrites \p tokens with NEWLINE / INDENT / DEDENT inserted, measuring indentation in
+   *        \p source under \p tabs.
+   *
+   * \param[in] tokens An end-of-input-terminated token sequence lexed from \p source.
+   * \param[in] source The text \p tokens were lexed from; a token's `start.offset` indexes it.
+   * \param[in] tabs   How indentation is measured (\ref tab_policy).
+   * \param[in] mode_significant As in the overload without a source.
+   * \return The layout-aware token sequence (still end-of-input-terminated).
+   * \throws layout_error If a line dedents to an indentation that no open block used, or (under
+   *         `tab_policy::python`) mixes tabs and spaces so that its level is ambiguous.
+   * \throws std::invalid_argument If a token's offset lies beyond \p source.
+   */
+  [[nodiscard]] inline std::vector<token> layout(std::span<const token>   tokens,
+                                                 std::string_view         source,
+                                                 tab_policy               tabs,
+                                                 const std::vector<bool>& mode_significant = {})
+  {
+    return detail::layout_pass(tokens, mode_significant, &source, tabs);
+  }
+
+  [[nodiscard]] inline std::vector<token> detail::layout_pass(std::span<const token>   tokens,
+                                                              const std::vector<bool>& mode_significant,
+                                                              const std::string_view*  source,
+                                                              tab_policy               tabs)
+  {
+    const bool                          python_tabs   {source != nullptr && tabs == tab_policy::python};
+    std::vector<token>                  out;
+    std::vector<std::size_t>            levels        {0};
+    std::vector<detail::indent_measure> measured      {{0, 0}}; // python_tabs only: one per level
+    bool                                started       {false};
+    std::size_t                         previous_line {0};      // last *significant* line seen
+    position                            end_position  {0, 1, 1};
 
     for (const token& current : tokens) {
       if (current.kind == end_of_input) {
@@ -124,18 +218,32 @@ namespace scilex {
         if (started) {
           out.push_back(token {newline, {}, current.start});
         }
-        const std::size_t width {current.start.column - 1};
+        const detail::indent_measure here  {python_tabs ? detail::measure_indent(*source, current.start.offset)
+                                                        : detail::indent_measure {current.start.column - 1, 0}};
+        const std::size_t            width {here.tab8};
+        // Under python_tabs the second measure (tabs as 1) must agree with the first at every
+        // comparison, in CPython's order: deeper by both, level found by the first then equal by the
+        // second. Anywhere it does not, the line's level depends on the tab width.
+        constexpr const char* mixed {"inconsistent use of tabs and spaces in indentation"};
         if (width > levels.back()) {
+          if (python_tabs && here.tab1 <= measured.back().tab1) {
+            throw layout_error(mixed, current.start);
+          }
           levels.push_back(width);
+          measured.push_back(here);
           out.push_back(token {indent, {}, current.start});
         }
         else {
           while (width < levels.back()) {
             levels.pop_back();
+            measured.pop_back();
             out.push_back(token {dedent, {}, current.start});
           }
           if (width != levels.back()) {
             throw layout_error("inconsistent indentation", current.start);
+          }
+          if (python_tabs && here.tab1 != measured.back().tab1) {
+            throw layout_error(mixed, current.start);
           }
         }
         started = true;

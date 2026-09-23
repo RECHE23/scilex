@@ -1,5 +1,7 @@
 // The indentation layout pass: NEWLINE / INDENT / DEDENT insertion from token
 // positions, with blank/comment lines ignored and inconsistent dedents caught.
+#include <stdexcept>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -146,4 +148,101 @@ TEST(a_token_ending_with_a_newline_ends_its_line)
 {
   const std::vector<int> expected {id, nl, scilex::newline, id, nl, scilex::newline, scilex::end_of_input};
   EXPECT(spanning_kinds("a\nb\n", true) == expected);
+}
+
+namespace {
+  // The layout under a tab policy, or the message of the layout_error it raised.
+  struct tab_outcome
+  {
+    std::vector<int> kinds;
+    std::string      error;
+  };
+
+  tab_outcome layout_with_tabs(std::string_view   source,
+                               scilex::tab_policy tabs)
+  {
+    const scilex::lexer lexer  {make_lexer()};
+    const auto          tokens {lexer.tokenize(source, scilex::eof_policy::append)};
+    tab_outcome         outcome;
+    try {
+      for (const scilex::token& tok : scilex::layout(tokens, source, tabs)) {
+        outcome.kinds.push_back(tok.kind);
+      }
+    }
+    catch (const scilex::layout_error& error) {
+      outcome.error = error.what();
+    }
+    return outcome;
+  }
+
+  const std::string mixed {"inconsistent use of tabs and spaces in indentation"};
+} // namespace
+
+TEST(columns_policy_with_a_source_is_the_positional_pass)
+{
+  for (const std::string_view source : {"a\n  b\n  c\nd\n", "a\n\tb\n        c\n", "a\n\tb\n\tc\n", "x"}) {
+    const scilex::lexer lexer  {make_lexer()};
+    const auto          tokens {lexer.tokenize(source, scilex::eof_policy::append)};
+    const auto          plain  {scilex::layout(tokens)};
+    const auto          with   {scilex::layout(tokens, source, scilex::tab_policy::columns)};
+    EXPECT(plain.size() == with.size());
+    for (std::size_t i = 0; i < plain.size() && i < with.size(); ++i) {
+      EXPECT(plain[i].kind == with[i].kind);
+    }
+  }
+}
+
+TEST(python_policy_measures_a_tab_to_the_next_stop_of_eight)
+{
+  // A tab then eight spaces: one level under CPython's width (8 == 8) -- but only because the tab is
+  // 8 wide; counted as 1 it is shallower, so the level is ambiguous.
+  EXPECT(layout_with_tabs("a\n\tb\n        c\n", scilex::tab_policy::python).error == mixed);
+  // The same text under the columns policy is simply deeper (1 then 8).
+  EXPECT(layout_with_tabs("a\n\tb\n        c\n", scilex::tab_policy::columns).error.empty());
+
+  // Tabs throughout are consistent: the usual INDENT / DEDENT.
+  const std::vector<int> expected {id, scilex::newline,
+                                   scilex::indent, id, scilex::newline,
+                                   scilex::indent, id, scilex::newline,
+                                   scilex::dedent, scilex::dedent, id, scilex::newline,
+                                   scilex::end_of_input};
+  const tab_outcome tabs_only {layout_with_tabs("a\n\tb\n\t\tc\nd\n", scilex::tab_policy::python)};
+  EXPECT(tabs_only.error.empty() && tabs_only.kinds == expected);
+}
+
+TEST(python_policy_refuses_each_ambiguous_comparison)
+{
+  // Deeper by tab stops, not deeper counting a tab as 1: four spaces, then a tab (8 vs 4, 1 vs 4).
+  EXPECT(layout_with_tabs("a\n    b\n\tc\n", scilex::tab_policy::python).error == mixed);
+  // Equal by tab stops, unequal counting tabs as 1: "  \t" and "\t" both reach column 8.
+  EXPECT(layout_with_tabs("a\n  \tb\n\tc\n", scilex::tab_policy::python).error == mixed);
+  // A dedent that lands on a level by tab stops but not by count: the outer level is "\t" (8, 1),
+  // the line is eight spaces (8, 8).
+  EXPECT(layout_with_tabs("a\n\tb\n\t\tc\n        d\n", scilex::tab_policy::python).error == mixed);
+  // A dedent to no level at all keeps its own message.
+  EXPECT(layout_with_tabs("a\n    b\n  c\n", scilex::tab_policy::python).error == "inconsistent indentation");
+  // Mixed but unambiguous is accepted: a tab then a space is deeper than a tab by both measures.
+  EXPECT(layout_with_tabs("a\n\tb\n\t c\n", scilex::tab_policy::python).error.empty());
+}
+
+TEST(python_policy_resets_at_a_form_feed)
+{
+  // CPython resets both measures at a form feed, so "\f  b" sits at column 2 by both.
+  const tab_outcome outcome {layout_with_tabs("a\n\t\f  b\n", scilex::tab_policy::python)};
+  EXPECT(outcome.error.empty());
+  EXPECT(outcome.kinds.size() > 3 && outcome.kinds[2] == scilex::indent);
+}
+
+TEST(python_policy_refuses_a_source_shorter_than_the_tokens)
+{
+  const scilex::lexer lexer  {make_lexer()};
+  const auto          tokens {lexer.tokenize("a\n  b\n", scilex::eof_policy::append)};
+  bool                threw  {false};
+  try {
+    static_cast<void>(scilex::layout(tokens, "a", scilex::tab_policy::python));
+  }
+  catch (const std::invalid_argument&) {
+    threw = true;
+  }
+  EXPECT(threw);
 }

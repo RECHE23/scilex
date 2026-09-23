@@ -32,6 +32,7 @@
 #include <exception>
 #include <map>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -726,9 +727,22 @@ PyObject* scilex_scan_next(PyObject* /*self*/, PyObject* args)
 // tokens inserted from each line's indentation; returns the same tuple shape.
 PyObject* scilex_layout(PyObject* /*self*/, PyObject* args)
 {
-    PyObject* seq               = nullptr;
-    PyObject* insignificant_obj = nullptr; // optional: an iterable of mode names
-    if (PyArg_ParseTuple(args, "O|O", &seq, &insignificant_obj) == 0) {
+    PyObject*   seq               = nullptr;
+    PyObject*   insignificant_obj = nullptr; // optional: an iterable of mode names
+    const char* source            = nullptr; // optional: the UTF-8 text the tokens came from
+    Py_ssize_t  source_length     = 0;
+    const char* tabs_name         = "columns";
+    if (PyArg_ParseTuple(args, "O|Oz#s", &seq, &insignificant_obj, &source, &source_length, &tabs_name) == 0) {
+        return nullptr;
+    }
+    const std::string_view tabs_view {tabs_name};
+    if (tabs_view != "columns" && tabs_view != "python") {
+        PyErr_Format(PyExc_ValueError, "tabs must be 'columns' or 'python', not '%s'", tabs_name);
+        return nullptr;
+    }
+    const scilex::tab_policy tabs {tabs_view == "python" ? scilex::tab_policy::python : scilex::tab_policy::columns};
+    if (tabs == scilex::tab_policy::python && source == nullptr) {
+        PyErr_SetString(PyExc_ValueError, "tabs='python' measures the source's indentation: pass source=");
         return nullptr;
     }
     const Py_ssize_t count = PySequence_Size(seq);
@@ -794,13 +808,20 @@ PyObject* scilex_layout(PyObject* /*self*/, PyObject* args)
             mode_significant[i] = std::find(insignificant.begin(), insignificant.end(), names[i])
                                   == insignificant.end();
         }
-        const std::vector<scilex::token> out {scilex::layout(input, mode_significant)};
+        const std::vector<scilex::token> out {
+            source == nullptr ? scilex::layout(input, mode_significant)
+                              : scilex::layout(input, std::string_view(source, static_cast<std::size_t>(source_length)),
+                                               tabs, mode_significant)};
         // Layout is a str/indentation pass, so its synthetic and re-emitted tokens are str lexemes.
         result = build_token_list(out, /*is_bytes=*/false,
                                   [&](std::size_t id) -> const std::string& { return names[id]; });
     }
     catch (const scilex::layout_error& error) {
         set_positioned_error(error.what(), error.where());
+        result = nullptr;
+    }
+    catch (const std::invalid_argument& error) {
+        PyErr_SetString(PyExc_ValueError, error.what());
         result = nullptr;
     }
     catch (...) {
@@ -909,17 +930,22 @@ SCIFORGE_MODULE(_scilex, "scilex.error", m)
           "Raises:\n"
           "    error: If some position is matched by no rule (after earlier tokens are yielded).");
     m.raw("layout", scilex_layout, METH_VARARGS,
-          "layout(tokens, insignificant=())\n"
+          "layout(tokens, insignificant=(), source=None, tabs='columns')\n"
           "Insert NEWLINE/INDENT/DEDENT tokens from indentation (mode-aware).\n\n"
           "Args:\n"
           "    tokens (sequence): An end_of_input-terminated sequence of\n"
           "        (kind, lexeme, offset, line, column, mode) tuples.\n"
           "    insignificant (sequence): Mode names whose tokens carry no layout\n"
-          "        structure (Layout Awareness Level A); empty is the positional pass.\n\n"
+          "        structure (Layout Awareness Level A); empty is the positional pass.\n"
+          "    source (str | None): The text the tokens were lexed from (UTF-8 offsets).\n"
+          "    tabs (str): 'columns' (a tab is one column) or 'python' (CPython's rule,\n"
+          "        which needs source).\n\n"
           "Returns:\n"
           "    list: The layout-aware tuples (still end_of_input-terminated).\n\n"
           "Raises:\n"
-          "    error: On a dedent to an indentation no open block used (with .offset/.line/.column).");
+          "    error: On a dedent to an indentation no open block used, or tabs and spaces mixed\n"
+          "        so that a level is ambiguous under tabs='python' (with .offset/.line/.column).\n"
+          "    ValueError: On an unknown tabs, tabs='python' without source, or a token beyond source.");
 
     // C-native value types (the bulk-tokenization diet): built once, in C, instead of a C tuple that
     // Python re-wraps. The attribute surface, __eq__/__hash__/__repr__ and the manual constructors match

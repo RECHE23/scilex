@@ -285,7 +285,7 @@ class Lexer:
         """
         return _column_unit(self._handle)
 
-    def layout(self, tokens):
+    def layout(self, tokens, source=None, tabs="columns"):
         """Insert NEWLINE / INDENT / DEDENT from indentation, mode-aware.
 
         Uses this lexer's :attr:`insignificant_modes` (Layout Awareness Level A):
@@ -295,14 +295,18 @@ class Lexer:
         Args:
             tokens (iterable[Token]): An end-of-input-terminated token stream
                 (tokenize with ``eof=True``).
+            source (str | None): The text ``tokens`` were lexed from; needed by
+                ``tabs="python"``.
+            tabs (str): ``"columns"`` or ``"python"`` — see :meth:`Layout.apply`.
 
         Returns:
             list[Token]: The layout-aware tokens (still END_OF_INPUT-terminated).
 
         Raises:
-            error: On a line that dedents to an unknown indentation (``.position``).
+            error: On a line that dedents to an unknown indentation, or mixes tabs
+                and spaces ambiguously under ``tabs="python"`` (``.position``).
         """
-        return Layout(self._insignificant).apply(tokens)
+        return Layout(self._insignificant).apply(tokens, source=source, tabs=tabs)
 
     def tokenize(self, text, eof=False):
         """Tokenize ``text`` eagerly into a list.
@@ -396,21 +400,30 @@ class Layout:
     def __init__(self, insignificant_modes=()):
         self._insignificant = [str(mode) for mode in insignificant_modes]
 
-    def apply(self, tokens):
+    def apply(self, tokens, source=None, tabs="columns"):
         """Rewrite ``tokens`` with NEWLINE/INDENT/DEDENT inserted.
 
         Args:
             tokens (iterable[Token]): An **end-of-input-terminated** token stream —
                 tokenize with ``eof=True`` (the terminal :data:`END_OF_INPUT` is
                 preserved). Each token's ``kind``, position and ``mode`` are read.
+            source (str | None): The text ``tokens`` were lexed from. Only
+                ``tabs="python"`` reads it.
+            tabs (str): How indentation is measured. ``"columns"`` (the default): a
+                tab is one column, like a space. ``"python"``: CPython's rule — tabs
+                advance to the next multiple of 8, and a line whose level would differ
+                with tabs counted as 1 is refused with "inconsistent use of tabs and
+                spaces in indentation"; a form feed resets the measure. Needs ``source``.
 
         Returns:
             list[Token]: The layout-aware tokens (still END_OF_INPUT-terminated).
 
         Raises:
-            error: On a line that dedents to an indentation no open block used,
-                carrying ``.position`` (but no ``.context`` snippet: ``apply`` receives
-                tokens, not the source text, so there is nothing to slice).
+            error: On a line that dedents to an indentation no open block used, or
+                (``tabs="python"``) mixes tabs and spaces so that its level is
+                ambiguous, carrying ``.position`` (no ``.context`` snippet).
+            ValueError: On an unknown ``tabs``, ``tabs="python"`` without ``source``,
+                or a token whose offset lies beyond ``source``.
         """
         fields = []
         for t in tokens:
@@ -419,7 +432,7 @@ class Layout:
                                 "tokenize a str source before applying layout")
             fields.append((t.kind, t.lexeme, t.offset, t.line, t.column, t.mode))
         try:
-            raw = _layout(fields, self._insignificant)
+            raw = _layout(fields, self._insignificant, source, tabs)
         except error as exc:
             _attach_position(exc)
             raise
@@ -454,18 +467,20 @@ def scan(rules, text, eof=False):
     return Lexer(rules).scan(text, eof=eof)
 
 
-def layout(tokens, insignificant_modes=()):
+def layout(tokens, insignificant_modes=(), source=None, tabs="columns"):
     """Insert NEWLINE/INDENT/DEDENT into ``tokens`` (see :meth:`Layout.apply`).
 
     Args:
         tokens (iterable[Token]): An end-of-input-terminated token stream.
         insignificant_modes (iterable): Mode names that carry no layout structure
             (Layout Awareness Level A).
+        source (str | None): The text ``tokens`` were lexed from (for ``tabs="python"``).
+        tabs (str): ``"columns"`` or ``"python"`` (see :meth:`Layout.apply`).
 
     Returns:
         list[Token]: The layout-aware tokens.
     """
-    return Layout(insignificant_modes).apply(tokens)
+    return Layout(insignificant_modes).apply(tokens, source=source, tabs=tabs)
 
 
 def get_include():
