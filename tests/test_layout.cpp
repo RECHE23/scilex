@@ -225,6 +225,14 @@ TEST(python_policy_refuses_each_ambiguous_comparison)
   EXPECT(layout_with_tabs("a\n\tb\n\t c\n", scilex::tab_policy::python).error.empty());
 }
 
+TEST(python_policy_measures_an_indented_first_line)
+{
+  // No newline precedes the first token, so its line starts at offset 0: " \t" reaches column 8.
+  const std::vector<int> expected {scilex::indent, id, scilex::newline, scilex::dedent, scilex::end_of_input};
+  const tab_outcome      outcome  {layout_with_tabs(" \ta\n", scilex::tab_policy::python)};
+  EXPECT(outcome.error.empty() && outcome.kinds == expected);
+}
+
 TEST(python_policy_resets_at_a_form_feed)
 {
   // CPython resets both measures at a form feed, so "\f  b" sits at column 2 by both.
