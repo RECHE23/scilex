@@ -90,7 +90,7 @@ namespace scilex {
   };
 
   /*!
-   * \brief How the overload of \ref layout that takes the source measures indentation.
+   * \brief How the overload of `layout()` that takes the source measures indentation.
    */
   enum class tab_policy : std::uint8_t
   {
