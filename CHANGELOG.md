@@ -31,7 +31,9 @@ fuzz oracle.
 
 ### Changed
 
-- **Build requires the first real-regex release carrying `real::dfa_faithful`.**
+- **Build requires `real-regex >= 2026.9.6`** (was `>= 2026.8.13`), the first release carrying
+  `real::dfa_faithful`; the FetchContent tag moves with it. `BENCHMARKS.md` is not re-measured in this
+  release and keeps its 2026.8.13 stamp.
 - **The complexity claim is corrected: SciLex is ReDoS-safe, not linear on every input.** The README,
   spec, design, comparison page, `BENCHMARKS.md`, package description and `SECURITY.md` promised
   "linear in the input for *every* input". Every rule match is linear in what it scans, but at each
