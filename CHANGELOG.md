@@ -32,7 +32,11 @@ fuzz oracle.
 ### Changed
 
 - **Build requires `real-regex >= 2026.9.6`** (was `>= 2026.8.13`), the first release carrying
-  `real::dfa_faithful`; the FetchContent tag moves with it. `BENCHMARKS.md` is not re-measured in this
+  `real::dfa_faithful`; the FetchContent tag moves with it.
+- **The Python floor moves to CPython 3.11** (the wheel is `cp311-abi3`, the Limited API 3.11). It is
+  inherited, not chosen: real-regex requires Python 3.11 from 2026.8.20 on, it is SciLex's build
+  dependency, and cibuildwheel builds the abi3 wheel with the floor's interpreter -- a 3.10 build
+  cannot install it. The 3.11 wheel was installed and exercised under CPython 3.11.5. `BENCHMARKS.md` is not re-measured in this
   release and keeps its 2026.8.13 stamp.
 - **The complexity claim is corrected: SciLex is ReDoS-safe, not linear on every input.** The README,
   spec, design, comparison page, `BENCHMARKS.md`, package description and `SECURITY.md` promised

@@ -16,7 +16,7 @@ name = "scilex"
 version = "2026.8.0"
 description = "SciLex — a generic, ReDoS-safe maximal-munch lexer built on REAL"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "René Chenard" }]
@@ -47,9 +47,10 @@ packages = ["scilex"]
 [tool.setuptools.package-data]
 scilex = ["*.so", "*.pyd", "py.typed", "*.pyi"]
 
-# Build one abi3 wheel per platform (cp310 → works on CPython 3.10+).
+# Build one abi3 wheel per platform (cp311 → works on CPython 3.11+). The floor is 3.11 because the
+# build dependency real-regex requires it from 2026.8.20 on, and a wheel is built by the floor's interpreter.
 [tool.cibuildwheel]
-build = "cp310-*"
+build = "cp311-*"
 build-frontend = "build"
 test-command = "python -m unittest discover -s {project}/python/tests"
 

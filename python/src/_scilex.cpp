@@ -16,7 +16,7 @@
 // When `eof` is true a terminal end_of_input token is appended/yielded.
 
 #define PY_SSIZE_T_CLEAN
-#define Py_LIMITED_API 0x030A0000
+#define Py_LIMITED_API 0x030B0000
 #include <Python.h>
 
 #include <scilex/scilex.hpp>

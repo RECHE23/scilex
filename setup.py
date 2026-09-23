@@ -72,11 +72,11 @@ class build_py_with_headers(build_py):
 
 
 class abi3_wheel(bdist_wheel):
-    """Forces the stable-ABI tag so one cp310-abi3 wheel serves CPython 3.10+."""
+    """Forces the stable-ABI tag so one cp311-abi3 wheel serves CPython 3.11+."""
 
     def finalize_options(self):
         super().finalize_options()
-        self.py_limited_api = "cp310"
+        self.py_limited_api = "cp311"
 
 
 if sys.platform == "win32":
@@ -92,7 +92,7 @@ setup(
             sources=["python/src/_scilex.cpp"],
             include_dirs=["include", real_include(), _sciforge_include()],
             extra_compile_args=compile_args,
-            define_macros=[("Py_LIMITED_API", "0x030A0000")],
+            define_macros=[("Py_LIMITED_API", "0x030B0000")],
             py_limited_api=True,
         )
     ],

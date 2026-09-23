@@ -8,7 +8,7 @@
   (f-strings, XML tag/content, YAML block/flow).
 - **Layout Awareness** — mode-aware indentation (NEWLINE / INDENT / DEDENT).
 - Eager `tokenize` or lazy `scan`; positioned errors with a context snippet.
-- C++20 header-only + abi3 Python binding (CPython 3.10+).
+- C++20 header-only + abi3 Python binding (CPython 3.11+).
 - Zero dependencies beyond REAL headers.
 
 Define an ordered set of token rules — each a `(kind, regex, skip)` triple — and
@@ -77,7 +77,7 @@ See [`docs/design.dox`](docs/design.dox) for the complete C++ API (`lexer`, `tok
 
 ## Python binding
 
-An abi3 CPython extension (CPython 3.10+, Limited API).
+An abi3 CPython extension (CPython 3.11+, Limited API).
 
 ```python
 import scilex
