@@ -169,20 +169,25 @@ lexer.dfa_modes_active();   // the modes actually accelerated
 ```
 
 It is **best-effort and invisible**: a mode whose rules need a zero-width assertion no
-DFA can represent, or whose DFA fails a build-time audit (a lazy quantifier — its match
-is the *shortest* span while a DFA takes the *longest*), silently stays on the regular
-Pike engine, absent from `dfa_modes_active()`. Either way the **token stream is byte
-identical** (Pike is the floor) and `layout` is unchanged. The DFA is built once, in the
+DFA can represent, or whose DFA would change an answer, silently stays on the regular
+Pike engine, absent from `dfa_modes_active()`. A DFA takes each rule's *longest* match
+while Pike takes the match the rule's priority order prefers, and which rules keep the
+two equal is not visible in the syntax: `as|assert` stops at `as` on "assert" and so
+refuses the DFA, while the lazy `x*?y` agrees on every input and keeps it. The
+constructor **decides** this for every rule with `real::dfa_faithful` — exactly, not by
+sampling — so the **token stream is byte identical** either way (Pike is the floor) and
+`layout` is unchanged. The DFA is built once, in the
 constructor. The `sql` and `css` example grammars ship with it on.
 
 ## Unicode identifiers vs DFA speed — the grammar author's choice
 
 A real trade-off worth stating plainly. Write an identifier rule as `\w+` (or `[^\W\d]\w*`)
 with the default flags and it reads **Unicode identifiers** — `café`, `変数` — the faithful
-behaviour for a language like Python 3. But a Unicode `\w \d \s \b` compiles to a match-time
-**code-point predicate** that no DFA can represent, so a mode holding one **leaves the DFA fast
-path**: it is transparently demoted to the general engine (same tokens, visible via
-`dfa_modes_active()`). Concretely the general engine runs at **~7–14.5 MB/s** while a DFA-able
+behaviour for a language like Python 3. But a Unicode `\w` expands into more UTF-8 byte
+transitions than a DFA is built from, and `\b` is a zero-width assertion no DFA represents, so a
+mode holding either **leaves the DFA fast path**: it is transparently demoted to the general engine
+(same tokens, visible via `dfa_modes_active()`). The narrower Unicode `\d` and `\s` expand and stay
+on the DFA. Concretely the general engine runs at **~7–14.5 MB/s** while a DFA-able
 mode runs **3–27× that** — the Unicode identifier costs you the DFA.
 
 So: if your identifiers are ASCII by specification (JSON, SQL, C), pin **`(?a)`** inline in the

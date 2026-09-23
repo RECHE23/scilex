@@ -53,7 +53,7 @@ class DfaModesTests(unittest.TestCase):
     def test_lazy_rule_falls_back_to_pike(self):
         rules = [(0, r"(?a)\s+", True), (1, r'(?s)""".*?"""', False), (2, r"[a-z]+", False)]
         lex = scilex.Lexer(rules, dfa_modes=("default",))
-        self.assertNotIn("default", lex.dfa_modes_active)  # audit divergence -> Pike
+        self.assertNotIn("default", lex.dfa_modes_active)  # match() stops at the first """ -> Pike
         off = scilex.Lexer(rules)
         src = 'a """x""" b """y"""'
         self.assertEqual(fields(off.tokenize(src)), fields(lex.tokenize(src)))

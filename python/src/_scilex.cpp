@@ -555,7 +555,7 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
 
 // _scilex.dfa_modes_active(handle) -> the mode names actually accelerated by a DFA fast
 // path. A mode requested in compile()'s dfa_modes but rejected (an un-DFA-able assertion,
-// or a failed build-time audit) is absent — it fell back to Pike. Dispatched via def<>:
+// or a DFA that would change an answer) is absent — it fell back to Pike. Dispatched via def<>:
 // caster<scilex::lexer*> extracts the capsule, caster<std::vector<std::string>> builds the
 // list (the Python wrapper wraps either a tuple or a list in list(), so it is unchanged).
 std::vector<std::string> dfa_modes_active(scilex::lexer* lexer)
@@ -868,7 +868,7 @@ SCIFORGE_MODULE(_scilex, "scilex.error", m)
     m.def<&dfa_modes_active>("dfa_modes_active",
                              "dfa_modes_active(handle) -> list[str]\n"
                              "The mode names actually accelerated by a DFA (a requested mode that fell back\n"
-                             "to Pike — an un-DFA-able assertion or a failed audit — is absent).");
+                             "to Pike — an un-DFA-able assertion or a DFA that would change an answer — is absent).");
     m.def<&column_unit>("column_unit",
                         "column_unit(handle) -> str\n"
                         "The unit each token's column is counted in: 'bytes', 'codepoints', or 'utf16'.\n"

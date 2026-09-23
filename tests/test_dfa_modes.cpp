@@ -220,14 +220,14 @@ TEST(dfa_modes_fallback_on_assertion)
   EXPECT(tokens_equal(brute_munch(rules, "foo end"), dfa.tokenize("foo end")));
 }
 
-// Fallback #2 — a lazy quantifier builds a DFA with no error, but the build-time audit
-// detects the longest-vs-shortest divergence and falls back to Pike.
+// Fallback #2 — a lazy quantifier builds a DFA with no error, but its `match()` stops at the first
+// closing delimiter while the DFA takes the last one; the decision refuses the mode.
 TEST(dfa_modes_fallback_on_lazy_quantifier)
 {
   const std::vector<rule> rules {plain(0, R"(\s+)", true), plain(1, R"rx((?s)""".*?""")rx"),
                                  plain(2, "[a-z]+")};
   const scilex::lexer     dfa   {rules, {}, {"default"}};
-  EXPECT(!active_has(dfa, "default")); // audit caught the lazy rule → Pike
+  EXPECT(!active_has(dfa, "default")); // the lazy rule is not faithful → Pike
 
   const scilex::lexer pike {rules};
   for (const std::string_view input : {std::string_view {R"(a """x""" b """y""")"},
@@ -235,6 +235,46 @@ TEST(dfa_modes_fallback_on_lazy_quantifier)
     EXPECT(tokens_equal(pike.tokenize(input), dfa.tokenize(input)));
     EXPECT(tokens_equal(brute_munch(rules, input), dfa.tokenize(input)));
   }
+}
+
+// Fallback #3 — no lazy quantifier at all. `as|assert` stops at "as" on "assert", and with an
+// identifier rule and a catch-all next to it the DFA would lex `assert` as the keyword where the Pike
+// munch lexes the identifier. The catch-all matters: it puts every byte in the candidate alphabet,
+// which is exactly where a sampled audit stops finding the witness.
+TEST(dfa_modes_fallback_on_a_prefix_alternation)
+{
+  const std::vector<rule> rules {plain(0, "[ ]+", true), plain(1, "as|assert"), plain(2, "[a-z]+"),
+                                 rule {.kind = 3, .pattern = real::regex("[\\x00-\\xff]", real::flags::bytes),
+                                       .skip = false}};
+  const scilex::lexer dfa {rules, {}, {"default"}};
+  EXPECT(!active_has(dfa, "default"));
+
+  const std::vector<token> toks {dfa.tokenize("assert x")};
+  EXPECT_EQ(toks.size(), std::size_t {2});
+  EXPECT_EQ(toks[0].kind, 2); // the identifier, as the per-rule munch has it
+  EXPECT(toks[0].lexeme == "assert");
+  EXPECT(tokens_equal(brute_munch(rules, "assert x"), toks));
+
+  // The same keywords as separate rules are faithful, and the mode is accelerated.
+  const std::vector<rule> split {plain(0, "[ ]+", true), plain(1, "as"), plain(1, "assert"), plain(2, "[a-z]+")};
+  EXPECT_EQ(expect_equivalent(split, {"assert as x", "as assert"}) > 0U, true);
+}
+
+// A rule that matches the empty string: the Pike munch lets its zero-length match win where nothing
+// longer matches (the scan then reports an error there), and the DFA never reports one. So the mode is
+// accelerated only when every byte is a whole token of some rule.
+TEST(dfa_modes_nullable_rule_needs_every_byte_covered)
+{
+  const std::vector<rule> gap {plain(0, "[a-z]*"), plain(1, "[0-9]+")};
+  EXPECT(!active_has(scilex::lexer {gap, {}, {"default"}}, "default")); // "!" has no non-empty token
+
+  const std::vector<rule> covered {plain(0, "[a-z]*"),
+                                   rule {.kind = 1, .pattern = real::regex("[\\x00-\\xff]", real::flags::bytes),
+                                         .skip = false}};
+  const scilex::lexer dfa  {covered, {}, {"default"}};
+  EXPECT(active_has(dfa, "default"));
+  const scilex::lexer pike {covered};
+  EXPECT(tokens_equal(pike.tokenize("ab!c"), dfa.tokenize("ab!c")));
 }
 
 // layout() is unchanged by DFA acceleration: same source, dfa_modes on vs off, the

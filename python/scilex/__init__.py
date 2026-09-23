@@ -171,9 +171,11 @@ class Lexer:
             rules use.
         dfa_modes (iterable): Mode names to accelerate with a DFA fast path (one DFA
             pass replaces the per-rule dispatch). Best-effort and invisible: a mode
-            whose rules need an assertion no DFA can represent, or whose DFA fails the
-            build-time audit (a lazy quantifier), silently stays on the regular engine
-            — see :attr:`dfa_modes_active`. The token stream is identical either way.
+            whose rules need an assertion no DFA can represent, or whose DFA would change
+            an answer (a rule whose match is not its longest match, such as
+            ``as|assert``), silently stays on the regular engine — see
+            :attr:`dfa_modes_active`. The decision is exact, so the token stream is
+            identical either way.
         errors (str): What to do at a byte no rule can lex. The default ``"raise"`` is
             unchanged — it raises :class:`error` at the first unlexable byte, exactly as
             before. ``"token"`` opts into recovery: a maximal run of unlexable bytes is
@@ -266,9 +268,9 @@ class Lexer:
         """The modes actually accelerated by a DFA fast path.
 
         A mode requested in ``dfa_modes`` but rejected — its rules need an assertion no
-        DFA can represent, or its DFA failed the build-time audit (a lazy quantifier) —
-        is absent: it fell back to the regular engine, lexing the same tokens. So the
-        rejected set is ``set(dfa_modes) - set(dfa_modes_active)``.
+        DFA can represent, or a DFA over them would change an answer — is absent: it
+        fell back to the regular engine, lexing the same tokens. So the rejected set is
+        ``set(dfa_modes) - set(dfa_modes_active)``.
         """
         return list(_dfa_modes_active(self._handle))
 

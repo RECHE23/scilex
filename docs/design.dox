@@ -160,11 +160,12 @@ lay = scilex.Lexer([(0, r"\s+", True), (1, r"\w+", False), (2, r":", False)])
   \c real::dfa pass (a capture-free maximal-munch DFA over the mode's rules) instead of
   the per-rule scan — 3–27× on the full token path (dense grammars ~15–27×, geomean ~20×; sparser
   ones 3–5×), most where many rules share leading bytes.
-  Best-effort: at construction each opted mode's DFA is built and **audited** against the
-  Pike munch on bounded deterministic probes; a rule needing a zero-width assertion (no
-  DFA) or a lazy quantifier (the audit catches the shortest-vs-longest divergence) leaves
-  that mode on the per-rule scan + first-byte dispatch — which stays the floor, with an
-  identical token stream. Observable via \ref scilex::lexer::dfa_modes_active. A
+  Best-effort: at construction each opted mode's DFA is built and the constructor
+  **decides**, exactly and not by sampling, whether it reproduces the Pike munch
+  (\c real::dfa_faithful on every rule: is each rule's `match()` its longest match?). A
+  rule needing a zero-width assertion (no DFA), or one whose `match()` stops short of its
+  longest match (`as|assert`, a lazy delimiter), leaves that mode on the per-rule scan +
+  first-byte dispatch — which stays the floor, with an identical token stream. Observable via \ref scilex::lexer::dfa_modes_active. A
   compile-time `static_lexer` would bake the DFA: the Phase-0 spike found constexpr
   construction off-budget at the compilers' default step limits, so it is **build-time
   codegen** (the re2c / flex model), **not yet** built.

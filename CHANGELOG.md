@@ -7,6 +7,34 @@ fuzz oracle.
 
 ## Unreleased
 
+### Fixed
+
+- **The DFA fast path could change the token stream**, in every release since it shipped (2026.6.6 to
+  2026.8.0). A DFA takes each rule's *longest* match; the Pike munch takes the match each rule's priority
+  order prefers. The constructor guarded the difference with a sampled audit (one- to eight-byte repeats of
+  each possible first byte, plus 256 fixed-seed strings of at most 48 bytes), and the sample missed ordinary grammars: with keywords `as|assert`, an identifier rule and a
+  catch-all, the DFA lexed `assert` as the keyword where Pike lexes the identifier, and the `xml`
+  example's lazy CDATA rule ran past its first `]]>`. A catch-all rule puts every byte in the probe
+  alphabet, which is where the sample stopped finding witnesses. `make fuzz` was red on its own seed
+  corpus for this reason.
+- The decision is now **exact**: every rule of an opted mode must satisfy `real::dfa_faithful` (is its
+  `match()` always its longest match?), and a mode holding a rule that matches the empty string must
+  make every byte a whole token of some rule, because the Pike munch lets a zero-length match win where
+  the DFA reports none. Which rules pass is not syntactic -- the greedy `(?:ab|a)(?:bc)?` fails, the lazy
+  `x*?y` passes. The shipped `sql` and `css` grammars stay accelerated.
+- The DFA is built through `real::dfa`'s public constructor over the rules' regexes, so SciLex no longer
+  reaches `real::detail::program_view`.
+
+### Changed
+
+- **Build requires the first real-regex release carrying `real::dfa_faithful`.**
+- **Constructing a lexer with `dfa_modes` costs ~13–16 % more** on `css` and `sql` (median of 12
+  interleaved pairs on arm64 at `-O2`, 2026-09-23: 9.55 → 11.09 ms and 10.97 → 12.37 ms; `json`
+  unchanged). The sampled audit was cheap; the decision is ~1 ms per grammar. Paid once per lexer, not
+  per token.
+- The README and `rule` documentation said a Unicode `\w \d \s \b` keeps a mode off the DFA. Only `\w`
+  (an expansion too wide to build) and `\b` (an assertion) do; Unicode `\d` and `\s` build.
+
 ## 2026.8.0 — 2026-08-11
 
 ### Changed
