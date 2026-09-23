@@ -11,9 +11,10 @@ fuzz oracle.
 
 - **The DFA fast path could change the token stream**, in every release since it shipped (2026.6.6 to
   2026.8.0). A DFA takes each rule's *longest* match; the Pike munch takes the match each rule's priority
-  order prefers. The constructor guarded the difference with a sampled audit (one- to eight-byte repeats of
-  each possible first byte, plus 256 fixed-seed strings of at most 48 bytes), and the sample missed ordinary grammars: with keywords `as|assert`, an identifier rule and a
-  catch-all, the DFA lexed `assert` as the keyword where Pike lexes the identifier, and the `xml`
+  order prefers. The constructor guarded the difference with a sampled audit (one- to eight-byte
+  repeats of each possible first byte, plus 256 fixed-seed strings of at most 48 bytes), and the sample
+  missed ordinary grammars: with keywords `as|assert`, an identifier rule and a catch-all, the DFA
+  lexed `assert` as the keyword where Pike lexes the identifier, and the `xml`
   example's lazy CDATA rule ran past its first `]]>`. A catch-all rule puts every byte in the probe
   alphabet, which is where the sample stopped finding witnesses. `make fuzz` was red on its own seed
   corpus for this reason.
@@ -24,6 +25,9 @@ fuzz oracle.
   `x*?y` passes. The shipped `sql` and `css` grammars stay accelerated.
 - The DFA is built through `real::dfa`'s public constructor over the rules' regexes, so SciLex no longer
   reaches `real::detail::program_view`.
+- **`layout` opened a line after a token spanning lines.** `x = """a\nb""" + y` emitted NEWLINE and
+  INDENT before `+`, because the pass remembered where the last significant token *started*. It now
+  remembers the line of its last byte; a token ending with `\n` still ends its line.
 
 ### Changed
 
