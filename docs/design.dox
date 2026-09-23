@@ -81,8 +81,11 @@ and inserts:
 A line that dedents to a column **no open block used** throws a
 \ref scilex::layout_error. Blank and comment-only lines carry no token, so they add
 no structure and are naturally ignored. The terminal \ref scilex::end_of_input is
-preserved. The indentation width is simply the byte column of the line's first
-token — it does not police mixed tabs and spaces (see \ref x_limits).
+preserved. By default the indentation width is the byte column of the line's first
+token, a tab counting as one column. The overload that also takes the source accepts
+\ref scilex::tab_policy::python, CPython's rule: tabs advance to the next stop of 8,
+and a line whose level would differ with tabs counted as 1 is refused with CPython's
+TabError message (held to CPython's `tokenize` by a differential test).
 
 \section x_api 5. The API: eager, lazy, and layout
 
@@ -181,8 +184,9 @@ lay = scilex.Lexer([(0, r"\s+", True), (1, r"\w+", False), (2, r":", False)])
 - **Byte columns.** A `column` counts bytes, matching REAL's UTF-8 byte model: an
   ASCII column equals a character column, but a multibyte codepoint spans several
   byte columns.
-- **Layout** uses the byte column of a line's first token as its indentation width;
-  it does **not** police mixed tabs/spaces. Implicit line-continuation inside brackets
+- **Layout** uses the byte column of a line's first token as its indentation width,
+  unless given the source and \ref scilex::tab_policy::python (CPython's tab rule).
+  Implicit line-continuation inside brackets
   is handled by Layout Awareness (an insignificant mode), not the positional pass.
 - **Integer kinds.** Token kinds are plain `int`s (an `enum`/`IntEnum` reads well);
   a named-rule API is a possible future convenience, not part of the core.

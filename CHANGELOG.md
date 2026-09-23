@@ -7,6 +7,16 @@ fuzz oracle.
 
 ## Unreleased
 
+### Added
+- `scilex::layout(tokens, source, tab_policy, mode_significant)`: `tab_policy::python` measures
+  indentation as CPython does (tab stops of 8, cross-checked with tabs as 1) and refuses an
+  ambiguous mix of tabs and spaces with CPython's TabError message; `tab_policy::columns` is the
+  existing pass. Python: `source=` and `tabs=` on `Lexer.layout`, `Layout.apply` and `layout()`.
+
+### Fixed
+- CLI: an invalid regex in a grammar is reported at its column in the line, with the bare cause;
+  a lex error prints its cause as well as its position.
+
 ## 2026.9.0 — 2026-09-23
 
 ### Fixed
