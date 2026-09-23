@@ -35,11 +35,13 @@
 #ifndef SCILEX_LAYOUT_HPP
 #define SCILEX_LAYOUT_HPP
 
+#include <algorithm>
 #include <cstddef>
 #include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "token.hpp"
@@ -136,8 +138,16 @@ namespace scilex {
             throw layout_error("inconsistent indentation", current.start);
           }
         }
-        previous_line = current.start.line; // only significant lines advance this
-        started       = true;
+        started = true;
+      }
+      if (significant) {
+        // Only significant tokens advance this, and they advance it to the line of their LAST byte: a
+        // token spanning lines (a triple-quoted string) leaves the scan on its closing line, so what
+        // follows there continues that line rather than opening one. A final newline in the lexeme is
+        // excluded -- a token that ends with `\n` ends its line, it does not extend it.
+        const std::string_view body {current.lexeme.ends_with('\n') ? current.lexeme.substr(0, current.lexeme.size() - 1)
+                                                                     : current.lexeme};
+        previous_line = current.start.line + static_cast<std::size_t>(std::ranges::count(body, '\n'));
       }
       out.push_back(current); // every token is kept, significant or not
     }

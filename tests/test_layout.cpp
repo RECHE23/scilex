@@ -104,3 +104,46 @@ TEST(inconsistent_dedent_is_an_error)
   }
   EXPECT(threw);
 }
+
+namespace {
+
+  inline constexpr int text {3};
+  inline constexpr int op   {4};
+  inline constexpr int nl   {5};
+
+  // A grammar with a token that spans lines (a triple-quoted string) and, optionally, a newline that
+  // is a real token rather than skipped whitespace.
+  std::vector<int> spanning_kinds(std::string_view source,
+                                  bool             newline_is_a_token)
+  {
+    std::vector<scilex::rule> rules;
+    rules.push_back({.kind = ws, .pattern = real::regex("[ ]+"), .skip = true});
+    rules.push_back({.kind = nl, .pattern = real::regex("\n"), .skip = !newline_is_a_token});
+    rules.push_back({.kind = text, .pattern = real::regex(R"rx((?s)""".*?""")rx"), .skip = false});
+    rules.push_back({.kind = id, .pattern = real::regex("[a-z]+"), .skip = false});
+    rules.push_back({.kind = op, .pattern = real::regex("[=+]"), .skip = false});
+    const scilex::lexer lexer  {std::move(rules)};
+    const auto          tokens {lexer.tokenize(source, scilex::eof_policy::append)};
+    std::vector<int>    kinds;
+    for (const scilex::token& tok : scilex::layout(tokens)) {
+      kinds.push_back(tok.kind);
+    }
+    return kinds;
+  }
+} // namespace
+
+// A token that spans lines leaves the scan on its CLOSING line: what follows it there continues the
+// logical line, even when the closing line is indented deeper than the opening one.
+TEST(a_token_spanning_lines_does_not_open_a_line_where_it_closes)
+{
+  const std::vector<int> expected {id, op, text, op, id, scilex::newline, id, scilex::newline, scilex::end_of_input};
+  EXPECT(spanning_kinds("x = \"\"\"a\nb\"\"\" + y\nz\n", false) == expected);
+  EXPECT(spanning_kinds("x = \"\"\"a\n    b\"\"\" + y\nz\n", false) == expected);
+}
+
+// A token that ENDS with a newline ends its line: the token after it opens the next one.
+TEST(a_token_ending_with_a_newline_ends_its_line)
+{
+  const std::vector<int> expected {id, nl, scilex::newline, id, nl, scilex::newline, scilex::end_of_input};
+  EXPECT(spanning_kinds("a\nb\n", true) == expected);
+}
