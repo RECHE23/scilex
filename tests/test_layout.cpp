@@ -175,7 +175,7 @@ namespace {
     return outcome;
   }
 
-  const std::string mixed {"inconsistent use of tabs and spaces in indentation"};
+  constexpr std::string_view mixed {"inconsistent use of tabs and spaces in indentation"};
 } // namespace
 
 TEST(columns_policy_with_a_source_is_the_positional_pass)
