@@ -255,11 +255,17 @@ exhaustive-lex:
 # deterministic gate is `make fuzz-check`. FUZZ_TIME bounds a local run; the corpus lives
 # under build/ (not versioned), seeded from the example grammars and tests as representative
 # byte sequences. A wrong tokenization aborts with the grammar and the violated invariant.
-FUZZ_TIME ?= 30
+#
+# FUZZ_LDFLAGS reaches the link. Measured on macOS arm64 with Homebrew clang 22 and Apple ld-1115:
+# ld64 rejects the instrumented object ("invalid r_symbolnum"), and an lld-linked binary loses
+# exception unwinding (the oracle's own catch is never reached); FUZZ_LDFLAGS=-Wl,-ld_classic links
+# a binary whose exceptions work.
+FUZZ_TIME    ?= 30
+FUZZ_LDFLAGS ?=
 fuzz:
 	@mkdir -p $(BUILD)/fuzz/corpus
 	@cp examples/*.hpp tests/*.cpp $(BUILD)/fuzz/corpus/ 2>/dev/null || true
-	clang++ $(CXXSTD) -O1 -g -fsanitize=fuzzer,address,undefined $(INCLUDES) -Iexamples -Ifuzz fuzz/fuzz_lexer.cpp -o $(BUILD)/fuzz/fuzz_lexer
+	clang++ $(CXXSTD) -O1 -g -fsanitize=fuzzer,address,undefined $(INCLUDES) -Iexamples -Ifuzz fuzz/fuzz_lexer.cpp $(FUZZ_LDFLAGS) -o $(BUILD)/fuzz/fuzz_lexer
 	$(BUILD)/fuzz/fuzz_lexer -max_total_time=$(FUZZ_TIME) -timeout=10 -max_len=8192 $(BUILD)/fuzz/corpus
 
 # Version-consistency gate: pyproject.toml is the single source of truth — `make

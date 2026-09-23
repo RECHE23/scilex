@@ -214,10 +214,12 @@ namespace {
     return rules;
   }
 
-  //! \brief Runs the oracle; on a violation, reports and aborts (a libFuzzer find).
+  //! \brief Runs the oracle against \p lex and the recovery oracle against \p token_lex; on a
+  //!        violation, reports and aborts (a libFuzzer find).
   void run_or_die(const char*                      label,
                   const std::vector<scilex::rule>& rules,
                   const scilex::lexer&             lex,
+                  const scilex::lexer&             token_lex,
                   std::string_view                 input,
                   bool                             has_layout)
   {
@@ -227,14 +229,47 @@ namespace {
       std::abort();
     }
     // Error recovery: the token lexer must equal the recovery reference on the same input (the
-    // continuous counterpart of fuzz-check's token pass). dfa_modes = {"default"} exercises both scan
-    // paths' ERROR handling.
-    const scilex::lexer        token_lex {rules, {}, {"default"}, scilex::error_policy::token};
+    // continuous counterpart of fuzz-check's token pass).
     const scilex::fuzz::result recovered {scilex::fuzz::check_recover(rules, token_lex, input)};
     if (!recovered.ok) {
       std::fprintf(stderr, "oracle violation [%s token]: %s\n", label, recovered.invariant);
       std::abort();
     }
+  }
+
+  //! \brief The recovery lexer the oracle drives: dfa_modes = {"default"} exercises both scan paths'
+  //!        ERROR handling.
+  scilex::lexer token_lexer(const std::vector<scilex::rule>& rules)
+  {
+    return scilex::lexer {rules, {}, {"default"}, scilex::error_policy::token};
+  }
+
+  //! \brief A fixed grammar, built ONCE. A lexer is immutable and shareable (scan state lives in the
+  //!        scan), so rebuilding the nine grammars -- each with a DFA-accelerated recovery lexer whose
+  //!        construction decides every rule -- for every input only spent the budget on construction:
+  //!        the target ran at a fraction of an execution per second.
+  struct prepared_grammar
+  {
+    const grammar*            source;
+    std::vector<scilex::rule> rules;
+    scilex::lexer             lex;
+    scilex::lexer             token_lex;
+  };
+
+  const std::vector<prepared_grammar>& prepared_grammars()
+  {
+    static const std::vector<prepared_grammar> all {[] {
+                                                      std::vector<prepared_grammar> built;
+                                                      for (const grammar& gram : grammars) {
+                                                        std::vector<scilex::rule> rules {gram.rules()};
+                                                        scilex::lexer             lex {gram.lexer()};
+                                                        scilex::lexer             token_lex {token_lexer(rules)};
+                                                        built.push_back({&gram, std::move(rules), std::move(lex),
+                                                                         std::move(token_lex)});
+                                                      }
+                                                      return built;
+                                                    }()};
+    return all;
   }
 } // namespace
 
@@ -244,16 +279,14 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data,
   const std::string_view input {reinterpret_cast<const char*>(data), size};
 
   // Mode (a): every real grammar, all applicable invariants (incl. layout).
-  for (const grammar& gram : grammars) {
-    const std::vector<scilex::rule> rules {gram.rules()};
-    const scilex::lexer             lex   {gram.lexer()};
-    run_or_die(gram.name, rules, lex, input, gram.has_layout);
+  for (const prepared_grammar& gram : prepared_grammars()) {
+    run_or_die(gram.source->name, gram.rules, gram.lex, gram.token_lex, input, gram.source->has_layout);
   }
 
   // Mode (b): a rule-set seeded by the input itself (structural, no layout).
   const std::vector<scilex::rule> rules {rules_from_seed(fnv1a(input))};
   const scilex::lexer             lex   {rules}; // ctor copies; rules stays for the reference
-  run_or_die("random", rules, lex, input, false);
+  run_or_die("random", rules, lex, token_lexer(rules), input, false);
 
   // Mode (c): a multi-mode rule-set, seeded distinctly. Valid by construction,
   // but guard the build so a future palette change can never turn a bad assembly
@@ -261,7 +294,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data,
   const std::vector<scilex::rule> mm_rules {multi_mode_rules_from_seed(fnv1a(input) ^ 0x9e3779b97f4a7c15ULL)};
   try {
     const scilex::lexer mm_lex {mm_rules};
-    run_or_die("multimode", mm_rules, mm_lex, input, false);
+    run_or_die("multimode", mm_rules, mm_lex, token_lexer(mm_rules), input, false);
   }
   catch (const std::invalid_argument&) {
     // an unconstructible assembly: skip it (not a finding)
