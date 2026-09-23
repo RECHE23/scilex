@@ -164,12 +164,15 @@ namespace {
     std::vector<std::string>  names;
   };
 
-  //! \brief Throws a clear, positioned grammar-file error.
+  //! \brief Throws a clear, positioned grammar-file error; \p column (1-based byte column in the
+  //!        line) is printed when the cause has one.
   [[noreturn]] void grammar_error(const std::string& path,
                                   int                line,
-                                  const std::string& why)
+                                  const std::string& why,
+                                  std::size_t        column = 0)
   {
-    throw std::runtime_error(path + ":" + std::to_string(line) + ": " + why);
+    const std::string where {column == 0 ? "" : ":" + std::to_string(column)};
+    throw std::runtime_error(path + ":" + std::to_string(line) + where + ": " + why);
   }
 
   //! \brief Splits \p text on tab characters (no trimming of the parts).
@@ -241,7 +244,10 @@ namespace {
         parsed.rules.push_back(scilex::rule {kind, real::regex(fields[1]), skip});
       }
       catch (const real::regex_error& error) {
-        grammar_error(path, lineno, std::string {"invalid regex: "} + error.what());
+        // The engine's offset is inside the pattern; the pattern starts one tab after the name,
+        // which starts after the leading blanks. What a reader needs is the column in the line.
+        const std::size_t pattern_column {first + fields[0].size() + 1};
+        grammar_error(path, lineno, "invalid regex: " + error.cause(), pattern_column + error.position() + 1);
       }
       parsed.names.push_back(fields[0]);
     }
@@ -417,7 +423,8 @@ int main(int    argc,
     return run_grammar(args, layout, errors, columns);
   }
   catch (const scilex::lex_error& error) {
-    std::cerr << "lex error at " << error.where().line << ':' << error.where().column << '\n';
+    std::cerr << "lex error at " << error.where().line << ':' << error.where().column << ": " << error.what()
+              << '\n';
     return 1;
   }
   catch (const std::exception& error) {

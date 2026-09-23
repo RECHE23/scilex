@@ -228,6 +228,17 @@ example: cli
 	@printf 'café' | $(BUILD)/bin/scilex examples/unicode_ident.lex - | grep -q '^IDENT	café' \
 	  && echo "  .lex bare \\w+ reads a Unicode identifier: café -> IDENT" \
 	  || { echo "FAIL: examples/unicode_ident.lex did not lex café as one IDENT"; exit 1; }
+	@mkdir -p $(BUILD)/cli-errors
+	@printf 'num\t[0-9]+\n  word\tab(c\n' > $(BUILD)/cli-errors/bad.lex
+	@out="$$($(BUILD)/bin/scilex $(BUILD)/cli-errors/bad.lex - </dev/null 2>&1)"; code=$$?; \
+	 test $$code -ne 0 && printf '%s\n' "$$out" | grep -q 'bad.lex:2:10: invalid regex: missing )' \
+	  && echo "  an invalid regex is reported at its column in the line (2:10), cause without prefix" \
+	  || { echo "FAIL: invalid-regex report was: $$out (exit $$code)"; exit 1; }
+	@printf 'num\t[0-9]+\n' > $(BUILD)/cli-errors/num.lex
+	@out="$$(printf '12x' | $(BUILD)/bin/scilex $(BUILD)/cli-errors/num.lex - 2>&1)"; code=$$?; \
+	 test $$code -ne 0 && printf '%s\n' "$$out" | grep -q "^lex error at 1:3: no rule matches" \
+	  && echo "  a lex error names its position and its cause" \
+	  || { echo "FAIL: lex-error report was: $$out (exit $$code)"; exit 1; }
 	@echo "examples: all self-checks pass"
 
 # Deterministic lexer-oracle gate (fuzz/reference.hpp): runs every property invariant
