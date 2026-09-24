@@ -685,15 +685,14 @@ namespace scilex {
       if (memos.size() <= mode) {
         memos.resize(mode + 1);
       }
-      if (!memos[mode]) {
-        memos[mode].emplace(source.size());
-      }
+      std::optional<real::dfa_munch_memo>& slot {memos[mode]};
+      real::dfa_munch_memo&                memo {slot ? *slot : slot.emplace(source.size())};
       // The Pike munch over the whole mode, assembled from its parts: the longest match wins and the
       // lowest index breaks a tie. The DFA answers for its rules' non-empty matches (each rule's
       // match() is its longest, so the DFA's longest is theirs); a DFA rule's empty match, which the
       // DFA never reports, competes through empty_winner; the rules the DFA cannot take run on Pike.
       munch_result best {};
-      if (const std::optional<real::dfa_match> matched {hybrid->dfa.match(source, offset, *memos[mode])}) {
+      if (const std::optional<real::dfa_match> matched {hybrid->dfa.match(source, offset, memo)}) {
         best = munch_result {.have = true, .idx = hybrid->to_global[matched->rule_index], .len = matched->length};
       }
       else if (hybrid->empty_winner) {
