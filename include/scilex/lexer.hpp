@@ -352,7 +352,7 @@ namespace scilex {
       position           cursor {0, 1, 1};
       std::vector<frame> stack {frame {.mode_id = 0, .entry_pos = cursor}}; // start in "default"
       token              next   {};
-      munch_memos        memos;
+      munch_memos        memos  {memos_for(source)};
       while (scan_next(source, cursor, stack, next, memos)) {
         out.push_back(next);
       }
@@ -442,9 +442,18 @@ namespace scilex {
 
     friend class token_iterator;
 
-    //! \brief Per mode, what the munches over one source have proved (\c real::dfa_munch_memo),
-    //!        made on the mode's first DFA munch; one object per tokenization or iterator.
-    using munch_memos = std::vector<std::optional<real::dfa_munch_memo>>;
+    //! \brief Per mode, what the munches over one source have proved (\c real::dfa_munch_memo); one
+    //!        object per tokenization or iterator, made by \ref memos_for. An unarmed memo holds
+    //!        nothing, so making one per mode up front costs nothing a scan would notice.
+    using munch_memos = std::vector<real::dfa_munch_memo>;
+
+    //! \brief The memos for one scan of \p source: one per mode, each unarmed.
+    //! \param[in] source The text about to be scanned.
+    //! \return The memos, indexed by mode id.
+    [[nodiscard]] munch_memos memos_for(std::string_view source) const
+    {
+      return munch_memos(mode_names_.size(), real::dfa_munch_memo {source.size()});
+    }
 
     //! \brief Formats a position as "line:column" for diagnostics.
     static std::string position_label(position where)
@@ -696,20 +705,14 @@ namespace scilex {
                           std::size_t      offset,
                           munch_memos&     memos) const
     {
-      const std::string_view rest   {source.substr(offset)};
-      const auto             lead   {static_cast<unsigned char>(source[offset])};
-      const mode_dfa* const  hybrid {per_mode_dfa_[mode].get()};
+      const mode_dfa* const hybrid {per_mode_dfa_[mode].get()};
       if (hybrid == nullptr) {
-        return pike_munch_in_mode(mode, rest, lead, nullptr);
+        return pike_munch_in_mode(mode, source.substr(offset), static_cast<unsigned char>(source[offset]), nullptr);
       }
       // The DFA's walk is memoized over the whole source (real::dfa_munch_memo): a state a walk proved
       // leads to no accept stops every later walk that reaches it, so the DFA's share of a
       // tokenization is linear in the source rather than quadratic.
-      if (memos.size() <= mode) {
-        memos.resize(mode + 1);
-      }
-      std::optional<real::dfa_munch_memo>& slot {memos[mode]};
-      real::dfa_munch_memo&                memo {slot ? *slot : slot.emplace(source.size())};
+      real::dfa_munch_memo& memo {memos[mode]};
       // The Pike munch over the whole mode, assembled from its parts: the longest match wins and the
       // lowest index breaks a tie. The DFA answers for its rules' non-empty matches (each rule's
       // match() is its longest, so the DFA's longest is theirs); a DFA rule's empty match, which the
@@ -722,7 +725,9 @@ namespace scilex {
         best = munch_result {.have = true, .idx = *hybrid->empty_winner, .len = 0};
       }
       if (hybrid->any_on_pike) {
-        const munch_result rest_of_mode {pike_munch_in_mode(mode, rest, lead, &hybrid->on_pike)};
+        const munch_result rest_of_mode {pike_munch_in_mode(mode, source.substr(offset),
+                                                            static_cast<unsigned char>(source[offset]),
+                                                            &hybrid->on_pike)};
         if (rest_of_mode.have
             && (!best.have || rest_of_mode.len > best.len
                 || (rest_of_mode.len == best.len && rest_of_mode.idx < best.idx))) {
@@ -1066,7 +1071,8 @@ namespace scilex {
       : owner_(&owner),
         source_(source),
         policy_(policy),
-        done_(false)
+        done_(false),
+        memos_(owner.memos_for(source))
     {
       advance();
     }
