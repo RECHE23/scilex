@@ -161,11 +161,12 @@ lay = scilex.Lexer([(0, r"\s+", True), (1, r"\w+", False), (2, r":", False)])
   in) and an `action` (push/pop/set), so the lexer runs maximal munch + the exact
   first-byte dispatch *per mode* — f-strings, XML content/tag, YAML block/flow. The
   mode stack is per-scan, so the lexer stays immutable and shareable.
-- **DFA fast path (opt-in).** A mode opted into `dfa_modes` is recognized by a single
+- **DFA fast path (automatic).** Every mode (\ref scilex::dfa_policy::automatic, the default; or
+  only those named in `dfa_modes` under \ref scilex::dfa_policy::requested) is recognized by a single
   \c real::dfa pass (a capture-free maximal-munch DFA over the mode's rules) instead of
   the per-rule scan — 3–27× on the full token path (dense grammars ~15–27×, geomean ~20×; sparser
   ones 3–5×), most where many rules share leading bytes.
-  Best-effort: at construction each opted mode's DFA is built and the constructor
+  Best-effort: at construction each tried mode's DFA is built and the constructor
   **decides**, exactly and not by sampling, whether it reproduces the Pike munch
   (\c real::dfa_faithful on every rule: is each rule's `match()` its longest match?). A
   rule needing a zero-width assertion (no DFA), or one whose `match()` stops short of its

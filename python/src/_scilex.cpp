@@ -463,9 +463,16 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
     PyObject*   dfa_modes_obj  = nullptr; // optional sequence of mode names (borrowed)
     const char* errors_str     = nullptr; // optional "raise" (default) or "token"
     const char* columns_str    = nullptr; // optional "bytes" (default) / "codepoints" / "utf16"
-    if (PyArg_ParseTuple(args, "O|Ozz", &rules_obj, &dfa_modes_obj, &errors_str, &columns_str) == 0) {
+    const char* dfa_str        = nullptr; // optional "auto" (default) / "requested"
+    if (PyArg_ParseTuple(args, "O|Ozzz", &rules_obj, &dfa_modes_obj, &errors_str, &columns_str, &dfa_str) == 0) {
         return nullptr;
     }
+    const std::string_view dfa_name {dfa_str == nullptr ? "auto" : dfa_str};
+    if (dfa_name != "auto" && dfa_name != "requested") {
+        PyErr_Format(PyExc_ValueError, "dfa must be 'auto' or 'requested', not '%s'", dfa_str);
+        return nullptr;
+    }
+    const scilex::dfa_policy dfa {dfa_name == "auto" ? scilex::dfa_policy::automatic : scilex::dfa_policy::requested};
     std::vector<std::string> dfa_modes;
     if (parse_in_mode(dfa_modes_obj, &dfa_modes, "dfa_modes") < 0) {
         return nullptr; // not a sequence of names (error set)
@@ -541,7 +548,7 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
         }
         auto* lexer = new scilex::lexer(std::move(rules), {},
                                         std::vector<std::string>(dfa_modes.begin(), dfa_modes.end()),
-                                        errors, columns);
+                                        errors, columns, dfa);
         PyObject* capsule = PyCapsule_New(lexer, CAPSULE_NAME, capsule_free);
         if (capsule == nullptr) {
             delete lexer;
@@ -866,7 +873,7 @@ struct caster<scilex::lexer*> {
 SCIFORGE_MODULE(_scilex, "scilex.error", m)
 {
     m.raw("compile", scilex_compile, METH_VARARGS,
-          "compile(rules, dfa_modes=(), errors='raise', columns='bytes')\n"
+          "compile(rules, dfa_modes=(), errors='raise', columns='bytes', dfa='auto')\n"
           "Compile an ordered list of rules into a lexer handle.\n\n"
           "Args:\n"
           "    rules (sequence): Each rule is (kind:int, pattern:str, skip:bool) and may\n"

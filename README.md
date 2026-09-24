@@ -31,7 +31,7 @@ measured optimality.
 - Ordered token rules: `(kind, real::regex, skip)`
 - Maximal-munch matching (longest match wins, rule order for ties)
 - **Contextual lexing (modes)** — per-rule `in_mode` + a push / pop / set mode stack
-- **DFA fast path (opt-in)** — `dfa_modes` accelerates DFA-able modes 3–27× (dense grammars ~15–27×) with one `real::dfa` pass; best-effort (Pike is the floor, with fallback), identical token stream
+- **DFA fast path (automatic)** — every mode whose DFA reproduces the per-rule munch is accelerated 3–27× (dense grammars ~15–27×) with one `real::dfa` pass; the decision is exact (Pike is the floor), the token stream identical; `dfa_policy::requested` restricts it to `dfa_modes`
 - **Layout Awareness** — mode-aware indentation (NEWLINE / INDENT / DEDENT)
 - Source positions (byte offset, line, column); each token carries its mode
 - Eager (`tokenize`) and lazy (`scan`) APIs
@@ -63,8 +63,7 @@ std::vector<scilex::rule> rules = {
 };
 
 scilex::lexer lexer(std::move(rules));
-// Opt a mode into the DFA fast path (best-effort; 3–27× on DFA-able modes):
-//   scilex::lexer lexer(std::move(rules), /*insignificant=*/ {}, /*dfa_modes=*/ {"default"});
+// Every mode whose DFA is exact is accelerated (3–27×); lexer.dfa_modes_active() names them.
 
 // Eager
 for (const auto& tok : lexer.tokenize("if x + 42")) { ... }
@@ -87,8 +86,8 @@ lx = scilex.Lexer([
     (1, r"[0-9]+", False),             # number
     (2, r"[A-Za-z_][A-Za-z0-9_]*", False),
 ])
-# Opt a mode into the DFA fast path (best-effort; 3–27× on DFA-able modes):
-#   lx = scilex.Lexer([...], dfa_modes=("default",))   # lx.dfa_modes_active -> the modes accelerated
+# Every mode whose DFA is exact is accelerated (3–27×): lx.dfa_modes_active names them;
+# scilex.Lexer([...], dfa="requested") keeps the per-rule path.
 
 # Eager
 tokens = lx.tokenize("foo 42", eof=True)
@@ -158,16 +157,19 @@ An action is `None` | `("push", mode)` | `("set", mode)` | `("pop",)`; a plain
 unaffected. See `examples/python.hpp`, `examples/xml.hpp`, `examples/yaml.hpp` for
 the three modal profiles in full.
 
-## DFA fast path (opt-in)
+## DFA fast path (automatic)
 
-A mode can be accelerated by a `real::dfa`: instead of trying each candidate rule at
+Every mode is accelerated by a `real::dfa` where that is exact: instead of trying each candidate rule at
 every position, one DFA pass recognizes the winning rule — the same maximal munch,
 with the order tie-break baked into the automaton. On a mode where many rules share
 leading bytes that is **3–27× the regular path** on the full token path (dense grammars ~15–27×).
 
 ```cpp
-scilex::lexer lexer(std::move(rules), /*insignificant=*/ {}, /*dfa_modes=*/ {"default"});
-lexer.dfa_modes_active();   // the modes actually accelerated
+scilex::lexer lexer(std::move(rules));   // dfa_policy::automatic: every mode is tried
+lexer.dfa_modes_active();                // the modes actually accelerated
+// Only some modes, or none: dfa_policy::requested with the names (empty = the per-rule path).
+scilex::lexer pike(std::move(other_rules), {}, {}, scilex::error_policy::raise,
+                   scilex::column_unit::bytes, scilex::dfa_policy::requested);
 ```
 
 It is **best-effort and invisible**: a mode whose rules need a zero-width assertion no
@@ -179,7 +181,11 @@ refuses the DFA, while the lazy `x*?y` agrees on every input and keeps it. The
 constructor **decides** this for every rule with `real::dfa_faithful` — exactly, not by
 sampling — so the **token stream is byte identical** either way (Pike is the floor) and
 `layout` is unchanged. The DFA is built once, in the
-constructor. The `sql` and `css` example grammars ship with it on.
+constructor, and that is its cost: measured 2026-09-23 (arm64, `-O2`, minimum of 7), building the
+example grammars' lexers takes 0.08–26 ms instead of 0.01–0.13 ms, and the Python grammar's five
+modes ~140 ms, against REAL `2026.9.6`; REAL's `main` builds the same automata 3–8× faster
+(the Python grammar's ~24 ms). A caller that builds many short-lived lexers can pass
+`dfa_policy::requested`. From Python: `Lexer(..., dfa="requested")`.
 
 ## Unicode identifiers vs DFA speed — the grammar author's choice
 

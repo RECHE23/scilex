@@ -22,8 +22,11 @@
 
 #include <algorithm>
 #include <array>
+#include <cstddef>
+#include <cstdint>
 #include <iterator>
 #include <map>
+#include <numeric>
 #include <memory>
 #include <optional>
 #include <span>
@@ -194,6 +197,21 @@ namespace scilex {
   }
 
   /*!
+   * \brief Which modes a lexer tries to accelerate with a \c real::dfa.
+   *
+   * The token stream is the same either way: a mode keeps its DFA only where the lexer has decided
+   * that the DFA reproduces the per-rule munch on every input (see \ref lexer::dfa_modes_active).
+   */
+  enum class dfa_policy : std::uint8_t
+  {
+    //! Every mode (the default). A mode whose rules no DFA represents, or whose DFA would change an
+    //! answer, stays on the per-rule path; the cost is the DFA construction for the others.
+    automatic,
+    //! Only the modes named in `dfa_modes`; an empty list keeps every mode on the per-rule path.
+    requested,
+  };
+
+  /*!
    * \brief What a lexer does when it reaches a byte that no rule in the active mode can begin.
    *
    * The default preserves the historical behaviour exactly; \ref token is opt-in recovery.
@@ -245,8 +263,9 @@ namespace scilex {
      *            must be a mode the rules use; empty (the default) leaves every mode
      *            significant, so \ref mode_significant has no effect.
      * \param[in] dfa_modes Modes to accelerate with a \c real::dfa fast path (one
-     *            DFA pass replaces the per-rule Pike dispatch). Each name must be a
-     *            mode the rules use. Opt-in is best-effort: a mode whose rules cannot
+     *            DFA pass replaces the per-rule Pike dispatch) under \ref dfa_policy::requested;
+     *            under the default \ref dfa_policy::automatic every mode is tried and this list
+     *            adds nothing. Each name must be a mode the rules use. The attempt is best-effort: a mode whose rules cannot
      *            be a DFA (a zero-width assertion) or whose DFA would change an answer
      *            (a rule whose `match()` is not its longest match, such as `as|assert`
      *            or a lazy delimiter) silently stays on Pike — see
@@ -259,6 +278,8 @@ namespace scilex {
      *            \ref column_unit::bytes (the default, unchanged), \ref column_unit::codepoints, or
      *            \ref column_unit::utf16. The unit is not stored on the position — read it back with
      *            \ref columns().
+     * \param[in] dfa Which modes are tried for DFA acceleration (\ref dfa_policy); the default
+     *            tries all of them.
      * \throws std::invalid_argument If a transition rule is malformed (empty
      *         pattern or target), or \p insignificant_modes / \p dfa_modes names an
      *         unknown mode.
@@ -267,14 +288,15 @@ namespace scilex {
                    std::vector<std::string>        insignificant_modes        = {},
                    std::vector<std::string>        dfa_modes                  = {},
                    error_policy                    errors                     = error_policy::raise,
-                   column_unit                     columns                    = column_unit::bytes)
+                   column_unit                     columns                    = column_unit::bytes,
+                   dfa_policy                      dfa                        = dfa_policy::automatic)
       : rules_(std::move(rules)),
         errors_(errors),
         columns_(columns)
     {
       build_dispatch();
       build_significance(insignificant_modes);
-      build_dfa_modes(dfa_modes);
+      build_dfa_modes(dfa_modes, dfa);
     }
 
     //! \brief The unit this lexer counts \c position::column in (positions do not carry it, so a
@@ -352,11 +374,11 @@ namespace scilex {
 
     //! \brief The modes actually accelerated by a DFA fast path.
     //!
-    //! A mode passed in `dfa_modes` but rejected — its rules need an assertion no DFA
+    //! A mode tried (every mode under \ref dfa_policy::automatic, those in `dfa_modes` under
+    //! \ref dfa_policy::requested) but rejected — its rules need an assertion no DFA
     //! can represent (\c real::dfa_error), or a DFA over them would change an answer
-    //! (a rule whose `match()` is not its longest match) — is **absent** here: it fell
-    //! back to the Pike path, lexing the same tokens. So `dfa_modes` is an optimizer, not a guarantee; the rejected set is
-    //! `dfa_modes − dfa_modes_active()`.
+    //! (a rule whose `match()` is not its longest match) — is **absent** here: it stayed
+    //! on the Pike path, lexing the same tokens. So acceleration is an optimizer, not a guarantee.
     [[nodiscard]] std::vector<std::string> dfa_modes_active() const
     {
       std::vector<std::string> active;
@@ -881,15 +903,25 @@ namespace scilex {
     //! \param[in] dfa_modes The opted-in mode names. The build-time decision always
     //!            runs; its outcome is observable via \ref dfa_modes_active.
     //! \throws std::invalid_argument If \p dfa_modes names an unknown mode.
-    void build_dfa_modes(const std::vector<std::string>& dfa_modes)
+    void build_dfa_modes(const std::vector<std::string>& dfa_modes,
+                         dfa_policy                      policy)
     {
       per_mode_dfa_.assign(mode_names_.size(), nullptr);
+      std::vector<std::size_t> tried;
       for (const std::string& name : dfa_modes) {
         const auto found {mode_id_.find(name)};
         if (found == mode_id_.end()) {
           throw std::invalid_argument("dfa_modes names an unknown mode: " + name);
         }
-        const std::size_t        mode {found->second};
+        tried.push_back(found->second);
+      }
+      if (policy == dfa_policy::automatic) {
+        tried.resize(mode_names_.size());
+        std::iota(tried.begin(), tried.end(), std::size_t {0});
+      }
+      std::ranges::sort(tried);
+      tried.erase(std::ranges::unique(tried).begin(), tried.end()); // a mode named twice is built once
+      for (const std::size_t mode : tried) {
         std::vector<std::size_t> to_global;
         for (std::size_t idx {0}; idx < rules_.size(); ++idx) {
           if (rule_active_in_mode(idx, mode)) {

@@ -50,8 +50,8 @@ failing pays that scan at every position of an error run.
 The rule set — including a `.lex` grammar loaded from a file by the CLI — is authored, not arbitrary
 attacker input, but it still carries two costs a grammar author should know:
 
-- **DFA build cost.** Opting a mode into the DFA fast path (`dfa_modes`) builds a `real::dfa` at
-  construction. Subset construction is bounded by a hard **65 536-state cap** (in `real::dfa`): a
+- **DFA build cost.** Every mode is tried for the DFA fast path (`dfa_policy::automatic`, the
+  default), which builds a `real::dfa` at construction. Subset construction is bounded by a hard **65 536-state cap** (in `real::dfa`): a
   grammar whose mode would exceed it raises `dfa_error` rather than consuming unbounded time or memory.
   The token stream is unaffected either way (Pike is the floor).
 - **Recovery cost of a non-fail-fast rule.** Under `error_policy::token`, an unanchored, greedy rule

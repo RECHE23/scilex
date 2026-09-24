@@ -7,6 +7,13 @@ fuzz oracle.
 
 ## Unreleased
 
+### Changed
+- **DFA acceleration is automatic.** The lexer tries every mode and keeps a `real::dfa` wherever the
+  constructor decides it reproduces the per-rule munch exactly, so the token stream is unchanged.
+  `scilex::dfa_policy::requested` (Python: `dfa="requested"`) restores the old behaviour: only the
+  modes in `dfa_modes`, none if it is empty. The cost is DFA construction in every lexer's
+  constructor (measured in the README).
+
 ### Added
 - `scilex::layout(tokens, source, tab_policy, mode_significant)`: `tab_policy::python` measures
   indentation as CPython does (tab stops of 8, cross-checked with tabs as 1) and refuses an

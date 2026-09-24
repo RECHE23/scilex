@@ -83,6 +83,14 @@ namespace {
     return true;
   }
 
+  // The per-rule Pike path, with DFA acceleration switched off: the reference every DFA mode is held to.
+  scilex::lexer pike_only(std::vector<rule>        rules,
+                          std::vector<std::string> insignificant = {})
+  {
+    return scilex::lexer {std::move(rules), std::move(insignificant), {}, scilex::error_policy::raise,
+                          scilex::column_unit::bytes, scilex::dfa_policy::requested};
+  }
+
   bool active_has(const scilex::lexer& lex,
                   const std::string&   mode)
   {
@@ -133,7 +141,7 @@ namespace {
   std::size_t expect_equivalent(const std::vector<rule>&             rules,
                                 const std::vector<std::string_view>& inputs)
   {
-    const scilex::lexer pike {rules};
+    const scilex::lexer pike {pike_only(rules)};
     const scilex::lexer dfa  {rules, {}, {"default"}};
     EXPECT(active_has(dfa, "default")); // the mode must actually be accelerated here
     std::size_t compared     {0};
@@ -215,7 +223,7 @@ TEST(dfa_modes_fallback_on_assertion)
   EXPECT(!active_has(dfa, "default")); // rejected via dfa_error → Pike
   EXPECT(dfa.dfa_modes_active().empty());
 
-  const scilex::lexer pike {rules};
+  const scilex::lexer pike {pike_only(rules)};
   EXPECT(tokens_equal(pike.tokenize("foo end"), dfa.tokenize("foo end")));
   EXPECT(tokens_equal(brute_munch(rules, "foo end"), dfa.tokenize("foo end")));
 }
@@ -229,7 +237,7 @@ TEST(dfa_modes_fallback_on_lazy_quantifier)
   const scilex::lexer     dfa   {rules, {}, {"default"}};
   EXPECT(!active_has(dfa, "default")); // the lazy rule is not faithful → Pike
 
-  const scilex::lexer pike {rules};
+  const scilex::lexer pike {pike_only(rules)};
   for (const std::string_view input : {std::string_view {R"(a """x""" b """y""")"},
                                        std::string_view {R"("""only""")"}}) {
     EXPECT(tokens_equal(pike.tokenize(input), dfa.tokenize(input)));
@@ -273,7 +281,7 @@ TEST(dfa_modes_nullable_rule_needs_every_byte_covered)
                                          .skip = false}};
   const scilex::lexer dfa  {covered, {}, {"default"}};
   EXPECT(active_has(dfa, "default"));
-  const scilex::lexer pike {covered};
+  const scilex::lexer pike {pike_only(covered)};
   EXPECT(tokens_equal(pike.tokenize("ab!c"), dfa.tokenize("ab!c")));
 }
 
@@ -283,7 +291,7 @@ TEST(dfa_modes_layout_non_regression)
 {
   const std::vector<rule> rules {plain(1, R"(\s+)", true), plain(2, "[A-Za-z_]+"),
                                  plain(3, "[0-9]+"), plain(4, ":")};
-  const scilex::lexer     off   {rules};
+  const scilex::lexer     off   {pike_only(rules)};
   const scilex::lexer     on    {rules, {}, {"default"}};
   EXPECT(active_has(on, "default"));
 
@@ -314,9 +322,9 @@ TEST(dfa_modes_orthogonal_to_insignificant_modes)
   comma.in_mode = {"flow"};
   const std::vector<rule> rules {ws, name, open, close, comma};
 
-  const scilex::lexer off       {rules, {"flow"}, {}};       // flow insignificant only
-  const scilex::lexer on        {rules, {"flow"}, {"flow"}}; // flow insignificant AND DFA-accelerated
-  EXPECT(active_has(on, "flow"));                            // flow's rules are DFA-able
+  const scilex::lexer off       {pike_only(rules, {"flow"})}; // flow insignificant only, no DFA
+  const scilex::lexer on        {rules, {"flow"}, {"flow"}};  // flow insignificant AND DFA-accelerated
+  EXPECT(active_has(on, "flow"));                             // flow's rules are DFA-able
 
   const std::string_view src {"a [\n    b,\n    c\n] d\n"};
   EXPECT(tokens_equal(off.tokenize(src, scilex::eof_policy::append),
@@ -326,4 +334,33 @@ TEST(dfa_modes_orthogonal_to_insignificant_modes)
   const std::vector<token> laid_on  {
     scilex::layout(on.tokenize(src, scilex::eof_policy::append), on.mode_significant())};
   EXPECT(tokens_equal(laid_off, laid_on));
+}
+
+// dfa_policy::automatic (the default) tries every mode and keeps each DFA that is exact; a mode whose
+// rules no DFA represents stays on Pike beside it, and dfa_policy::requested with no names accelerates
+// nothing. The token streams are the Pike path's in every case.
+TEST(automatic_policy_accelerates_every_exact_mode_and_only_those)
+{
+  using op = scilex::mode_action::op;
+  rule ws    {.kind = 1, .pattern = real::regex(R"((?a)\s+)"), .skip = true};
+  ws.in_mode = {"default", "words"};
+  rule word  {.kind = 2, .pattern = real::regex("[a-z]+")};
+  word.in_mode = {"default"};
+  rule enter {.kind = 3, .pattern = real::regex("<")};
+  enter.in_mode = {"default"};
+  enter.action  = scilex::mode_action {.operation = op::push, .target = "words"};
+  rule bounded {.kind = 4, .pattern = real::regex(R"(\b[a-z]+\b)")}; // \b: no DFA represents it
+  bounded.in_mode = {"words"};
+  rule leave   {.kind = 5, .pattern = real::regex(">")};
+  leave.in_mode = {"words"};
+  leave.action  = scilex::mode_action {.operation = op::pop};
+  const std::vector<rule> rules {ws, word, enter, bounded, leave};
+
+  const scilex::lexer automatic {rules};
+  EXPECT(active_has(automatic, "default"));
+  EXPECT(!active_has(automatic, "words"));
+  EXPECT(pike_only(rules).dfa_modes_active().empty());
+
+  const std::string_view src {"ab <cd ef> gh"};
+  EXPECT(tokens_equal(automatic.tokenize(src), pike_only(rules).tokenize(src)));
 }

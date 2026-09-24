@@ -248,6 +248,10 @@ namespace {
     for (const grammar& gram : grammars) {
       const std::vector<scilex::rule> rules {gram.rules()};
       const scilex::lexer             lex   {gram.lexer()};
+      // DFA acceleration is automatic, so the grammar's own lexer takes the DFA wherever it is exact;
+      // the per-rule path is held to the same reference through a lexer that never accelerates.
+      const scilex::lexer pike_lex {rules, {}, {}, scilex::error_policy::raise, scilex::column_unit::bytes,
+                                    scilex::dfa_policy::requested};
 
       std::vector<std::string> inputs;
       inputs.emplace_back(gram.sample);
@@ -259,6 +263,13 @@ namespace {
       }
 
       for (const std::string& input : inputs) {
+        ++cases;
+        const scilex::fuzz::result on_pike {scilex::fuzz::check(rules, pike_lex, input, false)};
+        if (!on_pike.ok) {
+          std::cerr << "FAIL [" << gram.name << " pike] " << on_pike.invariant << '\n'
+                    << "  input (" << input.size() << " bytes): " << preview(input) << '\n';
+          ++failures;
+        }
         ++cases;
         const scilex::fuzz::result outcome {scilex::fuzz::check(rules, lex, input, gram.has_layout)};
         if (!outcome.ok) {
@@ -325,9 +336,17 @@ namespace {
     // Multi-mode grammars: the per-mode dispatch vs the brute-force reference.
     for (const mode_grammar& gram : mode_grammars()) {
       const scilex::lexer lex       {gram.rules};
+      const scilex::lexer pike_lex  {gram.rules, {}, {}, scilex::error_policy::raise, scilex::column_unit::bytes,
+                                     scilex::dfa_policy::requested};
       const scilex::lexer token_lex {gram.rules, {}, {}, scilex::error_policy::token};
       for (const std::string_view input : gram.inputs) {
-        cases += 2;
+        cases += 3;
+        const scilex::fuzz::result on_pike {scilex::fuzz::check(gram.rules, pike_lex, input, false)};
+        if (!on_pike.ok) {
+          std::cerr << "FAIL [" << gram.name << " pike] " << on_pike.invariant << '\n'
+                    << "  input (" << input.size() << " bytes): " << preview(input) << '\n';
+          ++failures;
+        }
         const scilex::fuzz::result outcome {scilex::fuzz::check(gram.rules, lex, input, false)};
         if (!outcome.ok) {
           std::cerr << "FAIL [" << gram.name << "] " << outcome.invariant << '\n'

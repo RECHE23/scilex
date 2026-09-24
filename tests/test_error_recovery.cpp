@@ -19,13 +19,15 @@ namespace {
   inline constexpr int WS   {2};
 
   // A default-mode grammar: lowercase words, whitespace skipped. Anything else is error text.
+  // `dfa` names the modes to accelerate; none (the default here) keeps the per-rule path.
   scilex::lexer word_lexer(scilex::error_policy            policy,
                            std::vector<std::string>        dfa = {})
   {
     std::vector<scilex::rule> rules;
     rules.push_back({.kind = WORD, .pattern = real::regex("[a-z]+")});
     rules.push_back({.kind = WS, .pattern = real::regex(R"(\s+)"), .skip = true});
-    return scilex::lexer {std::move(rules), {}, std::move(dfa), policy};
+    return scilex::lexer {std::move(rules), {}, std::move(dfa), policy, scilex::column_unit::bytes,
+                          scilex::dfa_policy::requested};
   }
 
   TEST(recovers_a_simple_no_match_run)

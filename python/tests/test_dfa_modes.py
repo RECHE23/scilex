@@ -34,7 +34,7 @@ class DfaModesTests(unittest.TestCase):
 
     def test_tokens_identical_dfa_on_vs_off(self):
         src = "select x from t where y >= 10 and z <> 0"
-        off = scilex.Lexer(sql_rules())
+        off = scilex.Lexer(sql_rules(), dfa="requested")
         on = scilex.Lexer(sql_rules(), dfa_modes=("default",))
         self.assertEqual(fields(off.tokenize(src)), fields(on.tokenize(src)))
         self.assertGreater(len(on.tokenize(src)), 0)
@@ -47,17 +47,23 @@ class DfaModesTests(unittest.TestCase):
         rules = [(0, r"(?a)\s+", True), (1, r"end$", False), (2, r"[a-z]+", False)]
         lex = scilex.Lexer(rules, dfa_modes=("default",))
         self.assertNotIn("default", lex.dfa_modes_active)  # real::dfa_error -> Pike
-        off = scilex.Lexer(rules)
+        off = scilex.Lexer(rules, dfa="requested")
         self.assertEqual(fields(off.tokenize("foo end")), fields(lex.tokenize("foo end")))
 
     def test_lazy_rule_falls_back_to_pike(self):
         rules = [(0, r"(?a)\s+", True), (1, r'(?s)""".*?"""', False), (2, r"[a-z]+", False)]
         lex = scilex.Lexer(rules, dfa_modes=("default",))
         self.assertNotIn("default", lex.dfa_modes_active)  # match() stops at the first """ -> Pike
-        off = scilex.Lexer(rules)
+        off = scilex.Lexer(rules, dfa="requested")
         src = 'a """x""" b """y"""'
         self.assertEqual(fields(off.tokenize(src)), fields(lex.tokenize(src)))
 
+
+    def test_auto_is_the_default_and_requested_can_switch_it_off(self):
+        self.assertIn("default", scilex.Lexer(sql_rules()).dfa_modes_active)
+        self.assertEqual(scilex.Lexer(sql_rules(), dfa="requested").dfa_modes_active, [])
+        with self.assertRaises(ValueError):
+            scilex.Lexer(sql_rules(), dfa="always")
 
 if __name__ == "__main__":
     unittest.main()

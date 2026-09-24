@@ -92,12 +92,28 @@ namespace {
 
   //! \brief Emits the eager + lazy cases for one grammar (the Pike engine, built from
   //!        \p make_rules — apples-to-apples across all nine grammars).
+  // What each row measured before DFA acceleration became automatic: the per-rule path, or a DFA in
+  // exactly the modes named. Rows keep their meaning, so the published tables stay comparable.
+  scilex::lexer pike_lexer(std::vector<scilex::rule> rules,
+                           std::vector<std::string>  insignificant = {})
+  {
+    return scilex::lexer {std::move(rules), std::move(insignificant), {}, scilex::error_policy::raise,
+                          scilex::column_unit::bytes, scilex::dfa_policy::requested};
+  }
+
+  scilex::lexer dfa_lexer(std::vector<scilex::rule> rules,
+                          std::vector<std::string>  modes)
+  {
+    return scilex::lexer {std::move(rules), {}, std::move(modes), scilex::error_policy::raise,
+                          scilex::column_unit::bytes, scilex::dfa_policy::requested};
+  }
+
   void grammar_case(const char                 * name,
                     std::vector<scilex::rule> (* make_rules)(),
                     std::string_view             sample)
   {
     const std::string   source {scale(sample, target_bytes)};
-    const scilex::lexer lex    {make_rules()};
+    const scilex::lexer lex    {pike_lexer(make_rules())};
     const std::size_t   tokens {lex.tokenize(source).size()};
     const auto          base   {[&](const char* path) {
                                   return domain {str("section", "grammar"), str("grammar", name),
@@ -215,7 +231,7 @@ int main()
   grammar_case("yaml", &scilex::examples::yaml::make_rules, scilex::examples::yaml::sample);
 
   // --- linearity: cpp grammar over growing sizes (flat MB/s => linear time). ---
-  const scilex::lexer clex {scilex::examples::cpp::make_lexer()};
+  const scilex::lexer clex {pike_lexer(scilex::examples::cpp::make_rules())};
   for (const std::size_t kib : {std::size_t {64}, std::size_t {128}, std::size_t {256}, std::size_t {512}}) {
     const std::string source {scale(scilex::examples::cpp::sample, kib * 1024)};
     measure("linearity " + std::to_string(source.size() / 1024) + "KiB",
@@ -227,7 +243,7 @@ int main()
   namespace py = scilex::examples::python;
   const std::string pysrc {scale(py::sample, target_bytes)};
   {
-    const scilex::lexer modal {py::make_lexer()};
+    const scilex::lexer modal {pike_lexer(py::make_rules(), {"bracket"})};
     const std::size_t   toks  {modal.tokenize(pysrc).size()};
     measure("modal", [&] { return modal.tokenize(pysrc).size(); },
             domain {str("section", "mode-overhead"), str("variant", "modal"),
@@ -245,7 +261,7 @@ int main()
       candidate.action.reset();
       mono.push_back(std::move(candidate));
     }
-    const scilex::lexer base {std::move(mono)};
+    const scilex::lexer base {pike_lexer(std::move(mono))};
     const std::size_t   toks {base.tokenize(pysrc).size()};
     measure("mono-mode", [&] { return base.tokenize(pysrc).size(); },
             domain {str("section", "mode-overhead"), str("variant", "mono-mode"),
@@ -273,8 +289,8 @@ int main()
   };
   for (const dfa_bench& grammar : dfa_grammars) {
     const std::string   source      {scale(grammar.sample, target_bytes)};
-    const scilex::lexer pike        {grammar.rules()};
-    const scilex::lexer dfa         {grammar.rules(), {}, {"default"}};
+    const scilex::lexer pike        {pike_lexer(grammar.rules())};
+    const scilex::lexer dfa         {dfa_lexer(grammar.rules(), {"default"})};
     const bool          accelerated {!dfa.dfa_modes_active().empty()};
     const std::size_t   tokens      {pike.tokenize(source).size()};
     const auto          base        {[&](const char* path) {
@@ -284,7 +300,7 @@ int main()
                                                       field {"active", accelerated ? "true" : "false"}};
                                      }};
     measure(std::string(grammar.name) + " build", [&] {
-              const scilex::lexer once {grammar.rules(), {}, {"default"}};
+              const scilex::lexer once {dfa_lexer(grammar.rules(), {"default"})};
               return once.dfa_modes_active().size();
             }, base("build"));
     measure(std::string(grammar.name) + " pike", [&] { return pike.tokenize(source).size(); }, base("pike"));
@@ -294,8 +310,8 @@ int main()
   // at the same rate — the per_mode_dfa_ check is free.
   {
     const std::string   source {scale(py::sample, target_bytes)};
-    const scilex::lexer off    {py::make_rules()};
-    const scilex::lexer on     {py::make_rules(), {}, {"default"}}; // default rejected (lazy) → Pike
+    const scilex::lexer off    {pike_lexer(py::make_rules())};
+    const scilex::lexer on     {dfa_lexer(py::make_rules(), {"default"})}; // default rejected (lazy) → Pike
     const bool          active {!on.dfa_modes_active().empty()};
     const std::size_t   tokens {off.tokenize(source).size()};
     const auto          base   {[&](const char* path) {
@@ -339,8 +355,7 @@ int main()
     };
 
     for (const engine_path& path : paths) {
-      const scilex::lexer lex    {path.accelerate ? scilex::lexer {path.rules(), {}, {"default"}}
-                                               : scilex::lexer {path.rules()}};
+      const scilex::lexer lex    {path.accelerate ? dfa_lexer(path.rules(), {"default"}) : pike_lexer(path.rules())};
       const bool          active {!lex.dfa_modes_active().empty()};
       for (const corpus_case& corpus : corpora) {
         std::size_t failures {0};
@@ -369,7 +384,7 @@ int main()
       const std::string         run(nff_bytes, 'x');  // no '!': the rule never completes
       std::vector<scilex::rule> nff;
       nff.push_back(scilex::rule {.kind = 0, .pattern = real::regex("[^!]*!", real::flags::ascii), .skip = false});
-      const scilex::lexer nff_lex  {std::move(nff)};
+      const scilex::lexer nff_lex  {pike_lexer(std::move(nff))};
       std::size_t         failures {0};
       resync(nff_lex, run, failures);
       measure("non-fail-fast",

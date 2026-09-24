@@ -81,6 +81,7 @@ class Lexer:
         dfa_modes: Iterable[str] = ...,
         errors: Literal["raise", "token"] = ...,
         columns: Literal["bytes", "codepoints", "utf16"] = ...,
+        dfa: Literal["auto", "requested"] = ...,
     ) -> None: ...
     @property
     def column_unit(self) -> Literal["bytes", "codepoints", "utf16"]: ...

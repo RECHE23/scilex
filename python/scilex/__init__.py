@@ -170,7 +170,8 @@ class Lexer:
             lines in such a mode is treated as continuation. Each must be a mode the
             rules use.
         dfa_modes (iterable): Mode names to accelerate with a DFA fast path (one DFA
-            pass replaces the per-rule dispatch). Best-effort and invisible: a mode
+            pass replaces the per-rule dispatch) when ``dfa="requested"``; under the
+            default ``dfa="auto"`` every mode is tried and this adds nothing. Best-effort and invisible: a mode
             whose rules need an assertion no DFA can represent, or whose DFA would change
             an answer (a rule whose match is not its longest match, such as
             ``as|assert``), silently stays on the regular engine — see
@@ -195,6 +196,9 @@ class Lexer:
             codepoint is 2 — the unit an LSP client expects). A malformed byte counts as one
             unit in every mode. The unit is not stored on a :class:`Position` — read it back
             from :attr:`column_unit`.
+        dfa (str): Which modes are tried for DFA acceleration. ``"auto"`` (the default):
+            every mode, each keeping its DFA only where it reproduces the per-rule munch
+            exactly. ``"requested"``: only the modes in ``dfa_modes`` (none, if empty).
 
     Raises:
         error: If a pattern is an invalid regex, a transition targets an empty mode, or
@@ -202,7 +206,10 @@ class Lexer:
         ValueError: If ``insignificant_modes`` names a mode the rules do not use.
     """
 
-    def __init__(self, rules, insignificant_modes=(), dfa_modes=(), errors="raise", columns="bytes"):
+    def __init__(self, rules, insignificant_modes=(), dfa_modes=(), errors="raise", columns="bytes",
+                 dfa="auto"):
+        if dfa not in ("auto", "requested"):
+            raise ValueError(f"dfa must be 'auto' or 'requested', not {dfa!r}")
         if errors not in ("raise", "token"):
             raise ValueError(f"errors must be 'raise' or 'token', not {errors!r}")
         if columns not in ("bytes", "codepoints", "utf16"):
@@ -236,7 +243,7 @@ class Lexer:
         self._columns = columns
         # The C++ ctor validates dfa_modes against the interned modes (raising error on
         # an unknown one) and builds the per-mode DFA fast path.
-        self._handle = _compile(normalized, self._dfa_modes, errors, columns)
+        self._handle = _compile(normalized, self._dfa_modes, errors, columns, dfa)
         known = {"default"}
         for entry in normalized:
             if len(entry) > 3:

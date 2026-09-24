@@ -69,7 +69,9 @@ interpreter in the path. `make bench-lex` lexes each of the nine example grammar
 (`examples/<lang>.hpp`) over its own sample scaled to a ~256 KiB steady-state input,
 reporting MB/s for `tokenize()` (eager, full token vector) and `scan()` (lazy, O(1)
 memory — the parser path). All rows are the **Pike engine** (the per-rule scan + first-byte
-dispatch); the DFA fast path is a separate opt-in, reported on its own below.
+dispatch); the DFA fast path is reported on its own below. DFA acceleration is automatic since the
+unreleased entry of `CHANGELOG.md`; the harness pins `dfa_policy::requested` on every row so each
+measures one path, as these tables did when acceleration was opt-in.
 
 The engine has **two regimes**, reported separately rather than as one average, because
 they run different match-time machinery:
@@ -140,7 +142,7 @@ materially more work (53 960 vs 44 872 tokens — full f-string structure, not a
 string). The mode stack is per-scan; Layout Awareness reads each token's mode but adds
 nothing when no mode is insignificant (an empty policy is byte-for-byte the positional pass).
 
-## DFA fast path (opt-in) — every example grammar accelerates, 3–27×
+## DFA fast path — every example grammar accelerates, 3–27×
 
 A DFA-able mode (mono-mode, greedy, assertion- and lazy-free, no code-point predicate) opts into a
 `real::dfa`: one automaton pass replaces the per-rule scan. Whether a mode qualifies is a **measured
