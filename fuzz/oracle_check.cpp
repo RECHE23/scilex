@@ -10,6 +10,7 @@
  * `full-local-gate`; the continuous explorer is `make fuzz`. On a violation it
  * prints the grammar, the offending input, and the invariant, and exits 1.
  */
+#include <chrono>
 #include <iostream>
 #include <string>
 #include <string_view>
@@ -363,8 +364,33 @@ namespace {
         }
       }
     }
+    // Scaling: an input built so that a rule scans far and loses at every position must still lex in
+    // linear time. 64 KiB of unterminated xml comment or CDATA openers under recovery took minutes while
+    // those rules were lazy and ran on Pike; on the DFA it takes milliseconds. The 2 s bound sits two
+    // orders of magnitude above the linear time and far below the quadratic one.
+    for (const std::string_view unit : {std::string_view {"<!-- x>"}, std::string_view {"<![CDATA[ x>"}}) {
+      for (const scilex::error_policy policy : {scilex::error_policy::raise, scilex::error_policy::token}) {
+        ++cases;
+        std::string input;
+        while (input.size() < std::size_t {64} *1024) {
+          input += unit;
+        }
+        const scilex::lexer lex   {scilex::examples::xml::make_rules(), {}, {}, policy};
+        const auto          start {std::chrono::steady_clock::now()};
+        try {
+          static_cast<void>(lex.tokenize(input));
+        }
+        catch (const scilex::lex_error&) {
+          // raise stops at the first unlexable byte; only the time matters here
+        }
+        if (std::chrono::steady_clock::now() - start > std::chrono::seconds {2}) {
+          std::cerr << "FAIL [xml scaling] 64 KiB of \"" << unit << "\" took over 2 s (quadratic?)\n";
+          ++failures;
+        }
+      }
+    }
     if (failures == 0) {
-      std::cout << "fuzz-check: " << cases << " cases (9 grammars x sample/truncations/adversarial, raise + token recovery, + 5 multi-mode grammars) — all invariants hold\n";
+      std::cout << "fuzz-check: " << cases << " cases (9 grammars x sample/truncations/adversarial, raise + token recovery, + 5 multi-mode grammars, + 4 scaling) — all invariants hold\n";
       return 0;
     }
     std::cerr << "fuzz-check: " << failures << " invariant violation(s)\n";

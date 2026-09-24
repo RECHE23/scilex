@@ -9,9 +9,12 @@
  * attributes, the closers), and is at most one deep. Modes are not always
  * deep-nesting; this is the counter-example to f-strings.
  *
- * Comments and CDATA are single regex tokens (dotall + lazy, reusing the triple-
- * quote trick), so a `<` or `&` inside them is literal — they neither open a tag
- * nor start an entity. That is exactly why they are regex rules, not modes.
+ * Comments and CDATA are single regex tokens, so a `<` or `&` inside them is
+ * literal — they neither open a tag nor start an entity. That is exactly why they
+ * are regex rules, not modes. Each is written so that its match() is its longest
+ * match (no lazy `.*?`): the body may not contain the terminator, which is what
+ * the lazy form means, and in that form the rule runs on the mode's DFA instead
+ * of on Pike, where an unterminated `<!--` rescanned the rest of the input.
  *
  * What this grammar covers
  *   - elements: start `<a …>`, end `</a>`, self-closing `<a/>`;
@@ -113,8 +116,10 @@ namespace scilex::examples::xml {
     std::vector<scilex::rule> rules;
     // --- content: comments / CDATA (one token; inner `<` `&` literal), the tag
     //     openers, entities, then text. Order = munch priority for the `<…`. ------
-    rules.push_back(rule(comment, R"re((?s)<!--.*?-->)re", content));
-    rules.push_back(rule(cdata, R"re((?s)<!\[CDATA\[.*?\]\]>)re", content));
+    // Equal to (?s)<!--.*?--> and (?s)<!\[CDATA\[.*?\]\]> on every input (checked exhaustively on every
+    // suffix of up to ten bytes over the delimiters' alphabet), and DFA-faithful where the lazy forms are not.
+    rules.push_back(rule(comment, R"re(<!--(?:[^-]|-[^-]|--+[^->])*-*-->)re", content));
+    rules.push_back(rule(cdata, R"re(<!\[CDATA\[(?:[^\]]|\][^\]]|\]\]+[^\]>])*\]*\]\]>)re", content));
     rules.push_back(rule(close_tag_open, R"re(</)re", content, false, go(op_t::push, "tag")));
     rules.push_back(rule(tag_open, R"re(<)re", content, false, go(op_t::push, "tag")));
     rules.push_back(rule(entity, R"re(&[A-Za-z#][A-Za-z0-9]*;)re", content));
