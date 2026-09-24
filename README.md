@@ -208,6 +208,18 @@ rule runs on the general engine. The two tokenize ASCII input identically; they 
 and on whether the mode can be a DFA. The **`python-unicode`** example (`scilex --example
 python-unicode`) is the faithful-Python-3 variant of `python`, identical but for that one rule.
 
+## Thread safety
+
+A lexer is immutable once built. Its DFAs are built in the constructor, and every
+`tokenize` call and every `scan` range keeps its own mode stack and walk memos, so one
+`const` lexer can be shared by any number of threads, each lexing its own text —
+checked under ThreadSanitizer with eight threads over four grammars, the hybrid ones
+included. An iterator from `scan` is a cursor: drive each from a single thread. Two
+caveats on scaling, not on safety: rules left on Pike (`pike_rules(mode)`) call
+`real::regex`, whose lazy-DFA cache is shared per regex behind a lock in REAL 2026.9.7;
+and in Python, `scan` holds the GIL for each step while `tokenize` releases it around
+inputs of 4 KB or more.
+
 ## Layout Awareness (Level A)
 
 The layout pass is positional, and by default mode-blind. **Layout Awareness Level
@@ -244,6 +256,7 @@ C++, SQL, CSS, Lisp, math, XML, YAML):
 
 ```console
 $ scilex --list                       # the built-in grammars
+$ scilex --version                    # SciLex's version and the REAL it was built with
 $ scilex --example json file.json     # lex a file …
 $ scilex --example python --layout    # … or its bundled sample, with INDENT/DEDENT
 ```

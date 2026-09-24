@@ -35,6 +35,7 @@
 #include <vector>
 
 #include <real/real.hpp>
+#include <real/version.hpp>
 #include <scilex/layout.hpp>
 #include <scilex/scilex.hpp>
 
@@ -315,6 +316,7 @@ namespace {
         << "  scilex --example <lang> [file|-]  lex with a built-in grammar (its sample if no file)\n"
         << "  scilex <grammar.lex> [file|-]     lex with your grammar (stdin if no file)\n"
         << "  scilex --check                    run every example self-check\n"
+        << "  scilex --version                  print SciLex's version and the REAL it was built with\n"
         << "options:\n"
         << "  --layout                          emit indentation tokens (NEWLINE / INDENT / DEDENT)\n"
         << "  --errors=token                    recover from unlexable bytes (emit ERROR tokens; default: raise)\n"
@@ -407,6 +409,10 @@ int main(int    argc,
 
   const std::string_view command {args[0]};
   try {
+    if (command == "--version") {
+      std::cout << "scilex " << SCILEX_VERSION_STRING << " (REAL " << REAL_VERSION_STRING << ")\n";
+      return 0;
+    }
     if (command == "--help" || command == "-h") {
       usage(std::cout);
       return 0;

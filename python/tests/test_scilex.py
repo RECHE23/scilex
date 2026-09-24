@@ -739,5 +739,33 @@ class UnicodeIdentifierTests(unittest.TestCase):
             unicode.pike_rules("nowhere")
 
 
+
+class ErrorTaxonomyTests(unittest.TestCase):
+    """LexError for input no rule can lex, LayoutError for indentation layout refuses, both subclasses
+    of scilex.error; a bad pattern stays a plain scilex.error."""
+
+    def test_lexing_failures_raise_lex_error_on_every_path(self):
+        lx = scilex.Lexer([(0, r"[a-z]+")])
+        for label, call in (("tokenize", lambda: lx.tokenize("ab!")),
+                            ("scan, a later step", lambda: list(lx.scan("ab!"))),
+                            ("scan, the first step", lambda: list(lx.scan("!")))):
+            with self.subTest(label):
+                with self.assertRaises(scilex.LexError) as caught:
+                    call()
+                self.assertIsInstance(caught.exception, scilex.error)
+                self.assertIsNotNone(caught.exception.position)
+
+    def test_layout_failures_raise_layout_error(self):
+        lx = scilex.Lexer([(0, r"[ \n]+", True), (1, r"[a-z]+")])
+        with self.assertRaises(scilex.LayoutError) as caught:
+            lx.layout(lx.tokenize("a\n    b\n  c\n", eof=True))
+        self.assertEqual(caught.exception.position.line, 3)
+        self.assertNotIsInstance(caught.exception, scilex.LexError)
+
+    def test_a_bad_pattern_is_neither(self):
+        with self.assertRaises(scilex.error) as caught:
+            scilex.Lexer([(0, "(")])
+        self.assertNotIsInstance(caught.exception, (scilex.LexError, scilex.LayoutError))
+
 if __name__ == "__main__":
     unittest.main()

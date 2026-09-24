@@ -4,7 +4,7 @@ from typing import Final, Literal, final
 
 __all__ = [
     "Lexer", "Token", "Position", "Layout", "tokenize", "scan", "layout", "error",
-    "LexerError", "END_OF_INPUT", "NEWLINE", "INDENT", "DEDENT", "ERROR", "get_include", "get_config",
+    "LexerError", "LexError", "LayoutError", "END_OF_INPUT", "NEWLINE", "INDENT", "DEDENT", "ERROR", "get_include", "get_config",
     "real_version",
 ]
 
@@ -29,6 +29,9 @@ class error(Exception):
     context: str
 
 LexerError = error
+
+class LexError(error): ...
+class LayoutError(error): ...
 
 #: A mode transition: ("push", mode), ("set", mode), or ("pop",).
 _Action = tuple[str, str] | tuple[str]

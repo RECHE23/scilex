@@ -7,6 +7,16 @@ fuzz oracle.
 
 ## Unreleased
 
+### Added
+- `scilex/version.hpp` (`SCILEX_VERSION_MAJOR/MINOR/PATCH`, `SCILEX_VERSION_STRING`), included by
+  `scilex.hpp`, rewritten by `make release` and checked by `make version-check`; `scilex --version`
+  prints it with the REAL version the CLI was built with.
+- Python: `scilex.LexError` (input no rule can lex) and `scilex.LayoutError` (indentation layout
+  refuses), both subclasses of `scilex.error`, so a caller can tell a lexing failure from a layout
+  one; an invalid pattern stays a plain `scilex.error`.
+- The thread-safety contract, stated in the README and on `lexer`: one const lexer, any number of
+  threads, one iterator per thread.
+
 ### Fixed
 - **The xml example grammar is linear under error recovery.** Its comment and CDATA rules were lazy,
   so they ran on Pike and rescanned the rest of the input at every `<`: 16 KiB of `<!-- x>` took

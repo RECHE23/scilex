@@ -72,7 +72,7 @@ from scilex._scilex import (
 
 __all__ = [
     "Lexer", "Token", "Position", "Layout", "tokenize", "scan", "layout", "error",
-    "LexerError", "END_OF_INPUT", "NEWLINE", "INDENT", "DEDENT", "ERROR", "get_include", "get_config",
+    "LexerError", "LexError", "LayoutError", "END_OF_INPUT", "NEWLINE", "INDENT", "DEDENT", "ERROR", "get_include", "get_config",
     "real_version",
 ]
 
@@ -99,6 +99,18 @@ ERROR = -2147483644
 #: Alias of :class:`error`, the exception raised on an invalid pattern or
 #: unlexable input. Lexing errors carry a :class:`Position` in ``.position``.
 LexerError = error
+
+
+class LexError(error):
+    """Input no rule can lex: a byte no rule matches, a zero-length winning match, a pop at the root
+    mode or a push past the mode stack's bound, or input ending inside a pushed mode. Carries
+    ``.position`` (and ``.context`` where the source is known). A subclass of :class:`error`."""
+
+
+class LayoutError(error):
+    """Indentation :meth:`Layout.apply` cannot lay out: a dedent to no open level, or (with
+    ``tabs="python"``) tabs and spaces mixed so that a level is ambiguous. Carries ``.position``.
+    A subclass of :class:`error`."""
 
 
 # Token and Position are C-native heap types exported by the extension (imported above): built once,

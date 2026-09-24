@@ -251,6 +251,9 @@ example: cli
 	  && echo "  the README quickstart compiles and lexes 'if x + 42' into its four tokens" \
 	  || { echo "FAIL: examples/cpp/quickstart.cpp printed: $$out"; exit 1; }
 	@python3 tools/check_readme_quickstart.py --self-test && python3 tools/check_readme_quickstart.py
+	@$(BUILD)/bin/scilex --version | grep -qE '^scilex [0-9]+\.[0-9]+\.[0-9]+ \(REAL [0-9]+\.[0-9]+\.[0-9]+\)$$' \
+	  && echo "  --version names SciLex's version and the REAL it was built with" \
+	  || { echo "FAIL: scilex --version printed: $$($(BUILD)/bin/scilex --version)"; exit 1; }
 	@echo "examples: all self-checks pass"
 
 # Deterministic lexer-oracle gate (fuzz/reference.hpp): runs every property invariant
@@ -300,9 +303,11 @@ version-check:
 	 ini=$$(sed -nE 's/^__version__ = "([0-9][0-9.]*)"/\1/p' python/scilex/__init__.py); \
 	 if [ -z "$$py" ]; then echo "version-check: no version found in pyproject.toml"; exit 1; fi; \
 	 if [ "$$py" != "$$ini" ]; then echo "version-check: DRIFT pyproject=$$py vs __init__=$$ini"; exit 1; fi; \
+	 hpp=$$(sed -nE 's/^#define SCILEX_VERSION_(MAJOR|MINOR|PATCH) ([0-9]+)$$/\2/p' include/scilex/version.hpp | paste -sd. -); \
+	 if [ "$$py" != "$$hpp" ]; then echo "version-check: DRIFT pyproject=$$py vs include/scilex/version.hpp=$$hpp"; exit 1; fi; \
 	 if ! grep -q 'file(READ.*pyproject\.toml' CMakeLists.txt; then echo "version-check: CMakeLists.txt must derive its version from pyproject.toml"; exit 1; fi; \
 	 if grep -qE '^project\([A-Za-z_]+ VERSION [0-9]' CMakeLists.txt; then echo "version-check: CMakeLists.txt has a hardcoded VERSION (must derive from pyproject.toml)"; exit 1; fi; \
-	 echo "version-check: $$py (pyproject = __init__ = CMake-derived)"
+	 echo "version-check: $$py (pyproject = __init__ = version.hpp = CMake-derived)"
 
 # The complete local quality gate in one command — the canonical pre-push check
 # and, since CI no longer runs macOS (see .github/workflows/ci.yml), the macOS gate
@@ -427,13 +432,18 @@ release:
 	 awk -v h="## $$version " 'index($$0,h)==1{f=1;print;next} f&&/^## /{exit} f{print}' CHANGELOG.md > $$tb; \
 	 sed -i.bak -E "s/^version = \".*\"/version = \"$$version\"/" pyproject.toml && rm -f pyproject.toml.bak; \
 	 sed -i.bak -E "s/^__version__ = \".*\"/__version__ = \"$$version\"/" python/scilex/__init__.py && rm -f python/scilex/__init__.py.bak; \
+	 maj=$${version%%.*}; rest=$${version#*.}; min=$${rest%%.*}; pat=$${rest#*.}; \
+	 sed -i.bak -E -e "s/^#define SCILEX_VERSION_MAJOR [0-9]+$$/#define SCILEX_VERSION_MAJOR $$maj/" \
+	   -e "s/^#define SCILEX_VERSION_MINOR [0-9]+$$/#define SCILEX_VERSION_MINOR $$min/" \
+	   -e "s/^#define SCILEX_VERSION_PATCH [0-9]+$$/#define SCILEX_VERSION_PATCH $$pat/" include/scilex/version.hpp \
+	   && rm -f include/scilex/version.hpp.bak; \
 	 if [ -n "$$DRY_RUN" ]; then \
-	   echo "would commit 'release: v$$version' (pyproject, __init__, CHANGELOG); annotated tag v$$version, body:"; \
+	   echo "would commit 'release: v$$version' (pyproject, __init__, version.hpp, CHANGELOG); annotated tag v$$version, body:"; \
 	   sed 's/^/    | /' $$tb; \
 	   echo "would run: git push origin HEAD v$$version"; \
-	   git checkout -- pyproject.toml python/scilex/__init__.py CHANGELOG.md; \
+	   git checkout -- pyproject.toml python/scilex/__init__.py include/scilex/version.hpp CHANGELOG.md; \
 	 else \
-	   git add pyproject.toml python/scilex/__init__.py CHANGELOG.md; \
+	   git add pyproject.toml python/scilex/__init__.py include/scilex/version.hpp CHANGELOG.md; \
 	   git commit -m "release: v$$version"; \
 	   git tag -a --cleanup=verbatim "v$$version" -F $$tb; \
 	   git push origin HEAD "v$$version"; \

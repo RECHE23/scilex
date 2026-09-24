@@ -53,13 +53,31 @@ PyObject* set_cpp_error() { return sb::set_cpp_error(sciforge_module_error()); }
 constexpr const char* CAPSULE_NAME      = "scilex.lexer";
 constexpr const char* SCAN_CAPSULE_NAME = "scilex.scan";
 
-// Raises scilex.error carrying the byte position of the offending input, as the
-// instance attributes .offset/.line/.column (the wrapper turns them into .position).
-void set_positioned_error(const char* message, scilex::position where)
+// The subclass of scilex.error named `subclass` (LexError, LayoutError), defined by the scilex
+// package; scilex.error itself when the package has not defined it (the extension imported alone).
+PyObject* error_subclass(const char* subclass)
 {
-    PyObject* exc = PyObject_CallFunction(sciforge_module_error(), "s", message);
+    PyObject* package = PyImport_ImportModule("scilex"); // already imported: a dictionary lookup
+    PyObject* type    = package != nullptr ? PyObject_GetAttrString(package, subclass) : nullptr;
+    Py_XDECREF(package);
+    if (type == nullptr || PyObject_IsSubclass(type, sciforge_module_error()) != 1) {
+        PyErr_Clear();
+        Py_XDECREF(type);
+        Py_INCREF(sciforge_module_error());
+        return sciforge_module_error();
+    }
+    return type;
+}
+
+// Raises scilex.<subclass> (a subclass of scilex.error) carrying the byte position of the offending
+// input, as the instance attributes .offset/.line/.column (the wrapper turns them into .position).
+void set_positioned_error(const char* message, scilex::position where, const char* subclass)
+{
+    PyObject* type = error_subclass(subclass);
+    PyObject* exc  = PyObject_CallFunction(type, "s", message);
     if (exc == nullptr) {
-        PyErr_SetString(sciforge_module_error(), message); // fallback: message only, no position
+        PyErr_SetString(type, message); // fallback: message only, no position
+        Py_DECREF(type);
         return;
     }
     PyObject* offset = PyLong_FromSsize_t(static_cast<Py_ssize_t>(where.offset));
@@ -73,8 +91,9 @@ void set_positioned_error(const char* message, scilex::position where)
     Py_XDECREF(offset);
     Py_XDECREF(line);
     Py_XDECREF(column);
-    PyErr_SetObject(sciforge_module_error(), exc);
+    PyErr_SetObject(type, exc);
     Py_DECREF(exc);
+    Py_DECREF(type);
 }
 
 // RAII GIL release (restores on every exit, including a throw): the shared
@@ -631,7 +650,7 @@ PyObject* scilex_tokenize(PyObject* /*self*/, PyObject* args)
                                   [&](std::size_t id) -> const std::string& { return lexer->mode_name(id); });
     }
     catch (const scilex::lex_error& error) {
-        set_positioned_error(error.what(), error.where());
+        set_positioned_error(error.what(), error.where(), "LexError");
         result = nullptr;
     }
     catch (...) {
@@ -675,7 +694,7 @@ PyObject* scilex_scan_start(PyObject* /*self*/, PyObject* args)
     }
     catch (const scilex::lex_error& error) {
         free_scan_state(state);
-        set_positioned_error(error.what(), error.where());
+        set_positioned_error(error.what(), error.where(), "LexError");
         return nullptr;
     }
     catch (...) {
@@ -712,7 +731,7 @@ PyObject* scilex_scan_next(PyObject* /*self*/, PyObject* args)
         }
         catch (const scilex::lex_error& error) {
             state->it = state->end; // stop: the cursor is now exhausted
-            set_positioned_error(error.what(), error.where());
+            set_positioned_error(error.what(), error.where(), "LexError");
             return nullptr;
         }
         catch (...) {
@@ -831,7 +850,7 @@ PyObject* scilex_layout(PyObject* /*self*/, PyObject* args)
                                   [&](std::size_t id) -> const std::string& { return names[id]; });
     }
     catch (const scilex::layout_error& error) {
-        set_positioned_error(error.what(), error.where());
+        set_positioned_error(error.what(), error.where(), "LayoutError");
         result = nullptr;
     }
     catch (const std::invalid_argument& error) {

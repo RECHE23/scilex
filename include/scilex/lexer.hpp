@@ -265,6 +265,15 @@ namespace scilex {
    * Order matters only as a tie-breaker between rules whose matches have equal
    * length (the first such rule wins). Put more specific rules (keywords)
    * before their general counterparts (identifiers).
+   *
+   * \par Thread safety
+   * A lexer is immutable once built: its DFAs are built in the constructor, and every
+   * \ref tokenize call and every \ref scan range keeps its own mode stack and walk
+   * memos. One `const` lexer may therefore be shared by any number of threads, each
+   * tokenizing its own source. A \ref token_iterator is a cursor: drive each one from
+   * a single thread. Rules left on Pike (\ref pike_rules) call `real::regex`, whose
+   * lazy-DFA cache is shared per regex behind a lock in REAL 2026.9.7, so a grammar
+   * with such rules may not scale with the thread count the way a DFA mode does.
    */
   class lexer
   {

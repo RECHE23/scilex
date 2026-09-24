@@ -11,6 +11,7 @@
 #define SCILEX_SCILEX_HPP
 
 #include "token.hpp"
+#include "version.hpp"
 #include "lexer.hpp"
 
 /*!
