@@ -527,7 +527,11 @@ namespace scilex {
         const position    start    {cursor};
         advance(source, cursor, best_len);
 
-        apply_transition(rules_[best_idx], start, stack); // advances, then transitions (#2 on a bad pop)
+        // Most tokens carry no action: testing it here keeps the out-of-line transition, and the
+        // frame it sets up for its throws, off their path.
+        if (rules_[best_idx].action) {
+          apply_transition(rules_[best_idx], start, stack); // advances, then transitions (#2 on a bad pop)
+        }
 
         if (!rules_[best_idx].skip) {
           // Tag the token with the mode it was lexed in (captured before the
