@@ -20,8 +20,11 @@
  * (do_not_optimize, inside collect) so nothing is optimized away. Informational only — never
  * gated; see `make bench-lex` / `make bench`.
  */
+#include <algorithm>
 #include <cstddef>
 #include <cstdio>
+#include <cstdlib>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -101,11 +104,48 @@ namespace {
                           scilex::column_unit::bytes, scilex::dfa_policy::requested};
   }
 
-  scilex::lexer dfa_lexer(std::vector<scilex::rule> rules,
-                          std::vector<std::string>  modes)
+  // What a caller gets by default: every mode tried, each rule the DFA reproduces on it, the rest on Pike.
+  scilex::lexer dfa_lexer(std::vector<scilex::rule> rules)
   {
-    return scilex::lexer {std::move(rules), {}, std::move(modes), scilex::error_policy::raise,
-                          scilex::column_unit::bytes, scilex::dfa_policy::requested};
+    return scilex::lexer {std::move(rules), {}, {}, scilex::error_policy::raise, scilex::column_unit::bytes,
+                          scilex::dfa_policy::automatic};
+  }
+
+  //! \brief Exits with a message unless the two token streams are identical (kind, lexeme, position,
+  //!        mode), so that a DFA row never times a different answer than its Pike row.
+  void same_tokens_or_die(const char                      * grammar,
+                          const std::vector<scilex::token>& pike,
+                          const std::vector<scilex::token>& dfa)
+  {
+    const auto same {[](const scilex::token& a, const scilex::token& b) {
+                       return a.kind == b.kind && a.lexeme.data() == b.lexeme.data()
+                              && a.lexeme.size() == b.lexeme.size() && a.start.offset == b.start.offset
+                              && a.start.line == b.start.line && a.start.column == b.start.column
+                              && a.mode_id == b.mode_id;
+                     }};
+    if (pike.size() != dfa.size() || !std::equal(pike.begin(), pike.end(), dfa.begin(), same)) {
+      std::fprintf(stderr, "bench_lex: %s: the DFA lexes %zu tokens, Pike %zu, and they differ\n", grammar,
+                   dfa.size(), pike.size());
+      std::exit(1);
+    }
+  }
+
+  //! \brief How many of \p rules \p lex leaves on Pike, over every mode they use.
+  std::size_t rules_on_pike(const std::vector<scilex::rule>& rules,
+                            const scilex::lexer&             lex)
+  {
+    std::set<std::string> modes;
+    for (const scilex::rule& r : rules) {
+      if (r.in_mode.empty()) {
+        modes.insert("default");
+      }
+      modes.insert(r.in_mode.begin(), r.in_mode.end());
+    }
+    std::size_t on_pike {0};
+    for (const std::string& mode : modes) {
+      on_pike += lex.pike_rules(mode).size();
+    }
+    return on_pike;
   }
 
   void grammar_case(const char                 * name,
@@ -276,51 +316,40 @@ int main()
     std::string_view          sample;
   };
   const dfa_bench dfa_grammars[] {
-    // ASCII-pinned grammars: their default mode is DFA-representable, so it accelerates.
     {.name = "json", .rules = &scilex::examples::json::make_rules, .sample = scilex::examples::json::sample},
+    {.name = "cpp", .rules = &scilex::examples::cpp::make_rules, .sample = scilex::examples::cpp::sample},
     {.name = "sql", .rules = &scilex::examples::sql::make_rules, .sample = scilex::examples::sql::sample},
     {.name = "css", .rules = &scilex::examples::css::make_rules, .sample = scilex::examples::css::sample},
     {.name = "lisp", .rules = &scilex::examples::lisp::make_rules, .sample = scilex::examples::lisp::sample},
     {.name = "math", .rules = &scilex::examples::math::make_rules, .sample = scilex::examples::math::sample},
-    // Text-mode grammars: their \s+/\w are code-point predicates the DFA cannot represent, so the
-    // default mode is rejected and stays on Pike — dfa_modes_active is empty (active=false).
+    {.name = "python", .rules = &py::make_rules, .sample = py::sample},
     {.name = "xml", .rules = &scilex::examples::xml::make_rules, .sample = scilex::examples::xml::sample},
     {.name = "yaml", .rules = &scilex::examples::yaml::make_rules, .sample = scilex::examples::yaml::sample},
+    // The hybrid: its Unicode identifier rule stays on Pike beside the DFA in every mode.
+    {.name = "py-uni", .rules = &py::make_rules_unicode, .sample = py::sample},
   };
   for (const dfa_bench& grammar : dfa_grammars) {
-    const std::string   source      {scale(grammar.sample, target_bytes)};
-    const scilex::lexer pike        {pike_lexer(grammar.rules())};
-    const scilex::lexer dfa         {dfa_lexer(grammar.rules(), {"default"})};
-    const bool          accelerated {!dfa.dfa_modes_active().empty()};
-    const std::size_t   tokens      {pike.tokenize(source).size()};
-    const auto          base        {[&](const char* path) {
-                                       return domain {str("section", "dfa-modes"), str("grammar", grammar.name),
-                                                      str("path", path), num("bytes", source.size()),
-                                                      num("tokens", tokens),
-                                                      field {"active", accelerated ? "true" : "false"}};
-                                     }};
+    const std::string   source  {scale(grammar.sample, target_bytes)};
+    const scilex::lexer pike    {pike_lexer(grammar.rules())};
+    const scilex::lexer dfa     {dfa_lexer(grammar.rules())};
+    const std::size_t   modes   {dfa.dfa_modes_active().size()};
+    const std::size_t   on_pike {rules_on_pike(grammar.rules(), dfa)};
+    const std::size_t   tokens  {pike.tokenize(source).size()};
+    // A speed-up is only one of the same answer: an automaton unfaithful to the per-rule munch can be
+    // fast because it lexes something else, so the two streams are compared before either is timed.
+    same_tokens_or_die(grammar.name, pike.tokenize(source), dfa.tokenize(source));
+    const auto          base    {[&](const char* path) {
+                                   return domain {str("section", "dfa-modes"), str("grammar", grammar.name),
+                                                  str("path", path), num("bytes", source.size()),
+                                                  num("tokens", tokens), num("dfa_modes", modes),
+                                                  num("on_pike", on_pike)};
+                                 }};
     measure(std::string(grammar.name) + " build", [&] {
-              const scilex::lexer once {dfa_lexer(grammar.rules(), {"default"})};
+              const scilex::lexer once {dfa_lexer(grammar.rules())};
               return once.dfa_modes_active().size();
             }, base("build"));
     measure(std::string(grammar.name) + " pike", [&] { return pike.tokenize(source).size(); }, base("pike"));
     measure(std::string(grammar.name) + " dfa", [&] { return dfa.tokenize(source).size(); }, base("dfa"));
-  }
-  // The python grammar with only its default mode accelerated (the other modes stay on Pike): the
-  // control that once measured a mode the DFA refused, which no example grammar has since 2026.7.25.
-  {
-    const std::string   source {scale(py::sample, target_bytes)};
-    const scilex::lexer off    {pike_lexer(py::make_rules())};
-    const scilex::lexer on     {dfa_lexer(py::make_rules(), {"default"})};
-    const bool          active {!on.dfa_modes_active().empty()};
-    const std::size_t   tokens {off.tokenize(source).size()};
-    const auto          base   {[&](const char* path) {
-                                  return domain {str("section", "dfa-modes"), str("grammar", "py*"),
-                                                 str("path", path), num("bytes", source.size()),
-                                                 num("tokens", tokens), field {"active", active ? "true" : "false"}};
-                                }};
-    measure("py* off", [&] { return off.tokenize(source).size(); }, base("off"));
-    measure("py* on", [&] { return on.tokenize(source).size(); }, base("on"));
   }
 
   // --- failure-cost: the per-invalid-byte cost of the recover-and-resync loop. -----------------
@@ -355,7 +384,7 @@ int main()
     };
 
     for (const engine_path& path : paths) {
-      const scilex::lexer lex    {path.accelerate ? dfa_lexer(path.rules(), {"default"}) : pike_lexer(path.rules())};
+      const scilex::lexer lex    {path.accelerate ? dfa_lexer(path.rules()) : pike_lexer(path.rules())};
       const bool          active {!lex.dfa_modes_active().empty()};
       for (const corpus_case& corpus : corpora) {
         std::size_t failures {0};

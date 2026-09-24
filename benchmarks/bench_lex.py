@@ -23,7 +23,7 @@ GRAMMAR_ORDER = ["json", "python", "cpp", "sql", "css", "lisp", "math", "xml", "
 
 # The two engine regimes, reported separately (no single aggregate): grammars whose shorthands are
 # pinned ASCII (a byte-level class) vs grammars that keep Unicode text-mode shorthands (code-point
-# predicates). Which of these actually accelerate under the DFA is a measured fact — see render_dfa.
+# predicates). How much of each runs on the DFA is a measured fact — see render_dfa.
 ASCII_PINNED = ["json", "cpp", "sql", "css", "lisp", "math"]
 TEXT_MODE = ["python", "xml", "yaml"]
 
@@ -51,7 +51,7 @@ def render_grammar(cases, compiler):
     print("SciLex C++ engine throughput — per grammar, PIKE engine "
           "(best-of-N min, raw samples → sciforge.bench)")
     print("steady-state input: each grammar's sample scaled to >= 256 KiB")
-    print(f"(the Pike per-rule + first-byte-dispatch engine across all grammars; the DFA opt-in is below)  [{compiler}]")
+    print(f"(the Pike per-rule + first-byte-dispatch engine across all grammars; the default DFA is below)  [{compiler}]")
     print()
     by_grammar = {}
     for case in rows:
@@ -102,27 +102,22 @@ def render_dfa(cases):
     rows = _section(cases, "dfa-modes")
     if not rows:
         return
-    print("\nDFA modes — full token path (tokenize), DFA-accelerated vs Pike:")
-    print(f"  {'gram':<6} {'KiB':>8} {'tokens':>9} {'Pike MB/s':>13} {'DFA MB/s':>13} "
-          f"{'speedup':>9} {'build us':>11} {'active':>7}")
+    print("\nDFA — full token path (tokenize), the default lexer (dfa_policy::automatic) vs Pike alone:")
+    print(f"  {'gram':<7} {'KiB':>8} {'tokens':>9} {'Pike MB/s':>13} {'DFA MB/s':>13} "
+          f"{'speedup':>9} {'build us':>11} {'DFA modes':>10} {'on Pike':>8}")
     by_grammar = {}
     for case in rows:
         by_grammar.setdefault(case.extra["grammar"], {})[case.extra["path"]] = case
-    order = ["json", "sql", "css", "math", "xml", "lisp", "yaml", "py*"]
+    order = ["json", "cpp", "sql", "css", "lisp", "math", "python", "xml", "yaml", "py-uni"]
     for grammar in order:
         paths = by_grammar.get(grammar)
         if not paths:
             continue
-        # most grammars name the paths pike/dfa/build; the py* control names them off/on (no build).
-        pike = paths.get("pike") or paths.get("off")
-        dfa = paths.get("dfa") or paths.get("on")
-        build = paths.get("build")
-        active = pike.extra["active"]
-        active_str = "accel" if active else "Pike (rejected)"
-        build_str = f"{min(build.samples) * 1e6:.1f}" if build else "-"
-        print(f"  {grammar:<6} {pike.extra['bytes'] // 1024:>8} {pike.extra['tokens']:>9} "
+        pike, dfa, build = paths["pike"], paths["dfa"], paths["build"]
+        print(f"  {grammar:<7} {pike.extra['bytes'] // 1024:>8} {pike.extra['tokens']:>9} "
               f"{_mbps(pike):>13.2f} {_mbps(dfa):>13.2f} "
-              f"{min(pike.samples) / min(dfa.samples):>8.1f}x {build_str:>11} {active_str:>16}")
+              f"{min(pike.samples) / min(dfa.samples):>8.1f}x {min(build.samples) * 1e6:>11.1f} "
+              f"{pike.extra['dfa_modes']:>10} {pike.extra['on_pike']:>8}")
 
 
 def render_failure_cost(cases):
