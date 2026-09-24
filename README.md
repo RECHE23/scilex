@@ -3,7 +3,8 @@
 **A small, header-only C++20 contextual lexer built on REAL.**
 
 - ReDoS-safe by construction (via REAL): no rule backtracks, nothing is exponential. Linear on
-  grammars whose rules stop scanning near their tokens; quadratic in the worst case (see *Performance*).
+  every rule a DFA takes and on grammars whose rules stop scanning near their tokens; quadratic in the
+  worst case, through a rule left on Pike (see *Performance*).
 - **Modes** — contextual lexing: the same byte lexes differently by context
   (f-strings, XML tag/content, YAML block/flow).
 - **Layout Awareness** — mode-aware indentation (NEWLINE / INDENT / DEDENT).
@@ -15,8 +16,9 @@ Define an ordered set of token rules — each a `(kind, regex, skip)` triple —
 SciLex tokenizes by **maximal munch**: the longest anchored match wins, with rule
 order breaking ties. A rule can also opt into **modes** (contextual lexing), so the
 same byte lexes differently by context. Because it is a thin layer over REAL,
-every rule match is linear in what it scans and ReDoS-safe by construction; tokenizing is linear for
-the usual grammar and quadratic in the worst case (see *Performance*).
+every rule match is linear in what it scans and ReDoS-safe by construction; tokenizing is linear
+wherever the rules run on the DFA, and quadratic in the worst case only through a rule left on Pike
+(see *Performance*).
 
 What that covers today: significant indentation, plus contexts like f-strings, YAML
 flow collections, and bracket continuation (modes + **Layout Awareness Level A**).
@@ -37,7 +39,7 @@ measured optimality.
 - Eager (`tokenize`) and lazy (`scan`) APIs
 - Optional `END_OF_INPUT` token
 - Positioned errors with a context snippet
-- ReDoS-safe (via REAL); linear on the usual grammar, quadratic in the worst case
+- ReDoS-safe (via REAL); linear wherever the rules run on the DFA, quadratic in the worst case only through a rule left on Pike
 - Nine example grammars — three of them modal (f-strings, XML, YAML)
 
 The three modal grammars differ in shape and each documents its own scope; modes
@@ -350,14 +352,15 @@ See [BENCHMARKS.md](BENCHMARKS.md). On the benign case measured there SciLex is 
 `re` (it was ~2× slower a stamp ago); on a ReDoS pattern SciLex stays linear while `re` explodes. See
 the benchmarks for details.
 
-**The worst case is quadratic, not linear.** Every rule match is linear in the text it scans, but at
-each token start every candidate rule is tried, and a rule may scan far past the token that finally
-wins. Two rules reach it: `a*b` and `a` on `aaa…` — every position scans to the end looking for `b`,
-then loses to `a`. Measured on 2026-09-23 (arm64, Apple clang 16, `-O2`), each doubling of the input
-multiplies the time by 3.8–4.2 on both routes: 266 ms → 16.9 s from 4 000 to 32 000 bytes on the
-Pike path, 35 ms → 2.1 s with the DFA. The shipped grammars stay linear (flat MB/s in
-[BENCHMARKS.md](BENCHMARKS.md)); a grammar fed by users (`.lex` files) can be written into the worst
-case. See [`docs/spec.dox`](docs/spec.dox).
+**Linear on the DFA; the worst case is quadratic, and only on Pike.** Every rule match is linear in
+the text it scans, but at each token start every candidate rule is tried, and a rule may scan far past
+the token that finally wins: `a*b` and `a` on `aaa…` scan to the end looking for `b` at every
+position, then lose to `a`. On the DFA each walk is memoized over the whole source (Reps, 1998): a
+state a walk proved leads to no accept stops every later walk that reaches it, so the rules on the DFA
+cost O(n × states) in total. A rule the DFA cannot take (see *DFA fast path*) keeps the per-position
+scan, and the worst case with it. Measured on 2026-09-24 (arm64, Apple clang 16, `-O2`): `a*b` and `a` on `aaa…`, both on the DFA, lex 256 KiB in 8.8 ms and double with the input; the same pair kept on Pike (`dfa_policy::requested`) still quadruples per doubling, 266 ms at 4 000 bytes and 16.9 s at 32 000 (2026-09-23). The shipped grammars stay linear (flat MB/s in
+[BENCHMARKS.md](BENCHMARKS.md)); a grammar fed by users (`.lex` files) reaches the worst case only
+through a rule left on Pike (`pike_rules(mode)` names them). See [`docs/spec.dox`](docs/spec.dox).
 
 ## License
 

@@ -8,9 +8,10 @@
  * breaking ties by rule order (earlier rules have priority). Because REAL is a
  * linear-time engine, every match is linear in what it scans and ReDoS-safe by
  * construction — no token rule can make the scanner backtrack catastrophically.
- * The scan as a whole is linear on the usual grammar and quadratic in the worst
- * case, where a rule scans far past the token that wins at every position (see
- * the spec's complexity section).
+ * The scan as a whole is linear wherever a mode's rules run on its DFA (each walk
+ * is memoized over the source), and quadratic in the worst case only through a rule
+ * left on Pike that scans far past the token that wins at every position (see the
+ * spec's complexity section).
  *
  * Two ways to consume tokens: \ref scilex::lexer::tokenize materializes them
  * all into a vector, while \ref scilex::lexer::scan returns a lazy range that
@@ -329,7 +330,8 @@ namespace scilex {
       position           cursor {0, 1, 1};
       std::vector<frame> stack {frame {.mode_id = 0, .entry_pos = cursor}}; // start in "default"
       token              next   {};
-      while (scan_next(source, cursor, stack, next)) {
+      munch_memos        memos;
+      while (scan_next(source, cursor, stack, next, memos)) {
         out.push_back(next);
       }
       if (policy == eof_policy::append) {
@@ -418,6 +420,10 @@ namespace scilex {
 
     friend class token_iterator;
 
+    //! \brief Per mode, what the munches over one source have proved (\c real::dfa_munch_memo),
+    //!        made on the mode's first DFA munch; one object per tokenization or iterator.
+    using munch_memos = std::vector<std::optional<real::dfa_munch_memo>>;
+
     //! \brief Formats a position as "line:column" for diagnostics.
     static std::string position_label(position where)
     {
@@ -438,6 +444,8 @@ namespace scilex {
      * \param[in,out] stack  The mode stack (its top is the active mode); a winning
      *                rule's transition mutates it. Never empty.
      * \param[out]    out    Receives the next non-skipped token on success.
+     * \param[in,out] memos  What earlier munches over \p source proved, per mode (see
+     *                \ref munch_memos); the same object for every call over one source.
      * \return `true` if a token was produced, `false` at end of input.
      * \throws lex_error If a position matches no rule in the active mode (#1), a rule
      *         pops at the stack root (#2), input ends inside a pushed mode (#3), or the
@@ -446,12 +454,12 @@ namespace scilex {
     bool scan_next(std::string_view    source,
                    position&           cursor,
                    std::vector<frame>& stack,
-                   token&              out) const
+                   token&              out,
+                   munch_memos&        memos) const
     {
       while (cursor.offset < source.size()) {
-        const std::string_view rest {source.substr(cursor.offset)};
-        const std::size_t      mode {stack.back().mode_id};
-        const munch_result     m    {munch_at(mode, rest, static_cast<unsigned char>(source[cursor.offset]))};
+        const std::size_t  mode {stack.back().mode_id};
+        const munch_result m    {munch_at(mode, source, cursor.offset, memos)};
 
         if (!m.have) {
           if (errors_ == error_policy::raise) {
@@ -466,7 +474,7 @@ namespace scilex {
           const position err_start {cursor};
           advance(source, cursor, 1); // the byte at err_start is unmatched by definition
           while (cursor.offset < source.size()
-                 && !starts_a_match(mode, source, cursor.offset)) {
+                 && !starts_a_match(mode, source, cursor.offset, memos)) {
             advance(source, cursor, 1);
           }
           out = token {scilex::error, source.substr(err_start.offset, cursor.offset - err_start.offset),
@@ -656,24 +664,36 @@ namespace scilex {
       std::size_t len  {0};
     };
 
-    //! \brief The winning munch in \p mode at the start of \p rest (\p lead is rest's first byte),
+    //! \brief The winning munch in \p mode at \p offset of \p source (\p memos: see \ref munch_memos),
     //!        dispatching to the mode's DFA when it has one, else the Pike + first-byte munch. The
     //!        single match primitive both the forward scan and the error-recovery probe call, so the
     //!        two never diverge on which rule wins.
     munch_result munch_at(std::size_t      mode,
-                          std::string_view rest,
-                          unsigned char    lead) const
+                          std::string_view source,
+                          std::size_t      offset,
+                          munch_memos&     memos) const
     {
-      const mode_dfa* const hybrid {per_mode_dfa_[mode].get()};
+      const std::string_view rest   {source.substr(offset)};
+      const auto             lead   {static_cast<unsigned char>(source[offset])};
+      const mode_dfa* const  hybrid {per_mode_dfa_[mode].get()};
       if (hybrid == nullptr) {
         return pike_munch_in_mode(mode, rest, lead, nullptr);
+      }
+      // The DFA's walk is memoized over the whole source (real::dfa_munch_memo): a state a walk proved
+      // leads to no accept stops every later walk that reaches it, so the DFA's share of a
+      // tokenization is linear in the source rather than quadratic.
+      if (memos.size() <= mode) {
+        memos.resize(mode + 1);
+      }
+      if (!memos[mode]) {
+        memos[mode].emplace(source.size());
       }
       // The Pike munch over the whole mode, assembled from its parts: the longest match wins and the
       // lowest index breaks a tie. The DFA answers for its rules' non-empty matches (each rule's
       // match() is its longest, so the DFA's longest is theirs); a DFA rule's empty match, which the
       // DFA never reports, competes through empty_winner; the rules the DFA cannot take run on Pike.
       munch_result best {};
-      if (const std::optional<real::dfa_match> matched {hybrid->dfa.match(rest)}) {
+      if (const std::optional<real::dfa_match> matched {hybrid->dfa.match(source, offset, *memos[mode])}) {
         best = munch_result {.have = true, .idx = hybrid->to_global[matched->rule_index], .len = matched->length};
       }
       else if (hybrid->empty_winner) {
@@ -710,13 +730,13 @@ namespace scilex {
     //!        `have` alone is the stop condition (a zero-length win is impossible in this context).
     bool starts_a_match(std::size_t      mode,
                         std::string_view source,
-                        std::size_t      offset) const
+                        std::size_t      offset,
+                        munch_memos&     memos) const
     {
-      const unsigned char lead {static_cast<unsigned char>(source[offset])};
-      if (!may_start(mode, lead)) {
+      if (!may_start(mode, static_cast<unsigned char>(source[offset]))) {
         return false;
       }
-      return munch_at(mode, source.substr(offset), lead).have;
+      return munch_at(mode, source, offset, memos).have;
     }
 
     //! \brief Advances \p cursor by \p n bytes of \p source, maintaining the 1-based line/column
@@ -1084,6 +1104,7 @@ namespace scilex {
     eof_policy         policy_   {eof_policy::omit};                                    //!< End-of-input policy.
     bool               eof_done_ {false};                                               //!< End-of-input token already yielded.
     bool               done_     {true};                                                //!< True once exhausted (end sentinel).
+    lexer::munch_memos memos_;                                                          //!< What this scan's munches proved.
 
     //! \brief Produces the next token, or marks the iterator exhausted.
     void advance()
@@ -1091,7 +1112,7 @@ namespace scilex {
       if (done_) {
         return;
       }
-      if (owner_->scan_next(source_, cursor_, stack_, current_)) {
+      if (owner_->scan_next(source_, cursor_, stack_, current_, memos_)) {
         return;
       }
       // Input exhausted: yield one end-of-input token if requested, else stop.

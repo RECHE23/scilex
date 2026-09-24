@@ -29,9 +29,12 @@ door *below* SciLex — no input makes the scan exponential.
 
 **It is not a linear bound on every input, and this policy does not claim one.** At each token start
 every candidate rule is attempted, and a rule may scan far past the token that finally wins, so
-tokenizing costs O(n·S·m), `S` the longest such scan. With a fixed grammar whose rules scan far and
-lose, the input decides `S`: `a*b` and `a` on `aaa…` scan to the end at every position, and the time
-grows **quadratically** — measured 2026-09-23, each doubling of the input multiplies it by ~4. The
+tokenizing costs O(n·S·m), `S` the longest such scan. The rules a mode's DFA takes are memoized over the
+whole source and cost O(n × states) together, whatever the input; the rules left on Pike (a `\b`, a
+`$`, a lookaround, a Unicode `\w`, a lazy delimiter — `pike_rules(mode)` names them) do not. With such a
+rule scanning far and losing, the input decides `S`, and the time grows **quadratically** — measured
+2026-09-23 with `a*b` and `a` kept on Pike, each doubling of the input multiplies it by ~4, while the
+same pair on the DFA lexes 256 KiB in 8.8 ms (2026-09-24). The
 shipped example grammars stay linear on the inputs measured in `BENCHMARKS.md`. If you tokenize
 untrusted text, write rules that stop scanning near their tokens, and bound the input size where the
 grammar cannot guarantee that. The full statement is in `docs/spec.dox` (complexity section).

@@ -22,6 +22,11 @@ fuzz oracle.
   `Lexer.pike_rules(mode)`) names the rules left on Pike; `dfa_modes_active()` now lists every mode
   with at least one rule on a DFA. The `python-unicode` grammar lexes 3.5× faster.
 
+- **Tokenizing is linear wherever the rules run on the DFA.** Each DFA walk is memoized over the
+  whole source (REAL 2026.9.7's `real::dfa_munch_memo`), so `a*b` beside `a` over `aaa…` — n(n+1)/2
+  steps before — lexes 256 KiB in 8.8 ms. The quadratic worst case remains only through a rule left
+  on Pike. Requires `real-regex>=2026.9.7`.
+
 ### Added
 - `scilex::layout(tokens, source, tab_policy, mode_significant)`: `tab_policy::python` measures
   indentation as CPython does (tab stops of 8, cross-checked with tabs as 1) and refuses an

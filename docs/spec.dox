@@ -108,14 +108,18 @@ SciLex reserves five kinds at the low end of the `int` range; user kinds must av
 Every rule is a `real::regex` — a linear-time, ReDoS-safe engine: a match attempt costs **O(s·m)**, `s`
 the bytes it scans before its threads die and `m` the program size. At each token start every
 candidate rule is attempted, and an attempt may scan far past the token that finally wins, so
-tokenization costs **O(n·S·m)**, `S` the longest such scan. That is linear in `n` when rules stop
-scanning near their tokens — the shipped grammars measure flat MB/s (BENCHMARKS.md) — and
-**O(n²·m) in the worst case**.
+tokenization costs **O(n·S·m)**, `S` the longest such scan. The rules a mode's DFA takes are the
+exception: each DFA walk is memoized over the source (\c real::dfa_munch_memo, after Reps 1998) — a
+(state, position) a walk proved leads to no accept stops every later walk that reaches it — so those
+rules cost **O(n·Q)** together, `Q` the DFA's states, on every input. The rest is linear in `n` when
+the rules left on Pike stop scanning near their tokens — the shipped grammars measure flat MB/s
+(BENCHMARKS.md) — and **O(n²·m) in the worst case**.
 
-The worst case takes two rules: `a*b` and `a` on `aaa…`. Every position scans to the end looking for
-`b`, then loses to `a`. Measured on 2026-09-23 (arm64, Apple clang 16, `-O2`), each doubling of `n`
-multiplies the time by 3.8–4.2 on the Pike route and on the DFA route alike (Pike: 266 ms at
-`n` = 4 000, 16.9 s at 32 000). The recover-and-resync loop has the same shape: a rule that scans far
+The worst case takes a rule left on Pike that scans far and loses. `a*b` and `a` on `aaa…` show the
+shape: every position scans to the end looking for `b`, then loses to `a`. Kept on Pike
+(`dfa_policy::requested`), each doubling of `n` multiplies the time by 3.8–4.2 (266 ms at
+`n` = 4 000, 16.9 s at 32 000; 2026-09-23, arm64, Apple clang 16, `-O2`); on the DFA the same pair
+lexes 256 KiB in 8.8 ms and doubles with `n` (2026-09-24). The recover-and-resync loop has the same shape: a rule that scans far
 before failing pays that scan per position, which a first-byte prefilter mitigates and does not
 remove. What holds on every input is ReDoS-safety: no rule backtracks, and nothing is exponential.
 */

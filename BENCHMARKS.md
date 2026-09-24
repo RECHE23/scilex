@@ -48,7 +48,7 @@ from roughly 0.5 to 1.39.
 
 What SciLex guarantees instead is **ReDoS-safety by construction**: no rule can make the
 scanner backtrack catastrophically, so no input is exponential. It is not a linear bound on every
-input — the worst case is quadratic (a rule that scans far and loses at every position; see
+input — the worst case is quadratic, through a rule left on Pike that scans far and loses at every position (see
 `docs/spec.dox`). On an adversarial (or simply
 unlucky) pattern, `re` degrades exponentially while SciLex stays flat — and *that* is
 the difference that matters for a lexer fed untrusted or machine-generated input.
@@ -59,7 +59,7 @@ the difference that matters for a lexer fed untrusted or machine-generated input
 | --- | --- | --- |
 | benign token soup | **SciLex** (1.39×) | it was `re` by ~2× a stamp ago; real-regex 2026.8.x removed the per-CALL fixed cost, which is a lexer's whole regime — one anchored match per short token |
 | adversarial / ReDoS | **SciLex** (linear vs exponential) | REAL is linear-time and ReDoS-safe; `re` backtracks catastrophically |
-| untrusted / machine-generated | **SciLex** | no rule backtracks, so no input is exponential; the worst case is quadratic, not a cliff |
+| untrusted / machine-generated | **SciLex** | no rule backtracks, so no input is exponential; the worst case is quadratic, only through a rule left on Pike, not a cliff |
 
 ## C++ engine throughput — per grammar
 
@@ -132,7 +132,8 @@ inputs:
 
 Flat MB/s means time scales **linearly** with input on this grammar, whose rules stop scanning
 near their tokens. It measures the `cpp` grammar, not a bound for every grammar: two rules (`a*b`
-and `a` on `aaa…`) reach the quadratic worst case described in `docs/spec.dox`.
+and `a` on `aaa…`) kept on Pike reach the quadratic worst case described in `docs/spec.dox` (on the
+DFA, whose walks are memoized, the same pair is linear).
 
 **Reading — modes & Layout Awareness.** Contextual lexing is throughput-neutral by
 construction (the dispatch runs per mode). `make bench-lex` also contrasts the modal

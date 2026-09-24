@@ -11,9 +11,9 @@ comparability caveats) is at the end and in full in the performance baseline, `B
 - **Grammar as data.** A grammar is an ordered list of `(kind, pattern)` rules built at runtime; adding
   or changing a rule needs no code-generation or build step. Patterns are `real::regex` strings.
 - **ReDoS-safe, with a stated bound.** Every rule runs on REAL's linear-time engine and never
-  backtracks, so no input is exponential; tokenizing is linear on the usual grammar and quadratic in the
-  worst case (a rule that scans far and then loses, at every position — see the spec's complexity
-  section).
+  backtracks, so no input is exponential; tokenizing is linear wherever the rules run on the DFA and
+  quadratic in the worst case only through a rule left on Pike that scans far and then loses, at every
+  position (see the spec's complexity section).
 - **Modes and layout.** A per-scan mode stack (push/pop/set) does contextual lexing; a mode-aware layout
   pass emits NEWLINE/INDENT/DEDENT for indentation-significant languages, with implicit continuation
   inside insignificant modes.

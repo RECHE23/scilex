@@ -12,7 +12,7 @@ from the headers.
 > rules; at each position the *longest* anchored match wins, rule order breaks ties
 > (maximal munch). A rule can opt into **modes** (`in_mode` + a push/pop/set mode
 > stack), so the same byte lexes differently by context. **ReDoS-safe by construction**
-> (inherited from REAL): linear on the usual grammar, quadratic in the worst case
+> (inherited from REAL): linear wherever the rules run on the DFA, quadratic in the worst case only through a rule left on Pike
 > (\ref spec_linearity). Consume tokens eagerly
 > (\ref scilex::lexer::tokenize) or lazily (\ref scilex::lexer::scan); add the opt-in,
 > mode-aware indentation pass (\ref scilex::layout); use it from C++ or through an abi3
@@ -38,7 +38,7 @@ pattern matching. Each \ref scilex::rule pairs a token `kind` with a `real::rege
 Because REAL simulates a Thompson NFA in linear time (it never backtracks), every
 rule match is linear in the text it scans and **ReDoS-safe**: no token rule can make the
 scanner explode exponentially, even on adversarial input. The scan as a whole is bounded
-in \ref spec_linearity — linear on the usual grammar, quadratic in the worst case. SciLex adds only the scanning loop, source-position
+in \ref spec_linearity — linear wherever the rules run on the DFA, quadratic in the worst case only through a rule left on Pike. SciLex adds only the scanning loop, source-position
 tracking, and an optional layout pass on top.
 
 \section x_algorithm 3. The algorithm: longest anchored match wins

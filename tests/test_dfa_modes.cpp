@@ -9,6 +9,7 @@
 // brute-force munch, so the test pulls in no example/fuzz header (those carry their own
 // conventions and are out of this library's lint scope).
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <random>
 #include <stdexcept>
@@ -447,4 +448,28 @@ TEST(rules_whose_union_outgrows_the_state_cap_stay_on_pike)
   EXPECT(lex.dfa_modes_active().empty());
   EXPECT(lex.pike_rules("default") == (std::vector<std::size_t> {0, 1}));
   EXPECT(tokens_equal(lex.tokenize("aaaaaaaaaaaa"), pike_only(rules).tokenize("aaaaaaaaaaaa")));
+}
+
+// `a*b` beside `a` over "aaa…": each munch's DFA walk reads to the end looking for the b, so
+// without the walk's memo lexing n bytes costs n(n+1)/2 steps -- minutes at 256 KiB. With it the
+// DFA's share is linear: milliseconds. The bound leaves three orders of magnitude of margin, so a
+// slow or instrumented build cannot fail it and a return to quadratic time cannot pass it.
+TEST(a_dfa_mode_tokenizes_the_quadratic_input_in_linear_time)
+{
+  const std::vector<rule> rules       {plain(0, "a*b"), plain(1, "a")};
+  const scilex::lexer     lex         {rules};
+  EXPECT(active_has(lex, "default") && lex.pike_rules("default").empty());
+  const std::string input(std::size_t {256} *1024, 'a');
+  const auto        start             {std::chrono::steady_clock::now()};
+  const std::size_t tokens            {lex.tokenize(input).size()};
+  const auto        spent             {std::chrono::steady_clock::now() - start};
+  EXPECT_EQ(tokens, input.size());
+  EXPECT(spent < std::chrono::seconds {5});
+  // The lazy path shares the memo across its increments.
+  std::size_t lazy {0};
+  for (const token& tok : lex.scan(input)) {
+    lazy += static_cast<std::size_t>(tok.kind == 1);
+  }
+  EXPECT_EQ(lazy, input.size());
+  EXPECT(std::chrono::steady_clock::now() - start < std::chrono::seconds {10});
 }
