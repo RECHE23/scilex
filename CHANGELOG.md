@@ -7,6 +7,8 @@ fuzz oracle.
 
 ## Unreleased
 
+## 2026.9.1 — 2026-09-24
+
 ### Changed
 - **DFA acceleration is automatic.** The lexer tries every mode and keeps a `real::dfa` wherever the
   constructor decides it reproduces the per-rule munch exactly, so the token stream is unchanged.
