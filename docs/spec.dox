@@ -111,7 +111,11 @@ candidate rule is attempted, and an attempt may scan far past the token that fin
 tokenization costs **O(n·S·m)**, `S` the longest such scan. The rules a mode's DFA takes are the
 exception: each DFA walk is memoized over the source (\c real::dfa_munch_memo, after Reps 1998) — a
 (state, position) a walk proved leads to no accept stops every later walk that reaches it — so those
-rules cost **O(n·Q)** together, `Q` the DFA's states, on every input. The rest is linear in `n` when
+rules cost **O(n·Q)** together, `Q` the DFA's states, on every input. The memo is paid for in memory
+only once a walk runs more than \c real::dfa_munch_memo::short_stretch (32) bytes past its last accept;
+until then a scan holds nothing beyond its mode stack. From then on it holds one bit per byte of the
+source for each state such a stretch passed through, at most **Q·n bits per DFA mode** — so a
+`scan()` over an input that arms it is no longer constant in memory. The rest is linear in `n` when
 the rules left on Pike stop scanning near their tokens — the shipped grammars measure flat MB/s
 (BENCHMARKS.md) — and **O(n²·m) in the worst case**.
 

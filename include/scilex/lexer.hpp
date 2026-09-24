@@ -444,7 +444,8 @@ namespace scilex {
 
     //! \brief Per mode, what the munches over one source have proved (\c real::dfa_munch_memo); one
     //!        object per tokenization or iterator, made by \ref memos_for. An unarmed memo holds
-    //!        nothing, so making one per mode up front costs nothing a scan would notice.
+    //!        nothing, so making one per mode up front costs nothing a scan would notice; an armed
+    //!        one holds up to one bit per source byte per DFA state (Q·n bits for the mode).
     using munch_memos = std::vector<real::dfa_munch_memo>;
 
     //! \brief The memos for one scan of \p source: one per mode, each unarmed.
