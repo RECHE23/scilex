@@ -894,14 +894,16 @@ namespace scilex {
       }
     }
 
-    //! \brief Opts the named \p dfa_modes into the DFA fast path (called once, after
-    //!        \ref build_dispatch). For each, builds a \c real::dfa from the mode's
+    //! \brief Tries modes for the DFA fast path (called once, after \ref build_dispatch):
+    //!        every mode under \ref dfa_policy::automatic, the named \p dfa_modes under
+    //!        \ref dfa_policy::requested. For each, builds a \c real::dfa from the mode's
     //!        active rules in ascending global index (= priority); a rule set that is
     //!        not DFA-able (\c real::dfa_error), or whose DFA would change an answer
     //!        (\ref dfa_reproduces_pike), leaves the mode on Pike (nullptr).
     //!        Best-effort — see \ref dfa_modes_active.
-    //! \param[in] dfa_modes The opted-in mode names. The build-time decision always
-    //!            runs; its outcome is observable via \ref dfa_modes_active.
+    //! \param[in] dfa_modes The named modes. The build-time decision always runs; its
+    //!            outcome is observable via \ref dfa_modes_active.
+    //! \param[in] policy    Whether every mode is tried or only \p dfa_modes.
     //! \throws std::invalid_argument If \p dfa_modes names an unknown mode.
     void build_dfa_modes(const std::vector<std::string>& dfa_modes,
                          dfa_policy                      policy)
