@@ -711,33 +711,71 @@ namespace scilex {
                           munch_memos&     memos) const
     {
       const mode_dfa* const hybrid {per_mode_dfa_[mode].get()};
+      // A mode wholly on its DFA is the per-token case: it stays free of the Pike path's frame, which
+      // an out-of-line call keeps for the modes that need it.
+      if (hybrid == nullptr || hybrid->any_on_pike) [[unlikely]] {
+        return munch_with_pike(mode, source, offset, memos, hybrid);
+      }
+      return dfa_munch(*hybrid, source, offset, memos[mode]);
+    }
+
+    //! \brief The DFA's share of \ref munch_at: its rules' longest non-empty match, else the empty
+    //!        match of a nullable DFA rule (\ref mode_dfa::empty_winner), else nothing.
+    //! \param[in]     hybrid The mode's DFA.
+    //! \param[in]     source The whole source.
+    //! \param[in]     offset Where the munch starts.
+    //! \param[in,out] memo   The mode's walk memo over \p source.
+    //! \return The DFA rules' winning munch, as a global rule index.
+#if defined(__GNUC__) || defined(__clang__)
+    __attribute__((always_inline))
+#endif
+    static munch_result dfa_munch(const mode_dfa&       hybrid,
+                                  std::string_view      source,
+                                  std::size_t           offset,
+                                  real::dfa_munch_memo& memo)
+    {
+      // The walk is memoized over the whole source (real::dfa_munch_memo): a state a walk proved leads
+      // to no accept stops every later walk that reaches it, so the DFA's share of a tokenization is
+      // linear in the source rather than quadratic. Each rule's match() is its longest, so the DFA's
+      // longest is theirs; a DFA rule's empty match, which the DFA never reports, competes through
+      // empty_winner.
+      if (const std::optional<real::dfa_match> matched {hybrid.dfa.match(source, offset, memo)}) {
+        return munch_result {.have = true, .idx = hybrid.to_global[matched->rule_index], .len = matched->length};
+      }
+      if (hybrid.empty_winner) {
+        return munch_result {.have = true, .idx = *hybrid.empty_winner, .len = 0};
+      }
+      return munch_result {};
+    }
+
+    //! \brief \ref munch_at for a mode with rules on Pike: all of them when it has no DFA (\p hybrid
+    //!        null), else the DFA's share merged with the rest — the longest match wins and the lowest
+    //!        index breaks a tie, as in the per-rule munch over the whole mode.
+    //! \param[in]     mode   The active mode.
+    //! \param[in]     source The whole source.
+    //! \param[in]     offset Where the munch starts.
+    //! \param[in,out] memos  The walk memos over \p source.
+    //! \param[in]     hybrid The mode's DFA, or null.
+    //! \return The winning munch.
+#if defined(__GNUC__) || defined(__clang__)
+    __attribute__((noinline))
+#endif
+    munch_result munch_with_pike(std::size_t      mode,
+                                 std::string_view source,
+                                 std::size_t      offset,
+                                 munch_memos&     memos,
+                                 const mode_dfa*  hybrid) const
+    {
+      const unsigned char first {static_cast<unsigned char>(source[offset])};
       if (hybrid == nullptr) {
-        return pike_munch_in_mode(mode, source.substr(offset), static_cast<unsigned char>(source[offset]), nullptr);
+        return pike_munch_in_mode(mode, source.substr(offset), first, nullptr);
       }
-      // The DFA's walk is memoized over the whole source (real::dfa_munch_memo): a state a walk proved
-      // leads to no accept stops every later walk that reaches it, so the DFA's share of a
-      // tokenization is linear in the source rather than quadratic.
-      real::dfa_munch_memo& memo {memos[mode]};
-      // The Pike munch over the whole mode, assembled from its parts: the longest match wins and the
-      // lowest index breaks a tie. The DFA answers for its rules' non-empty matches (each rule's
-      // match() is its longest, so the DFA's longest is theirs); a DFA rule's empty match, which the
-      // DFA never reports, competes through empty_winner; the rules the DFA cannot take run on Pike.
-      munch_result best {};
-      if (const std::optional<real::dfa_match> matched {hybrid->dfa.match(source, offset, memo)}) {
-        best = munch_result {.have = true, .idx = hybrid->to_global[matched->rule_index], .len = matched->length};
-      }
-      else if (hybrid->empty_winner) {
-        best = munch_result {.have = true, .idx = *hybrid->empty_winner, .len = 0};
-      }
-      if (hybrid->any_on_pike) {
-        const munch_result rest_of_mode {pike_munch_in_mode(mode, source.substr(offset),
-                                                            static_cast<unsigned char>(source[offset]),
-                                                            &hybrid->on_pike)};
-        if (rest_of_mode.have
-            && (!best.have || rest_of_mode.len > best.len
-                || (rest_of_mode.len == best.len && rest_of_mode.idx < best.idx))) {
-          best = rest_of_mode;
-        }
+      munch_result       best {dfa_munch(*hybrid, source, offset, memos[mode])};
+      const munch_result rest_of_mode {pike_munch_in_mode(mode, source.substr(offset), first, &hybrid->on_pike)};
+      if (rest_of_mode.have
+          && (!best.have || rest_of_mode.len > best.len
+              || (rest_of_mode.len == best.len && rest_of_mode.idx < best.idx))) {
+        best = rest_of_mode;
       }
       return best;
     }
