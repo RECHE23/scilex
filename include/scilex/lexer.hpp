@@ -770,7 +770,7 @@ namespace scilex {
       if (hybrid == nullptr) {
         return pike_munch_in_mode(mode, source.substr(offset), first, nullptr);
       }
-      munch_result       best {dfa_munch(*hybrid, source, offset, memos[mode])};
+      munch_result       best         {dfa_munch(*hybrid, source, offset, memos[mode])};
       const munch_result rest_of_mode {pike_munch_in_mode(mode, source.substr(offset), first, &hybrid->on_pike)};
       if (rest_of_mode.have
           && (!best.have || rest_of_mode.len > best.len
