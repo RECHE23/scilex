@@ -24,7 +24,7 @@ jobs:
   lint:
     uses: RECHE23/sciforge/.github/workflows/lint-cpp.yml@v2026.9.2
     with:
-      deps: '[{"repo":"RECHE23/real-regex","path":"real-regex","ref":"v2026.9.6"}]'
+      deps: '[{"repo":"RECHE23/real-regex","path":"real-regex","ref":"v2026.9.7"}]'
       sciforge-ref: v2026.9.2
       runner-mode: hosted
 
@@ -36,7 +36,7 @@ jobs:
   build:
     uses: RECHE23/sciforge/.github/workflows/build-cpp.yml@v2026.9.2
     with:
-      deps: '[{"repo":"RECHE23/real-regex","path":"real-regex","ref":"v2026.9.6"}]'
+      deps: '[{"repo":"RECHE23/real-regex","path":"real-regex","ref":"v2026.9.7"}]'
       sciforge-ref: v2026.9.2
       runner-mode: hosted
       enable-windows-msvc: true
@@ -52,7 +52,7 @@ jobs:
     with:
       python-versions: '["3.11","3.14"]'
       sciforge-ref: v2026.9.2
-      deps: '[{"repo":"RECHE23/real-regex","path":"real-regex","ref":"v2026.9.6"}]'
+      deps: '[{"repo":"RECHE23/real-regex","path":"real-regex","ref":"v2026.9.7"}]'
       test-cmd: 'python -m pip install mypy==2.3.0 && python -m mypy.stubtest scilex && python -m unittest discover -s python/tests'
       runner-mode: hosted
 
