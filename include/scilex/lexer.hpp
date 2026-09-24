@@ -165,6 +165,14 @@ namespace scilex {
   };
 
   /*!
+   * \brief The deepest the mode stack may grow. A push beyond it is a \ref lex_error under either
+   *        error policy: each frame costs memory, and without a bound an input of openers alone (16 MiB
+   *        of `(` under the python grammar) grew the stack past a gigabyte. 65 536 frames is ~2 MiB,
+   *        far beyond any nesting a real grammar reaches.
+   */
+  inline constexpr std::size_t max_mode_depth {65536};
+
+  /*!
    * \brief Applies rule \p r's mode transition (if any) to \p stack — the per-scan
    *        mode-stack mutation, kept pure so the lexer and the fuzz oracle share it
    *        verbatim.
@@ -175,7 +183,8 @@ namespace scilex {
    * place. The target id is resolved once at build time, so this hot per-token pivot
    * does no name→id map lookup.
    *
-   * \throws lex_error On a pop while the stack is at its root (nothing to leave).
+   * \throws lex_error On a pop while the stack is at its root (nothing to leave), or a push that would
+   *         take it past \ref max_mode_depth.
    */
   inline void apply_transition(const rule&         r,
                                position            start,
@@ -185,6 +194,10 @@ namespace scilex {
       return;
     }
     if (r.action->operation == mode_action::op::push) {
+      if (stack.size() >= max_mode_depth) {
+        throw lex_error("cannot push another mode: the mode stack is " + std::to_string(max_mode_depth)
+                        + " deep (scilex::max_mode_depth)", start);
+      }
       stack.push_back(frame {.mode_id = r.action->target_id, .entry_pos = start});
     }
     else if (r.action->operation == mode_action::op::pop) {
@@ -448,7 +461,8 @@ namespace scilex {
      *                \ref munch_memos); the same object for every call over one source.
      * \return `true` if a token was produced, `false` at end of input.
      * \throws lex_error If a position matches no rule in the active mode (#1), a rule
-     *         pops at the stack root (#2), input ends inside a pushed mode (#3), or the
+     *         pops at the stack root or pushes past \ref max_mode_depth (#2), input ends inside a
+     *         pushed mode (#3), or the
      *         winning match is zero-length and so cannot advance the scan (#4).
      */
     bool scan_next(std::string_view    source,

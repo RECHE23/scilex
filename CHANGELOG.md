@@ -7,6 +7,18 @@ fuzz oracle.
 
 ## Unreleased
 
+### Fixed
+- **The xml example grammar is linear under error recovery.** Its comment and CDATA rules were lazy,
+  so they ran on Pike and rescanned the rest of the input at every `<`: 16 KiB of `<!-- x>` took
+  3.5 s under `error_policy::token`. They are rewritten so that `match()` is the longest match —
+  the same matches on every suffix checked, and now on the DFA. `fuzz-check` gains scaling cases.
+- **The mode stack is bounded** by `scilex::max_mode_depth` (65 536 frames); a push past it is a
+  `lex_error` under either policy. 16 MiB of `(` under the python grammar grew it past 1 GB.
+- The README's C++ quickstart compiles (it is `examples/cpp/quickstart.cpp`, run by `make example`),
+  the published API reference no longer carries private members, header sources or build-machine
+  paths, and a GitHub release's notes are the tag's CHANGELOG section instead of a bare
+  "Full Changelog" link.
+
 ## 2026.9.1 — 2026-09-24
 
 ### Changed

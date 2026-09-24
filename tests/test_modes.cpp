@@ -358,3 +358,34 @@ TEST(build_rejects_an_unknown_insignificant_mode)
   // An insignificant-mode name must be a mode the rules actually use.
   EXPECT_THROWS(scilex::lexer(string_modes(), {"nonexistent"}), std::invalid_argument);
 }
+
+// The mode stack stops at scilex::max_mode_depth: the push that would exceed it is a lex_error under
+// both error policies, at the offending opener, so an input of openers alone cannot grow it without end.
+TEST(the_mode_stack_is_bounded_by_max_mode_depth)
+{
+  scilex::rule open  {.kind = 1, .pattern = real::regex("\\(")};
+  open.in_mode = {"default", "inner"};
+  open.action  = push_to("inner");
+  scilex::rule close {.kind = 2, .pattern = real::regex("\\)")};
+  close.in_mode = {"inner"};
+  close.action  = pop_mode();
+  const std::vector<scilex::rule> rules {open, close};
+
+  const std::size_t depth               {scilex::max_mode_depth - 1}; // the root frame is the first of the stack
+  const std::string balanced            {std::string(depth, '(') + std::string(depth, ')')};
+  for (const scilex::error_policy policy : {scilex::error_policy::raise, scilex::error_policy::token}) {
+    const scilex::lexer lex {rules, {}, {}, policy};
+    EXPECT_EQ(lex.tokenize(balanced).size(), 2 * depth);  // exactly at the bound: fine
+    std::size_t where       {0};
+    bool        threw       {false};
+    try {
+      static_cast<void>(lex.tokenize(std::string(depth + 1, '(')));
+    }
+    catch (const scilex::lex_error& error) {
+      threw = std::string_view {error.what()}.find("max_mode_depth") != std::string_view::npos;
+      where = error.where().offset;
+    }
+    EXPECT(threw);
+    EXPECT_EQ(where, depth); // the opener that would have gone one frame too deep
+  }
+}
