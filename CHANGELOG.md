@@ -7,6 +7,15 @@ fuzz oracle.
 
 ## Unreleased
 
+### Changed
+- **A token on the DFA costs what it did before the per-rule hybrid, within 4 % on x86-64.** A token
+  whose rule carries no mode action no longer calls the out-of-line mode transition, a mode wholly on
+  its DFA no longer carries the Pike merge's frame, and a scan makes one walk memo per mode up front.
+  callgrind on 1 MiB of JSON, x86-64, against the same REAL headers: 125.1 M instructions at 2026.9.1
+  → 111.9 M (g++ 13.3 -O2; 107.8 M before the hybrid), 133.7 M → 110.3 M (clang 18; 106.8 M before).
+  arm64 keeps more of the gap: 2.22 G instructions retired on 20 MiB (Apple clang), 1.99 G before the
+  hybrid.
+
 ### Added
 - `scilex/version.hpp` (`SCILEX_VERSION_MAJOR/MINOR/PATCH`, `SCILEX_VERSION_STRING`), included by
   `scilex.hpp`, rewritten by `make release` and checked by `make version-check`; `scilex --version`
