@@ -434,3 +434,17 @@ TEST(hybrid_munch_equals_the_per_rule_path_on_mixed_rule_sets)
   EXPECT(compared == 4800U);
   EXPECT(mixed > 20U); // the sweep reaches modes that really are split between the DFA and Pike
 }
+
+// Rules a DFA takes one by one can still outgrow the DFA's state cap together: a window of eleven
+// bytes and a count modulo 37 over the same two bytes multiply. The mode then stays on Pike whole.
+TEST(rules_whose_union_outgrows_the_state_cap_stay_on_pike)
+{
+  const std::vector<rule> rules {plain(0, "[ab]*a[ab]{10}"), plain(1, "(?:[ab]{37})*x")};
+  for (const rule& r : rules) {
+    EXPECT(real::dfa_faithful(r.pattern).outcome == real::dfa_fidelity_outcome::faithful); // each alone
+  }
+  const scilex::lexer lex {rules};
+  EXPECT(lex.dfa_modes_active().empty());
+  EXPECT(lex.pike_rules("default") == (std::vector<std::size_t> {0, 1}));
+  EXPECT(tokens_equal(lex.tokenize("aaaaaaaaaaaa"), pike_only(rules).tokenize("aaaaaaaaaaaa")));
+}
