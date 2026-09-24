@@ -55,14 +55,14 @@ Measured on the same inputs and the same task (a full tokenization pass), best-o
 CI (`benchmarks/bench_compare.py`; full table and caveats in `BENCHMARKS.md`). Read them **with** the
 note that the tools produce different things:
 
-- On raw throughput SciLex is **mid-pack** among embedded-Python lexers, not the fastest: on a ~515 KB
-  JSON, the SciLex extension runs ~5 MB/s versus Pygments ~10 and tree-sitter ~13; on ~512 KB of Python
-  source it runs ~7 MB/s versus Pygments ~0.8 and tree-sitter ~11. Where a tool wins, it wins — that is
-  published as measured.
+- On raw throughput SciLex is the fastest of the embedded-Python lexers measured, with its rules on a
+  DFA by default: on a ~515 KB JSON, the SciLex extension runs ~23 MB/s versus Pygments ~10 and
+  tree-sitter ~12; on ~512 KB of Python source it runs ~32 MB/s versus Pygments ~0.7 and tree-sitter
+  ~10 (2026-09-24, arm64). Where a tool wins, it wins — that is published as measured.
 - SciLex's figure **includes materialising a Python object per token** (the binding cost); the C++
   engine itself, without the binding, is far faster (the per-grammar table in `BENCHMARKS.md`).
   tree-sitter returns a C tree handle without per-token Python objects; flex, a code-generated native
-  DFA, is the **ceiling** at ~160 MB/s — ~15–30× any Python-embedded option, exactly the codegen axis
+  DFA, is the **ceiling** at ~160 MB/s — ~5–7× the SciLex binding, exactly the codegen axis
   SciLex does not compete on.
 
 The numbers **confirm** the axes above rather than overturn them: SciLex's case is ReDoS-safety,

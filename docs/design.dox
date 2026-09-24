@@ -164,8 +164,8 @@ lay = scilex.Lexer([(0, r"\s+", True), (1, r"\w+", False), (2, r":", False)])
 - **DFA fast path (automatic).** Every mode (\ref scilex::dfa_policy::automatic, the default; or
   only those named in `dfa_modes` under \ref scilex::dfa_policy::requested) is recognized by a single
   \c real::dfa pass (a capture-free maximal-munch DFA over the mode's rules) instead of
-  the per-rule scan — 3–27× on the full token path (dense grammars ~15–27×, geomean ~20×; sparser
-  ones 3–5×), most where many rules share leading bytes.
+  the per-rule scan — 5.7–18× on the full token path of the example grammars (BENCHMARKS.md), least
+  on the densest token streams, where the per-token cost dominates.
   Best-effort, per rule: at construction the constructor **decides**, exactly and not by
   sampling, which rules a DFA reproduces (\c real::dfa_faithful: is the rule's `match()` its
   longest match?) and builds the mode's DFA over those. A rule needing a zero-width assertion
