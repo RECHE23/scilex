@@ -98,11 +98,12 @@ namespace scilex {
    * This is a real trade-off, not a footnote. `\w+` (or `[^\W\d]\w*`) with the default flags reads
    * **Unicode identifiers** — `café`, `変数` — the faithful behaviour for a language like Python 3.
    * But a Unicode `\w` expands into more UTF-8 byte transitions than a DFA is built from, and `\b` is a
-   * zero-width assertion no DFA represents, so a mode that requests DFA acceleration (`dfa_modes`) and
-   * contains either is **transparently demoted** to the general Pike engine (same tokens; the demotion
-   * is visible via `lexer::dfa_modes_active`). The narrower Unicode `\d` and `\s` expand and stay on
-   * the DFA. Concretely: the general engine lexes at roughly **6–9.5 MB/s**, while a
-   * DFA-accelerated mode runs **3–27× that** — so the Unicode identifier costs the DFA fast path.
+   * zero-width assertion no DFA represents, so a rule holding either **stays on the general Pike
+   * engine** while the mode's other rules take the DFA (same tokens). That rule is tried at every
+   * position its first byte allows, so it keeps a share of the per-rule cost. The narrower Unicode
+   * `\d` and `\s` expand and stay on the DFA. Concretely: the general engine lexes at roughly
+   * **6–9.5 MB/s**, while a fully DFA-accelerated mode runs **3–27× that** — so the Unicode
+   * identifier costs part of the DFA fast path.
    *
    * If your identifiers are ASCII by specification (JSON, SQL, C), pin `(?a)` inline in the pattern
    * (or pass `real::flags::ascii`) to keep `\w \d \s \b` ASCII and small, DFA-representable, and fast —
@@ -204,8 +205,8 @@ namespace scilex {
    */
   enum class dfa_policy : std::uint8_t
   {
-    //! Every mode (the default). A mode whose rules no DFA represents, or whose DFA would change an
-    //! answer, stays on the per-rule path; the cost is the DFA construction for the others.
+    //! Every mode (the default). In each, the rules a DFA reproduces go on one and the others stay on
+    //! the per-rule path; the cost is the DFA construction.
     automatic,
     //! Only the modes named in `dfa_modes`; an empty list keeps every mode on the per-rule path.
     requested,
@@ -265,10 +266,10 @@ namespace scilex {
      * \param[in] dfa_modes Modes to accelerate with a \c real::dfa fast path (one
      *            DFA pass replaces the per-rule Pike dispatch) under \ref dfa_policy::requested;
      *            under the default \ref dfa_policy::automatic every mode is tried and this list
-     *            adds nothing. Each name must be a mode the rules use. The attempt is best-effort: a mode whose rules cannot
+     *            adds nothing. Each name must be a mode the rules use. The attempt is best-effort: a rule that cannot
      *            be a DFA (a zero-width assertion) or whose DFA would change an answer
-     *            (a rule whose `match()` is not its longest match, such as `as|assert`
-     *            or a lazy delimiter) silently stays on Pike — see
+     *            (its `match()` is not its longest match, such as `as|assert`
+     *            or a lazy delimiter) silently stays on Pike beside the mode's DFA — see
      *            \ref dfa_modes_active. The token stream is identical either way: the
      *            decision is exact, not sampled.
      * \param[in] errors What to do at a byte no rule can lex: \ref error_policy::raise (the default —
@@ -374,11 +375,10 @@ namespace scilex {
 
     //! \brief The modes actually accelerated by a DFA fast path.
     //!
-    //! A mode tried (every mode under \ref dfa_policy::automatic, those in `dfa_modes` under
-    //! \ref dfa_policy::requested) but rejected — its rules need an assertion no DFA
-    //! can represent (\c real::dfa_error), or a DFA over them would change an answer
-    //! (a rule whose `match()` is not its longest match) — is **absent** here: it stayed
-    //! on the Pike path, lexing the same tokens. So acceleration is an optimizer, not a guarantee.
+    //! A mode is listed when at least one of its rules runs on the DFA. A rule the DFA cannot take — it
+    //! needs an assertion no DFA represents (\c real::dfa_error), or its `match()` is not its longest
+    //! match — stays on Pike beside the DFA; a mode where no rule can go on one is **absent** here.
+    //! The tokens are the same either way: acceleration is an optimizer, not a guarantee.
     [[nodiscard]] std::vector<std::string> dfa_modes_active() const
     {
       std::vector<std::string> active;
@@ -388,6 +388,30 @@ namespace scilex {
         }
       }
       return active;
+    }
+
+    /*!
+     * \brief The rules of \p mode that run on the per-rule Pike path, by index into the rules the
+     *        lexer was built from: every rule of a mode with no DFA, and in an accelerated mode the
+     *        rules its DFA cannot take (see \ref dfa_modes_active).
+     * \param[in] mode A mode the rules use.
+     * \return The indices, ascending.
+     * \throws std::invalid_argument If \p mode is not a mode the rules use.
+     */
+    [[nodiscard]] std::vector<std::size_t> pike_rules(const std::string& mode) const
+    {
+      const auto found {mode_id_.find(mode)};
+      if (found == mode_id_.end()) {
+        throw std::invalid_argument("pike_rules names an unknown mode: " + mode);
+      }
+      const mode_dfa* const    hybrid {per_mode_dfa_[found->second].get()};
+      std::vector<std::size_t> on_pike;
+      for (std::size_t idx {0}; idx < rules_.size(); ++idx) {
+        if (rule_active_in_mode(idx, found->second) && (hybrid == nullptr || hybrid->on_pike[idx])) {
+          on_pike.push_back(idx);
+        }
+      }
+      return on_pike;
     }
 
   private:
@@ -616,8 +640,11 @@ namespace scilex {
     //! \brief An adopted per-mode DFA: the automaton plus its local→global rule map.
     struct mode_dfa
     {
-      real::dfa                dfa;       //!< Recognizes the mode's rules in one pass.
-      std::vector<std::size_t> to_global; //!< DFA local rule index -> global rules_ index.
+      real::dfa                  dfa;           //!< Recognizes the mode's DFA rules in one pass.
+      std::vector<std::size_t>   to_global;     //!< DFA local rule index -> global rules_ index.
+      std::vector<bool>          on_pike;       //!< By global index: a rule of this mode the DFA cannot take.
+      bool                       any_on_pike;   //!< Whether any rule of the mode stays on Pike.
+      std::optional<std::size_t> empty_winner;  //!< The lowest-index DFA rule that matches the empty string.
     };
 
     //! \brief A munch decision: whether a rule matched, which (global index), how many
@@ -637,14 +664,30 @@ namespace scilex {
                           std::string_view rest,
                           unsigned char    lead) const
     {
-      if (per_mode_dfa_[mode]) {
-        if (const std::optional<real::dfa_match> matched {per_mode_dfa_[mode]->dfa.match(rest)}) {
-          return munch_result {.have = true, .idx = per_mode_dfa_[mode]->to_global[matched->rule_index],
-                               .len = matched->length};
-        }
-        return munch_result {};
+      const mode_dfa* const hybrid {per_mode_dfa_[mode].get()};
+      if (hybrid == nullptr) {
+        return pike_munch_in_mode(mode, rest, lead, nullptr);
       }
-      return pike_munch_in_mode(mode, rest, lead);
+      // The Pike munch over the whole mode, assembled from its parts: the longest match wins and the
+      // lowest index breaks a tie. The DFA answers for its rules' non-empty matches (each rule's
+      // match() is its longest, so the DFA's longest is theirs); a DFA rule's empty match, which the
+      // DFA never reports, competes through empty_winner; the rules the DFA cannot take run on Pike.
+      munch_result best {};
+      if (const std::optional<real::dfa_match> matched {hybrid->dfa.match(rest)}) {
+        best = munch_result {.have = true, .idx = hybrid->to_global[matched->rule_index], .len = matched->length};
+      }
+      else if (hybrid->empty_winner) {
+        best = munch_result {.have = true, .idx = *hybrid->empty_winner, .len = 0};
+      }
+      if (hybrid->any_on_pike) {
+        const munch_result rest_of_mode {pike_munch_in_mode(mode, rest, lead, &hybrid->on_pike)};
+        if (rest_of_mode.have
+            && (!best.have || rest_of_mode.len > best.len
+                || (rest_of_mode.len == best.len && rest_of_mode.idx < best.idx))) {
+          best = rest_of_mode;
+        }
+      }
+      return best;
     }
 
     //! \brief O(1) pre-filter for error recovery: can a fixed-lead rule in \p mode begin with \p byte?
@@ -775,9 +818,10 @@ namespace scilex {
     //!        scan_next's Pike branch. A zero-length match is reported
     //!        as a candidate (it wins only when nothing matches >0); scan_next's shared
     //!        guard turns such a win into a lexical error.
-    munch_result pike_munch_in_mode(std::size_t      mode,
-                                    std::string_view rest,
-                                    unsigned char    lead) const
+    munch_result pike_munch_in_mode(std::size_t              mode,
+                                    std::string_view         rest,
+                                    unsigned char            lead,
+                                    const std::vector<bool>* only) const
     {
       std::size_t best_len {0};
       std::size_t best_idx {0};
@@ -789,6 +833,9 @@ namespace scilex {
                               // once this munch is a standalone shared method; a bounds guard
                               // would be an unreachable branch the 100%-4D gate rejects, so the
                               // proven false positive is suppressed here (see REPORT note).
+                              if (only != nullptr && !(*only)[idx]) {
+                                return; // this rule is answered by the mode's DFA
+                              }
                               // NOLINTNEXTLINE(clang-analyzer-core.NonNullParamChecker)
                               const auto matched {rules_[idx].pattern.match(rest)};
                               // A zero-length match participates (it can only win when no rule
@@ -830,77 +877,69 @@ namespace scilex {
       return false;
     }
 
-    //! \brief Whether a DFA over the mode's rules reproduces the Pike munch on EVERY input -- decided, not
-    //!        sampled. Two conditions, each exact:
+    //! \brief The mode's hybrid munch, or nothing when no rule of it can go on a DFA.
     //!
-    //! 1. Every rule's `match()` is its longest match (\c real::dfa_faithful). The Pike munch picks the
-    //!    longest per-rule `match()` and the DFA the longest match of any rule; with each rule's two
-    //!    lengths equal, both reach the same length and the same earliest rule. Which rules pass is not a
-    //!    syntactic property: `as|assert` fails (its `match()` stops at "as") and the lazy `x*?y` passes.
-    //!    The condition is sufficient, not necessary -- a failing rule that another always outlasts is
-    //!    still refused, which is correct, only cautious. An exhausted budget counts as a failure.
-    //! 2. If a rule matches the empty string, every byte is a whole token of some rule. The Pike munch
-    //!    lets a zero-length match win where nothing longer matches, and the DFA never reports one; the two
-    //!    meet only when no input leaves every rule without a non-empty match, i.e. when no single byte does.
-    //! \param[in] candidate The DFA built from the mode's rules.
-    //! \param[in] to_global The mode's active rules.
-    //! \return True when the DFA may replace the Pike munch in this mode.
-    [[nodiscard]] bool dfa_reproduces_pike(const real::dfa&                candidate,
-                                           const std::vector<std::size_t>& to_global) const
+    //! A rule joins the DFA when \c real::dfa_faithful decides that its `match()` is its longest match
+    //! on every input -- exactly, not sampled. The Pike munch picks the longest per-rule `match()` and
+    //! the DFA the longest match of any of its rules, so over such rules the two agree on the length and
+    //! on the earliest rule. Which rules pass is not a syntactic property: `as|assert` fails (its
+    //! `match()` stops at "as") and the lazy `x*?y` passes; a rule no DFA represents (a `\b`, a `$`, a
+    //! lookaround, a class too wide) raises \c real::dfa_error and fails too. Every failing rule stays
+    //! on Pike beside the DFA, and \ref munch_at merges the two, so one such rule no longer sends its
+    //! whole mode back to Pike. An exhausted decision budget counts as a failure.
+    //! \param[in] to_global The mode's active rules, in ascending global index (= priority).
+    //! \return The DFA over the passing rules with the bookkeeping \ref munch_at merges by, or
+    //!         `std::nullopt` when no rule passes or their union outgrows the DFA's state cap.
+    std::optional<mode_dfa> try_build_mode_dfa(const std::vector<std::size_t>& to_global)
     {
-      bool nullable {false};
+      std::vector<std::size_t> on_dfa;
+      std::vector<bool>        on_pike(rules_.size(), false);
+      bool                     any_on_pike {false};
       for (const std::size_t g : to_global) {
-        if (real::dfa_faithful(rules_[g].pattern).outcome != real::dfa_fidelity_outcome::faithful) {
-          return false;
+        bool faithful {false};
+        try {
+          faithful = real::dfa_faithful(rules_[g].pattern).outcome == real::dfa_fidelity_outcome::faithful;
         }
-        nullable = nullable || rules_[g].pattern.match(std::string_view {}).matched();
-      }
-      if (!nullable) {
-        return true;
-      }
-      for (unsigned b {0}; b < 256U; ++b) {
-        const char byte {static_cast<char>(b)};
-        if (!candidate.match(std::string_view {&byte, 1})) {
-          return false;
+        catch (const real::dfa_error&) {
+          faithful = false; // not DFA-able
+        }
+        if (faithful) {
+          on_dfa.push_back(g);
+        }
+        else {
+          on_pike[g]  = true;
+          any_on_pike = true;
         }
       }
-      return true;
-    }
-
-    //! \brief Builds the \ref mode_dfa for one mode, or \c std::nullopt if the mode
-    //!        cannot take the DFA fast path. Two non-error reasons return nullopt:
-    //!        the rules are not DFA-able (\c real::dfa throws \c real::dfa_error —
-    //!        caught here, turned into nullopt), or the DFA would change an answer
-    //!        (\ref dfa_reproduces_pike). Both leave the mode on Pike. Returning the
-    //!        outcome instead of throwing past the caller keeps the fast-path decision
-    //!        explicit at the call site.
-    //! \param[in] to_global The mode's active rules, ascending global index (priority).
-    std::optional<mode_dfa> try_build_mode_dfa(std::vector<std::size_t> to_global)
-    {
+      if (on_dfa.empty()) {
+        return std::nullopt;
+      }
       std::vector<real::regex> patterns;
-      patterns.reserve(to_global.size());
-      for (const std::size_t g : to_global) {
+      patterns.reserve(on_dfa.size());
+      std::optional<std::size_t> empty_winner;
+      for (const std::size_t g : on_dfa) {
         patterns.push_back(rules_[g].pattern);
+        if (!empty_winner && rules_[g].pattern.match(std::string_view {}).matched()) {
+          empty_winner = g; // on_dfa ascends, so the first is the lowest index
+        }
       }
       try {
-        real::dfa candidate {std::span<const real::regex>(patterns)};
-        if (!dfa_reproduces_pike(candidate, to_global)) {
-          return std::nullopt; // the DFA would change an answer: keep this mode on Pike
-        }
-        return mode_dfa {.dfa = std::move(candidate), .to_global = std::move(to_global)};
+        return mode_dfa {.dfa          = real::dfa {std::span<const real::regex>(patterns)},
+                         .to_global    = std::move(on_dfa),
+                         .on_pike      = std::move(on_pike),
+                         .any_on_pike  = any_on_pike,
+                         .empty_winner = empty_winner};
       }
       catch (const real::dfa_error&) {
-        return std::nullopt; // not DFA-able ($, \b, multiline ^/$, a lookaround, a class too wide)
+        return std::nullopt; // the rules pass one by one, but their union outgrows the state cap
       }
     }
 
     //! \brief Tries modes for the DFA fast path (called once, after \ref build_dispatch):
     //!        every mode under \ref dfa_policy::automatic, the named \p dfa_modes under
-    //!        \ref dfa_policy::requested. For each, builds a \c real::dfa from the mode's
-    //!        active rules in ascending global index (= priority); a rule set that is
-    //!        not DFA-able (\c real::dfa_error), or whose DFA would change an answer
-    //!        (\ref dfa_reproduces_pike), leaves the mode on Pike (nullptr).
-    //!        Best-effort — see \ref dfa_modes_active.
+    //!        \ref dfa_policy::requested. For each, \ref try_build_mode_dfa puts the rules a DFA
+    //!        reproduces on one and leaves the others on Pike; a mode with no such rule stays
+    //!        entirely on Pike (nullptr). Best-effort — see \ref dfa_modes_active.
     //! \param[in] dfa_modes The named modes. The build-time decision always runs; its
     //!            outcome is observable via \ref dfa_modes_active.
     //! \param[in] policy    Whether every mode is tried or only \p dfa_modes.
@@ -930,7 +969,7 @@ namespace scilex {
             to_global.push_back(idx);
           }
         }
-        if (auto built {try_build_mode_dfa(std::move(to_global))}) {
+        if (auto built {try_build_mode_dfa(to_global)}) {
           per_mode_dfa_[mode] = std::make_shared<const mode_dfa>(std::move(*built));
         }
       }

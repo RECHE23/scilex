@@ -306,12 +306,12 @@ int main()
     measure(std::string(grammar.name) + " pike", [&] { return pike.tokenize(source).size(); }, base("pike"));
     measure(std::string(grammar.name) + " dfa", [&] { return dfa.tokenize(source).size(); }, base("dfa"));
   }
-  // 0-regression control: python's default falls back to Pike, so DFA-on and DFA-off tokenize
-  // at the same rate — the per_mode_dfa_ check is free.
+  // The python grammar with only its default mode accelerated (the other modes stay on Pike): the
+  // control that once measured a mode the DFA refused, which no example grammar has since 2026.7.25.
   {
     const std::string   source {scale(py::sample, target_bytes)};
     const scilex::lexer off    {pike_lexer(py::make_rules())};
-    const scilex::lexer on     {dfa_lexer(py::make_rules(), {"default"})}; // default rejected (lazy) → Pike
+    const scilex::lexer on     {dfa_lexer(py::make_rules(), {"default"})};
     const bool          active {!on.dfa_modes_active().empty()};
     const std::size_t   tokens {off.tokenize(source).size()};
     const auto          base   {[&](const char* path) {

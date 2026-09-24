@@ -14,6 +14,14 @@ fuzz oracle.
   modes in `dfa_modes`, none if it is empty. The cost is DFA construction in every lexer's
   constructor (measured in the README).
 
+- **A rule the DFA cannot take no longer sends its whole mode to Pike.** Each rule whose `match()` is
+  its longest match joins the mode's DFA; the others (a `\b`, a `$`, a lookaround, a Unicode `\w`, a
+  lazy delimiter) run on Pike beside it, and the munch merges the two by the per-rule rule: longest
+  wins, the lowest index breaks a tie, a DFA rule's empty match competes too. The requirement that a
+  mode with a nullable rule cover every byte is gone with it. `lexer::pike_rules(mode)` (Python:
+  `Lexer.pike_rules(mode)`) names the rules left on Pike; `dfa_modes_active()` now lists every mode
+  with at least one rule on a DFA. The `python-unicode` grammar lexes 3.5× faster.
+
 ### Added
 - `scilex::layout(tokens, source, tab_policy, mode_significant)`: `tab_policy::python` measures
   indentation as CPython does (tab stops of 8, cross-checked with tabs as 1) and refuses an

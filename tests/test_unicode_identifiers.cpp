@@ -79,21 +79,14 @@ namespace {
     }
   }
 
-  TEST(a_unicode_shorthand_demotes_the_dfa)
+  TEST(a_unicode_shorthand_leaves_the_dfa)
   {
-    // The trade-off as tested behaviour: the SAME mode is DFA-accelerated when its word rule is
-    // ASCII-pinned, and demoted (absent from dfa_modes_active) when it is a Unicode code-point predicate.
-    const scilex::lexer pinned        {word_lexer(R"((?a)\w+)", {"default"})};
-    const scilex::lexer unicode       {word_lexer(R"(\w+)", {"default"})};
-    bool                pinned_active {false};
-    for (const std::string& mode : pinned.dfa_modes_active()) {
-      pinned_active = pinned_active || mode == "default";
-    }
-    bool unicode_active {false};
-    for (const std::string& mode : unicode.dfa_modes_active()) {
-      unicode_active = unicode_active || mode == "default";
-    }
-    EXPECT_EQ(pinned_active, true);   // (?a)\w+ is DFA-representable — accelerated
-    EXPECT_EQ(unicode_active, false); // \w+ is a code-point predicate — demoted to Pike
+    // The trade-off as tested behaviour: the word rule takes the DFA when it is ASCII-pinned, and stays
+    // on Pike beside the DFA'd whitespace rule when it is a Unicode code-point predicate.
+    const scilex::lexer pinned  {word_lexer(R"((?a)\w+)", {"default"})};
+    const scilex::lexer unicode {word_lexer(R"(\w+)", {"default"})};
+    EXPECT(pinned.pike_rules("default").empty());                                // (?a)\w+ on the DFA
+    EXPECT(unicode.pike_rules("default") == std::vector<std::size_t> {0});       // \w+ stays on Pike
+    EXPECT_EQ(unicode.dfa_modes_active().size(), std::size_t {1});               // whitespace is DFA'd
   }
 } // namespace

@@ -10,9 +10,11 @@
 // conventions and are out of this library's lint scope).
 #include <algorithm>
 #include <cstddef>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <sciforge/test/framework.hpp>
@@ -214,14 +216,14 @@ TEST(dfa_modes_accelerated_lex_error_on_no_match)
   EXPECT(threw);
 }
 
-// Fallback #1 — a non-head assertion ($) makes the mode un-DFA-able: real::dfa_error is
-// caught, the mode stays on Pike (absent from active), and tokens are still correct.
+// Fallback #1 — a non-head assertion ($) is not DFA-able: real::dfa_error is caught for that rule,
+// which stays on Pike while the mode's other rules take the DFA, and the tokens are still correct.
 TEST(dfa_modes_fallback_on_assertion)
 {
   const std::vector<rule> rules {plain(0, R"(\s+)", true), plain(1, "end$"), plain(2, "[a-z]+")};
   const scilex::lexer     dfa   {rules, {}, {"default"}};
-  EXPECT(!active_has(dfa, "default")); // rejected via dfa_error → Pike
-  EXPECT(dfa.dfa_modes_active().empty());
+  EXPECT(active_has(dfa, "default"));
+  EXPECT(dfa.pike_rules("default") == std::vector<std::size_t> {1}); // only `end$` stays on Pike
 
   const scilex::lexer pike {pike_only(rules)};
   EXPECT(tokens_equal(pike.tokenize("foo end"), dfa.tokenize("foo end")));
@@ -229,13 +231,13 @@ TEST(dfa_modes_fallback_on_assertion)
 }
 
 // Fallback #2 — a lazy quantifier builds a DFA with no error, but its `match()` stops at the first
-// closing delimiter while the DFA takes the last one; the decision refuses the mode.
+// closing delimiter while the DFA takes the last one; the decision leaves that rule on Pike.
 TEST(dfa_modes_fallback_on_lazy_quantifier)
 {
   const std::vector<rule> rules {plain(0, R"(\s+)", true), plain(1, R"rx((?s)""".*?""")rx"),
                                  plain(2, "[a-z]+")};
   const scilex::lexer     dfa   {rules, {}, {"default"}};
-  EXPECT(!active_has(dfa, "default")); // the lazy rule is not faithful → Pike
+  EXPECT(dfa.pike_rules("default") == std::vector<std::size_t> {1}); // the lazy rule is not faithful
 
   const scilex::lexer pike {pike_only(rules)};
   for (const std::string_view input : {std::string_view {R"(a """x""" b """y""")"},
@@ -255,7 +257,7 @@ TEST(dfa_modes_fallback_on_a_prefix_alternation)
                                  rule {.kind = 3, .pattern = real::regex("[\\x00-\\xff]", real::flags::bytes),
                                        .skip = false}};
   const scilex::lexer dfa {rules, {}, {"default"}};
-  EXPECT(!active_has(dfa, "default"));
+  EXPECT(dfa.pike_rules("default") == std::vector<std::size_t> {1}); // `as|assert` stays on Pike
 
   const std::vector<token> toks {dfa.tokenize("assert x")};
   EXPECT_EQ(toks.size(), std::size_t {2});
@@ -269,12 +271,26 @@ TEST(dfa_modes_fallback_on_a_prefix_alternation)
 }
 
 // A rule that matches the empty string: the Pike munch lets its zero-length match win where nothing
-// longer matches (the scan then reports an error there), and the DFA never reports one. So the mode is
-// accelerated only when every byte is a whole token of some rule.
-TEST(dfa_modes_nullable_rule_needs_every_byte_covered)
+// longer matches (the scan then reports an error there), and the DFA never reports one. The hybrid
+// munch competes that empty match itself, so the mode is accelerated whether or not every byte is a
+// token, and the error lands where the per-rule munch puts it.
+TEST(dfa_modes_nullable_rule_competes_its_empty_match)
 {
   const std::vector<rule> gap {plain(0, "[a-z]*"), plain(1, "[0-9]+")};
-  EXPECT(!active_has(scilex::lexer {gap, {}, {"default"}}, "default")); // "!" has no non-empty token
+  const scilex::lexer     gap_dfa {gap, {}, {"default"}};
+  EXPECT(active_has(gap_dfa, "default") && gap_dfa.pike_rules("default").empty());
+  const auto failure_offset {[](const scilex::lexer& lex, std::string_view in) -> std::size_t {
+                               try {
+                                 static_cast<void>(lex.tokenize(in));
+                               }
+                               catch (const scilex::lex_error& error) {
+                                 return error.where().offset;
+                               }
+                               return in.size() + 1; // no error
+                             }};
+  EXPECT_EQ(failure_offset(gap_dfa, "ab12!c"), failure_offset(pike_only(gap), "ab12!c"));
+  EXPECT_EQ(failure_offset(gap_dfa, "ab12!c"), std::size_t {4});
+  EXPECT(tokens_equal(gap_dfa.tokenize("ab12cd"), pike_only(gap).tokenize("ab12cd")));
 
   const std::vector<rule> covered {plain(0, "[a-z]*"),
                                    rule {.kind = 1, .pattern = real::regex("[\\x00-\\xff]", real::flags::bytes),
@@ -336,9 +352,9 @@ TEST(dfa_modes_orthogonal_to_insignificant_modes)
   EXPECT(tokens_equal(laid_off, laid_on));
 }
 
-// dfa_policy::automatic (the default) tries every mode and keeps each DFA that is exact; a mode whose
-// rules no DFA represents stays on Pike beside it, and dfa_policy::requested with no names accelerates
-// nothing. The token streams are the Pike path's in every case.
+// dfa_policy::automatic (the default) tries every mode; in each, the rules a DFA reproduces go on one
+// and a rule no DFA represents stays on Pike beside it; dfa_policy::requested with no names
+// accelerates nothing. The token streams are the Pike path's in every case.
 TEST(automatic_policy_accelerates_every_exact_mode_and_only_those)
 {
   using op = scilex::mode_action::op;
@@ -357,10 +373,63 @@ TEST(automatic_policy_accelerates_every_exact_mode_and_only_those)
   const std::vector<rule> rules {ws, word, enter, bounded, leave};
 
   const scilex::lexer automatic {rules};
-  EXPECT(active_has(automatic, "default"));
-  EXPECT(!active_has(automatic, "words"));
+  EXPECT(active_has(automatic, "default") && automatic.pike_rules("default").empty());
+  EXPECT(active_has(automatic, "words"));
+  EXPECT(automatic.pike_rules("words") == std::vector<std::size_t> {3}); // only the \b rule
   EXPECT(pike_only(rules).dfa_modes_active().empty());
+  EXPECT(pike_only(rules).pike_rules("words") == (std::vector<std::size_t> {0, 3, 4}));
+  bool unknown_refused {false};
+  try {
+    static_cast<void>(automatic.pike_rules("nowhere"));
+  }
+  catch (const std::invalid_argument&) {
+    unknown_refused = true;
+  }
+  EXPECT(unknown_refused);
 
   const std::string_view src {"ab <cd ef> gh"};
   EXPECT(tokens_equal(automatic.tokenize(src), pike_only(rules).tokenize(src)));
+}
+
+// The hybrid munch against the per-rule path, on rule sets that mix rules a DFA takes with rules it
+// cannot (a \b, a $, a lazy delimiter, a prefix alternation, a nullable rule): the same tokens, or
+// the same error at the same offset, on every input.
+TEST(hybrid_munch_equals_the_per_rule_path_on_mixed_rule_sets)
+{
+  const std::vector<const char*> pool {"[a-z]+", "ab", "a|ab", "as|assert", R"(\bab)", "b$", "a*?b", "[0-9]*",
+                                       "x", "a+b", "[ab]", "(?:ab)*", " +", "[^ ]"};
+  // NOLINTNEXTLINE(cert-msc51-cpp,cert-msc32-c,bugprone-random-generator-seed)
+  std::mt19937 rng {0x4B7D};
+  const auto   outcome {[](const scilex::lexer& lex, std::string_view in) {
+                          try {
+                            return std::pair {lex.tokenize(in), std::size_t {0}};
+                          }
+                          catch (const scilex::lex_error& error) {
+                            return std::pair {std::vector<token> {}, error.where().offset + 1};
+                          }
+                        }};
+  std::size_t compared {0};
+  std::size_t mixed    {0};
+  for (int set = 0; set < 120; ++set) {
+    std::vector<rule> rules;
+    const std::size_t n {2 + (rng() % 4)};
+    for (std::size_t k = 0; k < n; ++k) {
+      rules.push_back(plain(static_cast<int>(k), pool[rng() % pool.size()]));
+    }
+    const scilex::lexer hybrid {rules};
+    const scilex::lexer pike   {pike_only(rules)};
+    mixed += static_cast<std::size_t>(!hybrid.dfa_modes_active().empty() && !hybrid.pike_rules("default").empty());
+    for (int round = 0; round < 40; ++round) {
+      std::string in(rng() % 12, ' ');
+      for (char& c : in) {
+        c = "ab x0s"[rng() % 6];
+      }
+      const auto want {outcome(pike, in)};
+      const auto got  {outcome(hybrid, in)};
+      EXPECT(got.second == want.second && tokens_equal(got.first, want.first));
+      ++compared;
+    }
+  }
+  EXPECT(compared == 4800U);
+  EXPECT(mixed > 20U); // the sweep reaches modes that really are split between the DFA and Pike
 }

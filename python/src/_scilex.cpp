@@ -571,6 +571,13 @@ std::vector<std::string> dfa_modes_active(scilex::lexer* lexer)
     return lexer->dfa_modes_active();
 }
 
+// _scilex.pike_rules(handle, mode) -> the indices of the rules of `mode` that run on the per-rule
+// path (every rule of an unaccelerated mode; in an accelerated one, those its DFA cannot take).
+std::vector<std::size_t> pike_rules(scilex::lexer* lexer, std::string mode)
+{
+    return lexer->pike_rules(mode);
+}
+
 // _scilex.column_unit(handle) -> the unit position columns are counted in ("bytes",
 // "codepoints", or "utf16"). The position does not carry the unit; the lexer declares it here.
 std::string column_unit(scilex::lexer* lexer)
@@ -895,8 +902,11 @@ SCIFORGE_MODULE(_scilex, "scilex.error", m)
           "    ValueError: If errors is not 'raise' or 'token'.");
     m.def<&dfa_modes_active>("dfa_modes_active",
                              "dfa_modes_active(handle) -> list[str]\n"
-                             "The mode names actually accelerated by a DFA (a requested mode that fell back\n"
-                             "to Pike — an un-DFA-able assertion or a DFA that would change an answer — is absent).");
+                             "The mode names with at least one rule on a DFA (a mode where no rule can be --\n"
+                             "an un-DFA-able assertion, or a match() that is not the longest -- is absent).");
+    m.def<&pike_rules>("pike_rules",
+                       "pike_rules(handle, mode) -> list[int]\n"
+                       "The indices of the rules of mode that run on the per-rule path.");
     m.def<&column_unit>("column_unit",
                         "column_unit(handle) -> str\n"
                         "The unit each token's column is counted in: 'bytes', 'codepoints', or 'utf16'.\n"

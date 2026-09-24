@@ -730,9 +730,13 @@ class UnicodeIdentifierTests(unittest.TestCase):
         with self.assertRaises(scilex.error):
             self._lexer(r"(?a)\w+").tokenize("café")  # stops at 'caf', é is unlexable
 
-    def test_unicode_shorthand_demotes_the_dfa(self):
-        self.assertIn("default", self._lexer(r"(?a)\w+", ("default",)).dfa_modes_active)
-        self.assertNotIn("default", self._lexer(r"\w+", ("default",)).dfa_modes_active)
+    def test_unicode_shorthand_leaves_the_dfa(self):
+        pinned = self._lexer(r"(?a)\w+", ("default",))
+        unicode = self._lexer(r"\w+", ("default",))
+        self.assertEqual(pinned.pike_rules(), [])
+        self.assertIn(0, unicode.pike_rules())  # the word rule stays on the regular engine
+        with self.assertRaises(scilex.error):
+            unicode.pike_rules("nowhere")
 
 
 if __name__ == "__main__":

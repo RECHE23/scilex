@@ -172,12 +172,12 @@ scilex::lexer pike(std::move(other_rules), {}, {}, scilex::error_policy::raise,
                    scilex::column_unit::bytes, scilex::dfa_policy::requested);
 ```
 
-It is **best-effort and invisible**: a mode whose rules need a zero-width assertion no
-DFA can represent, or whose DFA would change an answer, silently stays on the regular
-Pike engine, absent from `dfa_modes_active()`. A DFA takes each rule's *longest* match
+It is **best-effort and invisible**: a rule that needs a zero-width assertion no DFA can
+represent, or whose DFA would change an answer, silently stays on the regular Pike engine
+beside its mode's DFA (`pike_rules(mode)` names it). A DFA takes each rule's *longest* match
 while Pike takes the match the rule's priority order prefers, and which rules keep the
 two equal is not visible in the syntax: `as|assert` stops at `as` on "assert" and so
-refuses the DFA, while the lazy `x*?y` agrees on every input and keeps it. The
+stays on Pike, while the lazy `x*?y` agrees on every input and keeps it. The
 constructor **decides** this for every rule with `real::dfa_faithful` — exactly, not by
 sampling — so the **token stream is byte identical** either way (Pike is the floor) and
 `layout` is unchanged. The DFA is built once, in the
@@ -193,15 +193,16 @@ A real trade-off worth stating plainly. Write an identifier rule as `\w+` (or `[
 with the default flags and it reads **Unicode identifiers** — `café`, `変数` — the faithful
 behaviour for a language like Python 3. But a Unicode `\w` expands into more UTF-8 byte
 transitions than a DFA is built from, and `\b` is a zero-width assertion no DFA represents, so a
-mode holding either **leaves the DFA fast path**: it is transparently demoted to the general engine
-(same tokens, visible via `dfa_modes_active()`). The narrower Unicode `\d` and `\s` expand and stay
-on the DFA. Concretely the general engine runs at **~7–14.5 MB/s** while a DFA-able
-mode runs **3–27× that** — the Unicode identifier costs you the DFA.
+rule holding either **stays on the general engine** beside its mode's DFA (same tokens, visible via
+`pike_rules(mode)`). The narrower Unicode `\d` and `\s` expand and stay on the DFA. Concretely the
+general engine runs at **~7–14.5 MB/s** while a fully DFA-able mode runs **3–27× that**; the
+`python-unicode` grammar, whose identifier rule stays on Pike, measured 36 MB/s against 10 MB/s for
+Pike alone (2026-09-23, arm64, `-O2`, 1 MiB) — the Unicode identifier costs part of the DFA.
 
 So: if your identifiers are ASCII by specification (JSON, SQL, C), pin **`(?a)`** inline in the
 pattern (or pass `real::flags::ascii`) to keep `\w \d \s \b` ASCII, small, and DFA-representable —
-what the `examples/` grammars do. If you want Unicode identifiers, write `\w+` and accept the
-general-engine floor. The two tokenize ASCII input identically; they differ only on non-ASCII input
+what the `examples/` grammars do. If you want Unicode identifiers, write `\w+` and accept that its
+rule runs on the general engine. The two tokenize ASCII input identically; they differ only on non-ASCII input
 and on whether the mode can be a DFA. The **`python-unicode`** example (`scilex --example
 python-unicode`) is the faithful-Python-3 variant of `python`, identical but for that one rule.
 

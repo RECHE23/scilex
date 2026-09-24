@@ -49,6 +49,7 @@
 #ifndef SCILEX_EXAMPLE_PYTHON_HPP
 #define SCILEX_EXAMPLE_PYTHON_HPP
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -148,8 +149,8 @@ namespace scilex::examples::python {
   //! \brief Builds the rule list. \p unicode_identifiers swaps ONLY the identifier rule: the default
   //!        ASCII class, or a Unicode word identifier (`[^\W\d]\w*`, text mode) that recognizes `café`
   //!        and `変数` — the faithful Python 3 behaviour. The Unicode form is a match-time code-point
-  //!        predicate, so a DFA-accelerated mode containing it demotes to the general engine (visible
-  //!        via \ref scilex::lexer::dfa_modes_active) — the identifier-Unicode vs DFA-speed trade-off.
+  //!        predicate, so that rule stays on the general engine beside the mode's DFA (visible via
+  //!        \ref scilex::lexer::pike_rules) — the identifier-Unicode vs DFA-speed trade-off.
   inline std::vector<scilex::rule> build_rules(bool unicode_identifiers)
   {
     using op_t = scilex::mode_action::op;
@@ -416,14 +417,20 @@ def stats(values, base=0x1F):
         // expected: the ASCII grammar cannot lex the non-ASCII byte
       }
     }
-    // The trade-off, as tested behaviour: the Unicode identifier is a code-point predicate, so a mode
-    // holding it leaves the DFA fast path — dfa_modes_active omits the requested mode.
+    // The trade-off, as tested behaviour: the Unicode identifier is a code-point predicate, so its rule
+    // stays on Pike beside the mode's DFA — pike_rules names it.
     {
-      const scilex::lexer dfa_requested {make_rules_unicode(), {"bracket"}, {"default"}};
-      for (const std::string& active : dfa_requested.dfa_modes_active()) {
-        if (active == "default") {
-          return false; // the code-point predicate must demote the mode
+      const std::vector<scilex::rule> rules      {make_rules_unicode()};
+      std::size_t                     ident_rule {rules.size()};
+      for (std::size_t i {0}; i < rules.size(); ++i) {
+        if (rules[i].kind == ident && ident_rule == rules.size()) {
+          ident_rule = i;
         }
+      }
+      const scilex::lexer            lex     {rules, {"bracket"}};
+      const std::vector<std::size_t> on_pike {lex.pike_rules("default")};
+      if (std::ranges::find(on_pike, ident_rule) == on_pike.end()) {
+        return false; // the code-point predicate must stay on Pike
       }
     }
     return true;

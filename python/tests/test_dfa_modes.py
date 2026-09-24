@@ -46,14 +46,14 @@ class DfaModesTests(unittest.TestCase):
     def test_assertion_rule_falls_back_to_pike(self):
         rules = [(0, r"(?a)\s+", True), (1, r"end$", False), (2, r"[a-z]+", False)]
         lex = scilex.Lexer(rules, dfa_modes=("default",))
-        self.assertNotIn("default", lex.dfa_modes_active)  # real::dfa_error -> Pike
+        self.assertEqual(lex.pike_rules("default"), [1])  # only `end$` stays on Pike (dfa_error)
         off = scilex.Lexer(rules, dfa="requested")
         self.assertEqual(fields(off.tokenize("foo end")), fields(lex.tokenize("foo end")))
 
     def test_lazy_rule_falls_back_to_pike(self):
         rules = [(0, r"(?a)\s+", True), (1, r'(?s)""".*?"""', False), (2, r"[a-z]+", False)]
         lex = scilex.Lexer(rules, dfa_modes=("default",))
-        self.assertNotIn("default", lex.dfa_modes_active)  # match() stops at the first """ -> Pike
+        self.assertEqual(lex.pike_rules("default"), [1])  # match() stops at the first """ -> Pike
         off = scilex.Lexer(rules, dfa="requested")
         src = 'a """x""" b """y"""'
         self.assertEqual(fields(off.tokenize(src)), fields(lex.tokenize(src)))

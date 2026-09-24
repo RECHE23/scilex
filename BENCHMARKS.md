@@ -168,9 +168,12 @@ figure nearly doubled, which is where real-regex 2026.8.x concentrated its work.
 real-regex's DFA together with the SCILEX-1 example fixes has made `lisp`, `yaml` and `python`'s default
 modes DFA-representable where they previously stayed on Pike; that is unchanged here.
 
-The **transparent fallback** is unchanged — a mode the DFA cannot represent (a non-head assertion, a lazy
-quantifier) is caught at build time (`real::dfa_error` or the longest-vs-shortest audit) and lexes on Pike
-with a byte-identical token stream. Since 2026.7.25 no shipped example grammar needs it, so it lives as a
+The **transparent fallback** is now per rule — a rule the DFA cannot represent (a non-head assertion, a lazy
+quantifier, a Unicode `\w`) is caught at build time (`real::dfa_error` or the longest-vs-shortest decision)
+and lexes on Pike beside its mode's DFA, with a byte-identical token stream (unreleased entry of
+`CHANGELOG.md`; before it, one such rule sent the whole mode to Pike). No cell above was re-run for that
+change; on 2026-09-23 (arm64, `-O2`, 1 MiB, minimum of 9) the `python-unicode` grammar, whose identifier
+rule stays on Pike, lexed at 36.0 MB/s against 10.2 MB/s on Pike alone. Since 2026.7.25 no shipped example grammar needs it, so it lives as a
 **deterministic test** rather than a benchmark row: `dfa_modes_fallback_on_assertion` forces a `$` assertion
 into a mode, asserts the eligibility report drops it (`dfa_modes_active()` empty), and checks the tokens
 still match a brute-force maximal munch. The DFA is built once in the constructor (≈0.4–4.3 ms one-time — a

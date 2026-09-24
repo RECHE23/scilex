@@ -58,6 +58,7 @@ from scilex._scilex import (
     Token,
     compile as _compile,
     dfa_modes_active as _dfa_modes_active,
+    pike_rules as _pike_rules,
     column_unit as _column_unit,
     error,
     layout as _layout,
@@ -272,14 +273,24 @@ class Lexer:
 
     @property
     def dfa_modes_active(self):
-        """The modes actually accelerated by a DFA fast path.
+        """The mode names with at least one rule on a DFA.
 
-        A mode requested in ``dfa_modes`` but rejected — its rules need an assertion no
-        DFA can represent, or a DFA over them would change an answer — is absent: it
-        fell back to the regular engine, lexing the same tokens. So the rejected set is
-        ``set(dfa_modes) - set(dfa_modes_active)``.
+        In an accelerated mode, a rule the DFA cannot take -- it needs an assertion no DFA
+        can represent, or its match is not its longest match -- stays on the regular engine
+        beside the DFA (see :meth:`pike_rules`); a mode where no rule can go on one is absent.
+        The tokens are the same either way.
         """
         return list(_dfa_modes_active(self._handle))
+
+    def pike_rules(self, mode="default"):
+        """The indices (into :attr:`rules`) of the rules of ``mode`` that run on the regular engine.
+
+        Every rule of a mode with no DFA; in an accelerated mode, only the rules its DFA cannot take.
+
+        Raises:
+            error: If ``mode`` is not a mode the rules use.
+        """
+        return list(_pike_rules(self._handle, str(mode)))
 
     @property
     def column_unit(self):
