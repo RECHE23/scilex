@@ -32,7 +32,8 @@ def load(args):
     if args.json:
         with open(args.json, encoding="utf-8") as handle:
             return run_from_json(json.load(handle))
-    out = subprocess.run([args.binary], capture_output=True, text=True, check=True).stdout
+    # stdout is the JSON; stderr passes through, so a refusal says why.
+    out = subprocess.run([args.binary], stdout=subprocess.PIPE, text=True, check=True).stdout
     return run_from_json(json.loads(out))
 
 
