@@ -22,10 +22,10 @@ jobs:
   # this repo's make format-check / misra against the shared lint/ config. SciLex's
   # MISRA TU needs REAL's headers, so real-regex is checked out as a dep sibling.
   lint:
-    uses: RECHE23/sciforge/.github/workflows/lint-cpp.yml@v2026.9.1
+    uses: RECHE23/sciforge/.github/workflows/lint-cpp.yml@v2026.9.2
     with:
-      deps: '[{"repo":"RECHE23/real-regex","path":"real-regex"}]'
-      sciforge-ref: v2026.9.1
+      deps: '[{"repo":"RECHE23/real-regex","path":"real-regex","ref":"v2026.9.6"}]'
+      sciforge-ref: v2026.9.2
       runner-mode: hosted
 
   # POSIX + CMake build via SciForge's reusable build spine: the Makefile under
@@ -34,10 +34,10 @@ jobs:
   # — matching SciLex's prior coverage exactly. The single REAL dependency (public,
   # so no ci-pat) is installed first so find_package(scilex) resolves real::.
   build:
-    uses: RECHE23/sciforge/.github/workflows/build-cpp.yml@v2026.9.1
+    uses: RECHE23/sciforge/.github/workflows/build-cpp.yml@v2026.9.2
     with:
-      deps: '[{"repo":"RECHE23/real-regex","path":"real-regex"}]'
-      sciforge-ref: v2026.9.1
+      deps: '[{"repo":"RECHE23/real-regex","path":"real-regex","ref":"v2026.9.6"}]'
+      sciforge-ref: v2026.9.2
       runner-mode: hosted
       enable-windows-msvc: true
       enable-arm: true
@@ -48,11 +48,11 @@ jobs:
   # dependency sibling (public, so no ci-pat). The stub is checked against the runtime (stubtest)
   # before the unit tests, with mypy pinned as real-regex pins it.
   python:
-    uses: RECHE23/sciforge/.github/workflows/python-cpp.yml@v2026.9.1
+    uses: RECHE23/sciforge/.github/workflows/python-cpp.yml@v2026.9.2
     with:
       python-versions: '["3.11","3.14"]'
-      sciforge-ref: v2026.9.1
-      deps: '[{"repo":"RECHE23/real-regex","path":"real-regex"}]'
+      sciforge-ref: v2026.9.2
+      deps: '[{"repo":"RECHE23/real-regex","path":"real-regex","ref":"v2026.9.6"}]'
       test-cmd: 'python -m pip install mypy==2.3.0 && python -m mypy.stubtest scilex && python -m unittest discover -s python/tests'
       runner-mode: hosted
 
@@ -74,7 +74,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: RECHE23/sciforge
-          ref: v2026.9.1
+          ref: v2026.9.2
           path: sciforge
       - uses: actions/setup-python@v6
         with:
