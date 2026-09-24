@@ -413,6 +413,7 @@ TEST(hybrid_munch_equals_the_per_rule_path_on_mixed_rule_sets)
   for (int set = 0; set < 120; ++set) {
     std::vector<rule> rules;
     const std::size_t n {2 + (rng() % 4)};
+    rules.reserve(n);
     for (std::size_t k = 0; k < n; ++k) {
       rules.push_back(plain(static_cast<int>(k), pool[rng() % pool.size()]));
     }
