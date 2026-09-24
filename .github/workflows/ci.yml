@@ -3,8 +3,8 @@ name: CI
 # SciLex depends on REAL's headers. CI checks out REAL (public) as a sibling so
 # the Makefile's default resolution (../real-regex/include) finds it — no secret needed.
 #
-# Actions-minute economy (this is a private repo, so minutes are billed, and macOS
-# runners bill 10x): macOS is the maintainer's local development platform — every gate
+# Actions-minute economy (macOS runners bill 10x): macOS is the maintainer's local
+# development platform — every gate
 # runs there via `make full-local-gate` on each slice — so CI deliberately omits macOS
 # and covers the *non-local* platforms instead: Linux (clang + g++-14), Windows/MSVC
 # and ARM. Run on main only (plus PRs); workflow_dispatch is available for ad-hoc runs.
@@ -58,20 +58,21 @@ jobs:
 
   # Exhaustive lexer-oracle net, promoted from the local gate now that the enumerator substrate is
   # pinnable: scilex::lexer vs reference.hpp over every small rule-set x input, under both error policies.
-  # Also runs the pin-drift lint on this repo's workflows. REAL (headers, at its default branch — the
-  # sibling-consumption model this repo already uses) and SciForge (framework + enumerator, at the pinned
-  # tag) are checked out as siblings; the PR tier is ~10 s.
+  # Also runs the pin-drift lint on this repo's workflows. REAL (headers) and SciForge (framework +
+  # enumerator) are checked out as siblings at the releases the rest of CI pins; the PR tier is ~10 s.
   exhaustive-lex:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           path: scilex
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           repository: RECHE23/real-regex
+          ref: v2026.9.7
           path: real-regex
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           repository: RECHE23/sciforge
           ref: v2026.9.2
