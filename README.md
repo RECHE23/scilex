@@ -57,21 +57,19 @@ See the [guided tour](docs/design.dox) for details.
 ```cpp
 #include <scilex/scilex.hpp>
 
-std::vector<scilex::rule> rules = {
-    {0, real::regex("\\s+"), true},           // whitespace (skip)
-    {1, real::regex("if")},                   // keyword before identifier
-    {2, real::regex("[a-z_][a-z0-9_]*")},     // identifier
-    {3, real::regex("[0-9]+")},               // number
+std::vector<scilex::rule> rules {
+  {.kind = 0, .pattern = real::regex(R"(\s+)"), .skip = true}, // whitespace, skipped
+  {.kind = 1, .pattern = real::regex("if")},                   // keyword: listed before the identifier
+  {.kind = 2, .pattern = real::regex("[a-z_][a-z0-9_]*")},     // identifier
+  {.kind = 3, .pattern = real::regex("[0-9]+")},               // number
+  {.kind = 4, .pattern = real::regex(R"([-+*/=])")},           // operator
 };
+const scilex::lexer lexer {std::move(rules)};
 
-scilex::lexer lexer(std::move(rules));
-// Every mode whose DFA is exact is accelerated (3–27×); lexer.dfa_modes_active() names them.
-
-// Eager
-for (const auto& tok : lexer.tokenize("if x + 42")) { ... }
-
-// Lazy (preferred for parsers)
-for (const auto& tok : lexer.scan("if x + 42")) { ... }
+// Lazy: one token per step (tokenize() returns them all at once).
+for (const scilex::token& tok : lexer.scan("if x + 42")) {
+  std::printf("%d %.*s\n", tok.kind, static_cast<int>(tok.lexeme.size()), tok.lexeme.data());
+}
 ```
 
 See [`docs/design.dox`](docs/design.dox) for the complete C++ API (`lexer`, `token`, `position`, `layout`, `lex_error`).

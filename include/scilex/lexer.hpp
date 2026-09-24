@@ -78,7 +78,7 @@ namespace scilex {
     std::string target {};   //!< The mode push/set enters; ignored (and omittable) for pop.
 
     //! \brief The interned id of \ref target, resolved once when the lexer is built
-    //!        (see \ref scilex::lexer::build_dispatch) so the per-token transition is
+    //!        so the per-token transition is
     //!        a field read, not a name→id map lookup. Internal cache: a caller leaves
     //!        it at 0 and sets only \ref target; pop leaves it unused.
     std::size_t target_id {0};

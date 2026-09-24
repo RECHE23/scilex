@@ -133,6 +133,8 @@ coverage: coverage-build
 	    -format=html -output-dir=$(COV_DIR)/html -show-line-counts-or-regions
 	@grep -q "SciLex dark-coverage theme" $(COV_DIR)/html/style.css 2>/dev/null || \
 	    cat docs/coverage-style.css >> $(COV_DIR)/html/style.css
+	@python3 tools/anonymize_coverage_html.py $(COV_DIR)/html $(CURDIR),scilex \
+	    $(abspath $(CURDIR)/../sciforge),sciforge $(abspath $(CURDIR)/../real-regex),real-regex
 	@echo "HTML coverage report: $(COV_DIR)/html/index.html"
 
 coverage-html:
@@ -142,6 +144,8 @@ coverage-html:
 	    -format=html -output-dir=$(COV_DIR)/html -show-line-counts-or-regions
 	@grep -q "SciLex dark-coverage theme" $(COV_DIR)/html/style.css 2>/dev/null || \
 	    cat docs/coverage-style.css >> $(COV_DIR)/html/style.css
+	@python3 tools/anonymize_coverage_html.py $(COV_DIR)/html $(CURDIR),scilex \
+	    $(abspath $(CURDIR)/../sciforge),sciforge $(abspath $(CURDIR)/../real-regex),real-regex
 	@echo "HTML coverage report: $(COV_DIR)/html/index.html"
 
 # --- QA tools (wrappers; no compilation policy here) ----------------------
@@ -164,10 +168,13 @@ misra:
 	    $(BUILD)/misra_tu.cpp -- $(CXXSTD) $(INCLUDES)
 
 doc: coverage-html
+	rm -rf $(BUILD)/doc/html
 	mkdir -p $(BUILD)/doc
 	doxygen Doxyfile
 	@rm -rf $(BUILD)/doc/html/coverage
 	@cp -R $(COV_DIR)/html $(BUILD)/doc/html/coverage
+	@! grep -rlE '/Users/|/home/runner/' $(BUILD)/doc/html | head -3 | grep . \
+	  || { echo "doc: a machine-local path is about to be published (above)"; exit 1; }
 	@echo "API reference: $(BUILD)/doc/html/index.html"
 
 doc-no-coverage:
@@ -239,6 +246,11 @@ example: cli
 	 test $$code -ne 0 && printf '%s\n' "$$out" | grep -q "^lex error at 1:3: no rule matches" \
 	  && echo "  a lex error names its position and its cause" \
 	  || { echo "FAIL: lex-error report was: $$out (exit $$code)"; exit 1; }
+	@c++ $(CXXSTD) -O2 -Wall -Wextra -Wpedantic -Werror $(INCLUDES) examples/cpp/quickstart.cpp -o $(BUILD)/bin/quickstart
+	@out="$$($(BUILD)/bin/quickstart)"; test "$$out" = "$$(printf '1 if\n2 x\n4 +\n3 42')" \
+	  && echo "  the README quickstart compiles and lexes 'if x + 42' into its four tokens" \
+	  || { echo "FAIL: examples/cpp/quickstart.cpp printed: $$out"; exit 1; }
+	@python3 tools/check_readme_quickstart.py --self-test && python3 tools/check_readme_quickstart.py
 	@echo "examples: all self-checks pass"
 
 # Deterministic lexer-oracle gate (fuzz/reference.hpp): runs every property invariant
@@ -392,7 +404,8 @@ uninstall-cli:
 # separate, per-package opt-in (add a release.yml workflow + a PyPI Trusted
 # Publisher); without it, this just creates a versioned git tag.
 # One-shot release. Auto-computes the CalVer version, rolls the CHANGELOG's Unreleased section into it,
-# stamps an ANNOTATED tag from that section, and pushes. DRY_RUN=1 runs the whole computation and the two
+# stamps an ANNOTATED tag from that section (--cleanup=verbatim: by default git drops its "## " headings
+# as comments, and the tag becomes the GitHub release notes), and pushes. DRY_RUN=1 runs the whole computation and the two
 # guards (empty-Unreleased FAIL, stale-bench WARN) with no commit/tag/push — the only way to audit a
 # one-shot that publishes. Portable awk/sed (BSD + GNU); never runs itself from a test (that would push).
 release:
@@ -422,7 +435,7 @@ release:
 	 else \
 	   git add pyproject.toml python/scilex/__init__.py CHANGELOG.md; \
 	   git commit -m "release: v$$version"; \
-	   git tag -a "v$$version" -F $$tb; \
+	   git tag -a --cleanup=verbatim "v$$version" -F $$tb; \
 	   git push origin HEAD "v$$version"; \
 	 fi; \
 	 rm -f $$tb

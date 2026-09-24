@@ -13,10 +13,10 @@ FILE_PATTERNS          = *.hpp *.dox
 RECURSIVE              = YES
 USE_MDFILE_AS_MAINPAGE = README.md
 EXTRACT_ALL            = YES
-EXTRACT_PRIVATE        = YES
+EXTRACT_PRIVATE        = NO
 EXTRACT_STATIC         = YES
 EXTRACT_ANON_NSPACES   = YES
-INTERNAL_DOCS          = YES
+INTERNAL_DOCS          = NO
 
 # --- comment interpretation ------------------------------------------------
 JAVADOC_AUTOBRIEF      = NO
@@ -39,13 +39,13 @@ USE_MATHJAX            = YES
 GENERATE_HTML          = YES
 GENERATE_LATEX         = NO
 HTML_OUTPUT            = html
-SOURCE_BROWSER         = YES
+SOURCE_BROWSER         = NO
 ALPHABETICAL_INDEX     = YES
 
 # --- graphs (require Graphviz `dot`) ---------------------------------------
 HAVE_DOT               = YES
 DOT_IMAGE_FORMAT       = svg
-INTERACTIVE_SVG        = YES
+INTERACTIVE_SVG        = NO
 INCLUDE_GRAPH          = YES
 INCLUDED_BY_GRAPH      = NO
 CALL_GRAPH             = NO
@@ -55,3 +55,6 @@ CALLER_GRAPH           = NO
 ENABLE_PREPROCESSING   = YES
 MACRO_EXPANSION        = YES
 EXPAND_ONLY_PREDEF     = NO
+
+# No header source pages on the published site (the headers ship in the package).
+VERBATIM_HEADERS       = NO
