@@ -12,7 +12,8 @@ fuzz oracle.
   constructor decides it reproduces the per-rule munch exactly, so the token stream is unchanged.
   `scilex::dfa_policy::requested` (Python: `dfa="requested"`) restores the old behaviour: only the
   modes in `dfa_modes`, none if it is empty. The cost is DFA construction in every lexer's
-  constructor (measured in the README).
+  constructor: 0.07–5.6 ms for the example grammars, ~26 ms for Python's five modes, against REAL
+  2026.9.7 (measured in the README).
 
 - **A rule the DFA cannot take no longer sends its whole mode to Pike.** Each rule whose `match()` is
   its longest match joins the mode's DFA; the others (a `\b`, a `$`, a lookaround, a Unicode `\w`, a
