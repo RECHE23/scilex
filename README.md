@@ -199,9 +199,9 @@ transitions than a DFA is built from, and `\b` is a zero-width assertion no DFA 
 rule holding either **stays on the general engine** beside its mode's DFA (same tokens, visible via
 `pike_rules(mode)`). The narrower Unicode `\d` and `\s` expand and stay on the DFA. Concretely the
 general engine runs at **~7–14 MB/s** while every shipped grammar runs wholly on the DFA at **5.7–18×
-that**; the `python-unicode` grammar, whose identifier rule stays on Pike, runs at 34.7 MB/s against
-10.4 MB/s for Pike alone (3.3×; 2026-09-24, arm64, `-O2`, 256 KiB, BENCHMARKS.md) — the Unicode
-identifier costs part of the DFA.
+that** on arm64 (8.6–27.5× on x86-64, where Pike reads lower); the `python-unicode` grammar, whose
+identifier rule stays on Pike, runs at 34.7 MB/s against 10.4 MB/s for Pike alone (3.3×; 2026-09-24,
+arm64, `-O2`, 256 KiB, BENCHMARKS.md) — the Unicode identifier costs part of the DFA.
 
 So: if your identifiers are ASCII by specification (JSON, SQL, C), pin **`(?a)`** inline in the
 pattern (or pass `real::flags::ascii`) to keep `\w \d \s \b` ASCII, small, and DFA-representable —

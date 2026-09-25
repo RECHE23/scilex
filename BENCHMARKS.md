@@ -160,6 +160,28 @@ and `lisp` (97 k) pay the per-token cost most often, `yaml`, `sql` and `json` le
 stays on Pike in three modes: 3.3× even so. The DFAs are built once, in the constructor — 0.07–5.8 ms
 for a one-mode grammar, ~27 ms for Python's five modes, a vigilance point only on very short inputs.
 
+**x86-64.** The same harness on a second ISA — g++ 13.3, `-O2`, 6 cores, in a development container,
+2026-09-25, real-regex `main` with the same headers; each cell the best of 6 runs (in this container a
+wall-clock burst lasts seconds, so the minimum across runs is the reading; here the best and the median
+of each cell sat within 2 %):
+
+| grammar | Pike MB/s | DFA MB/s | speed-up | DFA build |
+| --- | ---: | ---: | ---: | ---: |
+| yaml     | 4.19 | 115.11 | **27.5×** | 2.83 ms |
+| sql      | 5.52 | 140.76 | **25.5×** | 3.41 ms |
+| json     | 4.87 | 116.29 | **23.9×** | 0.78 ms |
+| cpp      | 5.86 | 121.71 | **20.8×** | 7.07 ms |
+| css      | 5.85 | 109.29 | **18.7×** | 3.04 ms |
+| python   | 6.01 | 112.30 | **18.7×** | 32.5 ms |
+| xml      | 6.88 | 100.78 | **14.6×** | 3.10 ms |
+| lisp     | 8.40 |  78.28 |  **9.3×** | 1.00 ms |
+| math     | 7.26 |  62.14 |  **8.6×** | 0.15 ms |
+| python-unicode | 5.86 | 20.49 | **3.5×** | 32.5 ms |
+
+The DFA column lands where arm64's does (62–141 against 66–134 MB/s); the Pike column does not — it
+reads 40–45 % lower on this host — so the speed-ups run higher here (8.6–27.5× against 5.7–18.1×).
+A ratio is durable only within one ISA and one host; the ordering of the grammars is what both agree on.
+
 The DFA's walks are memoized over the source (`real::dfa_munch_memo`), which makes the rules on it
 linear together on every input; the memo arms itself only on a walk that runs more than 32 bytes past
 its last accept, so none of the rows above pays for it.
