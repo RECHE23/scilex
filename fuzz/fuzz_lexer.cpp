@@ -299,11 +299,11 @@ namespace {
   //! \return The slot's grammar.
   const seeded_grammar& seeded_slot(std::vector<std::unique_ptr<seeded_grammar>>& cache,
                                     std::uint64_t                                 slot,
-                                    std::vector<scilex::rule> (*assemble)(std::uint64_t))
+                                    std::vector<scilex::rule>                   (*assemble)(std::uint64_t))
   {
     std::unique_ptr<seeded_grammar>& entry {cache[slot]};
     if (!entry) {
-      entry = std::make_unique<seeded_grammar>();
+      entry        = std::make_unique<seeded_grammar>();
       entry->rules = assemble(fnv1a(std::to_string(slot)));
       try {
         entry->lex.emplace(entry->rules); // ctor copies; rules stays for the reference
@@ -327,8 +327,8 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data,
   // match call per rule per position, so checking all nine grammars on every input left the target near
   // one execution per second; each input checks grammars_per_input of them, in a rotation its hash picks,
   // and `make fuzz-check` still runs all nine over its fixed inputs on every gate.
-  const std::uint64_t                         hash {fnv1a(input)};
-  const std::vector<prepared_grammar>&        all  {prepared_grammars()};
+  const std::uint64_t                         hash  {fnv1a(input)};
+  const std::vector<prepared_grammar>&        all   {prepared_grammars()};
   const std::size_t                           first {static_cast<std::size_t>(hash % all.size())};
   for (std::size_t k {0}; k < std::min(grammars_per_input, all.size()); ++k) {
     const prepared_grammar& gram {all[(first + k) % all.size()]};
@@ -337,7 +337,7 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data,
 
   // Mode (b): a rule-set picked by the input (structural, no layout).
   static std::vector<std::unique_ptr<seeded_grammar>> random_slots(seeded_slots);
-  const seeded_grammar& random {seeded_slot(random_slots, hash % seeded_slots, &rules_from_seed)};
+  const seeded_grammar&                               random {seeded_slot(random_slots, hash % seeded_slots, &rules_from_seed)};
   if (random.lex) {
     run_or_die("random", random.rules, *random.lex, *random.token_lex, input, false);
   }
@@ -345,8 +345,8 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data,
   // Mode (c): a multi-mode rule-set, picked distinctly. Valid by construction, but the build is
   // guarded so that a future palette change can never turn a bad assembly into a crash.
   static std::vector<std::unique_ptr<seeded_grammar>> multimode_slots(seeded_slots);
-  const seeded_grammar& multimode {seeded_slot(multimode_slots, (hash >> 32U) % seeded_slots,
-                                               &multi_mode_rules_from_seed)};
+  const seeded_grammar&                               multimode {seeded_slot(multimode_slots, (hash >> 32U) % seeded_slots,
+                                                                             &multi_mode_rules_from_seed)};
   if (multimode.lex) {
     run_or_die("multimode", multimode.rules, *multimode.lex, *multimode.token_lex, input, false);
   }
