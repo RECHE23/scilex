@@ -58,6 +58,7 @@ from scilex._scilex import (
     Token,
     compile as _compile,
     dfa_modes_active as _dfa_modes_active,
+    end_of as _end_of,
     pike_rules as _pike_rules,
     column_unit as _column_unit,
     error,
@@ -303,6 +304,27 @@ class Lexer:
             error: If ``mode`` is not a mode the rules use.
         """
         return list(_pike_rules(self._handle, str(mode)))
+
+    def end_of(self, source, token):
+        """Where ``token`` ends in ``source``: the :class:`Position` just past its last byte, counted in
+        this lexer's :attr:`column_unit` -- where the scan stood after the token.
+
+        A token carries its start, not its end, so the stream costs nothing more for the callers that
+        never ask. A zero-width token (NEWLINE, INDENT, DEDENT from layout, END_OF_INPUT) ends where it
+        starts.
+
+        Args:
+            source (str | bytes): The text ``token`` was lexed from.
+            token (Token): A token this lexer produced from ``source``.
+
+        Returns:
+            Position: The position after ``token``.
+
+        Raises:
+            ValueError: If ``token``'s lexeme is not the text of ``source`` at its offset.
+        """
+        pos = token.position
+        return Position(*_end_of(self._handle, source, token.lexeme, pos.offset, pos.line, pos.column))
 
     @property
     def column_unit(self):

@@ -25,6 +25,10 @@ fuzz oracle.
   32-bit (i686); a weekly workflow fuzzes for an hour from a corpus kept between runs.
 
 ### Added
+- `lexer::end_of(source, token)` (Python: `Lexer.end_of(source, token)`): the position just past a
+  token, in the lexer's column unit -- exactly where the scan stood after it. Tokens keep carrying
+  only their start, so the stream costs nothing more for callers that never ask; a token that was not
+  lexed from `source` is refused (`std::invalid_argument`, Python `ValueError`).
 - `scilex/version.hpp` (`SCILEX_VERSION_MAJOR/MINOR/PATCH`, `SCILEX_VERSION_STRING`), included by
   `scilex.hpp`, rewritten by `make release` and checked by `make version-check`; `scilex --version`
   prints it with the REAL version the CLI was built with.

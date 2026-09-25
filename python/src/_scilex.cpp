@@ -609,6 +609,49 @@ std::string column_unit(scilex::lexer* lexer)
     return "bytes";
 }
 
+// _scilex.end_of(handle, text, lexeme, offset, line, column) -> (offset, line, column): where the token
+// with that lexeme and start ends in text, under the lexer's column unit (scilex::lexer::end_of). The
+// lexeme must be the bytes of text at offset -- the check that the token was lexed from this text.
+PyObject* scilex_end_of(PyObject* /*self*/, PyObject* args)
+{
+    PyObject*  capsule    = nullptr;
+    PyObject*  text_obj   = nullptr;
+    PyObject*  lexeme_obj = nullptr;
+    Py_ssize_t offset     = 0;
+    Py_ssize_t line       = 0;
+    Py_ssize_t column     = 0;
+    if (PyArg_ParseTuple(args, "OOOnnn", &capsule, &text_obj, &lexeme_obj, &offset, &line, &column) == 0) {
+        return nullptr;
+    }
+    auto* lexer = static_cast<scilex::lexer*>(PyCapsule_GetPointer(capsule, CAPSULE_NAME));
+    if (lexer == nullptr) {
+        return nullptr;
+    }
+    const char* text_data   = nullptr;
+    Py_ssize_t  text_size   = 0;
+    const char* lexeme_data = nullptr;
+    Py_ssize_t  lexeme_size = 0;
+    bool        text_bytes  = false;
+    bool        lex_bytes   = false;
+    if (read_source(text_obj, &text_data, &text_size, &text_bytes) < 0
+        || read_source(lexeme_obj, &lexeme_data, &lexeme_size, &lex_bytes) < 0) {
+        return nullptr;
+    }
+    if (offset < 0 || line < 1 || column < 1 || offset > text_size || lexeme_size > text_size - offset
+        || std::string_view(text_data + offset, static_cast<std::size_t>(lexeme_size))
+             != std::string_view(lexeme_data, static_cast<std::size_t>(lexeme_size))) {
+        PyErr_SetString(PyExc_ValueError, "end_of: the token was not lexed from this source");
+        return nullptr;
+    }
+    const std::string_view text {text_data, static_cast<std::size_t>(text_size)};
+    const scilex::token    tok {0, text.substr(static_cast<std::size_t>(offset), static_cast<std::size_t>(lexeme_size)),
+                                scilex::position {static_cast<std::size_t>(offset), static_cast<std::size_t>(line),
+                                                  static_cast<std::size_t>(column)}};
+    const scilex::position end {lexer->end_of(text, tok)};
+    return Py_BuildValue("(nnn)", static_cast<Py_ssize_t>(end.offset), static_cast<Py_ssize_t>(end.line),
+                         static_cast<Py_ssize_t>(end.column));
+}
+
 // _scilex.tokenize(handle, text, eof=False) -> list of (kind, lexeme, offset, line,
 // column). With eof true a terminal end_of_input token is appended.
 PyObject* scilex_tokenize(PyObject* /*self*/, PyObject* args)
@@ -934,6 +977,11 @@ SCIFORGE_MODULE(_scilex, "scilex.error", m)
           "real_version() -> str\n"
           "The REAL version this compiled extension was built against (real/version.hpp), so a stale\n"
           "build or install can be detected by comparing it to the pinned real-regex version.");
+    m.raw("end_of", scilex_end_of, METH_VARARGS,
+          "end_of(handle, text, lexeme, offset, line, column) -> (offset, line, column)\n"
+          "Where the token with this lexeme and start ends in text, under the lexer's column unit.\n\n"
+          "Raises:\n"
+          "    ValueError: If lexeme is not the bytes of text at offset.");
     m.raw("tokenize", scilex_tokenize, METH_VARARGS,
           "tokenize(handle, text, eof=False)\n"
           "Eagerly tokenize text with a compiled-lexer handle.\n\n"

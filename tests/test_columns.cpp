@@ -2,6 +2,7 @@
 // Unicode codepoints, or UTF-16 code units (an astral codepoint is 2). A malformed byte counts one
 // unit in every mode, so the column stays defined across the error runs recovery emits. The unit is
 // not carried on the position — the lexer declares it via columns().
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -184,5 +185,54 @@ namespace {
         }
       }
     }
+  }
+
+  // Every byte is some token here (no skip rule, malformed bytes become error tokens), so each token's
+  // end must be the next one's start, and the last one's the end-of-input position -- in every unit,
+  // across multibyte, astral, malformed and newline bytes.
+  TEST(end_of_is_the_next_tokens_start_in_every_unit)
+  {
+    const std::string src {cat({"ab", EMOJI, EACUTE, "\n", "\xA9"sv, "x", "\xF0\x9F"sv, "\n  cd", EACUTE})};
+    for (const scilex::column_unit unit : {scilex::column_unit::bytes,
+                                           scilex::column_unit::codepoints, scilex::column_unit::utf16}) {
+      std::vector<scilex::rule> rules;
+      rules.push_back({.kind = WORD, .pattern = real::regex("[a-z]+")});
+      rules.push_back({.kind = WS, .pattern = real::regex(R"(\s+)")});
+      rules.push_back({.kind = ANY, .pattern = real::regex(".")});
+      const scilex::lexer lex {std::move(rules), {}, {}, scilex::error_policy::token, unit};
+      const auto          toks = lex.tokenize(src, scilex::eof_policy::append);
+      EXPECT(toks.size() > 2U);
+      EXPECT_EQ(toks.back().kind, scilex::end_of_input);
+      for (std::size_t i {0}; i + 1 < toks.size(); ++i) {
+        const scilex::position end {lex.end_of(src, toks[i])};
+        EXPECT_EQ(end.offset, toks[i + 1].start.offset);
+        EXPECT_EQ(end.line, toks[i + 1].start.line);
+        EXPECT_EQ(end.column, toks[i + 1].start.column);
+      }
+    }
+  }
+
+  TEST(end_of_a_zero_width_token_is_its_start)
+  {
+    const scilex::lexer    lex {make_lexer(scilex::column_unit::codepoints)};
+    const std::string      src {"ab"};
+    const scilex::token    eof {lex.tokenize(src, scilex::eof_policy::append).back()};
+    const scilex::position end {lex.end_of(src, eof)};
+    EXPECT_EQ(end.offset, eof.start.offset);
+    EXPECT_EQ(end.column, eof.start.column);
+  }
+
+  TEST(end_of_refuses_a_token_from_another_source)
+  {
+    const scilex::lexer lex {make_lexer(scilex::column_unit::bytes)};
+    const std::string   src {"ab cd"};
+    const std::string   copy {src};
+    const auto          toks = lex.tokenize(src);
+    EXPECT_THROWS(static_cast<void>(lex.end_of(copy, toks[0])), std::invalid_argument);
+    EXPECT_THROWS(static_cast<void>(lex.end_of(std::string_view(src).substr(0, 1), toks[0])),
+                     std::invalid_argument);
+    scilex::token past {toks[1]};
+    past.start.offset = src.size() + 1;
+    EXPECT_THROWS(static_cast<void>(lex.end_of(src, past)), std::invalid_argument);
   }
 } // namespace

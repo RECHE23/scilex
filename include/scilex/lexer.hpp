@@ -103,8 +103,9 @@ namespace scilex {
    * engine** while the mode's other rules take the DFA (same tokens). That rule is tried at every
    * position its first byte allows, so it keeps a share of the per-rule cost. The narrower Unicode
    * `\d` and `\s` expand and stay on the DFA. Concretely: the general engine lexes at roughly
-   * **6–9.5 MB/s**, while a fully DFA-accelerated mode runs **3–27× that** — so the Unicode
-   * identifier costs part of the DFA fast path.
+   * **7–14 MB/s**, while the example grammars, wholly on their DFAs, run **5.7–18× that**; the
+   * `python-unicode` grammar, whose identifier rule stays on Pike, runs 3.3× (BENCHMARKS.md) — so the
+   * Unicode identifier costs part of the DFA fast path.
    *
    * If your identifiers are ASCII by specification (JSON, SQL, C), pin `(?a)` inline in the pattern
    * (or pass `real::flags::ascii`) to keep `\w \d \s \b` ASCII and small, DFA-representable, and fast —
@@ -436,6 +437,35 @@ namespace scilex {
         }
       }
       return on_pike;
+    }
+
+    /*!
+     * \brief Where \p tok ends in \p source: the position just past its last byte, with the line and
+     *        column this lexer's \ref scilex::column_unit gives it — exactly where the scan's cursor stood after
+     *        the token.
+     *
+     * A token carries its start and its lexeme, not its end, so the token stream costs no more for the
+     * callers that never ask. A zero-width token (a synthetic newline, indent or dedent from \ref layout,
+     * the end-of-input token) ends where it starts.
+     *
+     * \param[in] source The text \p tok was lexed from; its lexeme must view into it.
+     * \param[in] tok    A token this lexer produced from \p source.
+     * \return The position after \p tok.
+     * \throws std::invalid_argument If \p tok's lexeme is not the bytes of \p source at its start offset.
+     */
+    [[nodiscard]] position end_of(std::string_view source,
+                                  const token&     tok) const
+    {
+      if (tok.lexeme.empty()) {
+        return tok.start;
+      }
+      if (tok.start.offset > source.size() || tok.lexeme.size() > source.size() - tok.start.offset
+          || tok.lexeme.data() != source.data() + tok.start.offset) {
+        throw std::invalid_argument("end_of: the token's lexeme is not a view into the source at its start");
+      }
+      position cursor {tok.start};
+      advance(source, cursor, tok.lexeme.size());
+      return cursor;
     }
 
   private:

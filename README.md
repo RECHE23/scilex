@@ -35,7 +35,8 @@ measured optimality.
 - **Contextual lexing (modes)** — per-rule `in_mode` + a push / pop / set mode stack
 - **DFA fast path (automatic)** — every mode whose DFA reproduces the per-rule munch is accelerated with one `real::dfa` pass (5.7–18× on the example grammars, every one wholly on it); the decision is exact (Pike is the floor), the token stream identical; `dfa_policy::requested` restricts it to `dfa_modes`
 - **Layout Awareness** — mode-aware indentation (NEWLINE / INDENT / DEDENT)
-- Source positions (byte offset, line, column); each token carries its mode
+- Source positions (byte offset, line, column counted in bytes, code points or UTF-16 units); each token
+  carries its start and its mode, and `lexer::end_of(source, token)` gives where it ends
 - Eager (`tokenize`) and lazy (`scan`) APIs
 - Optional `END_OF_INPUT` token
 - Positioned errors with a context snippet
@@ -48,7 +49,7 @@ lexing steered by *indentation* (block scalars, heredocs) — is Level B.
 
 **Not yet:** block scalars / heredocs (Layout Awareness Level B), a compile-time
 `static_lexer` (a baked DFA — the Phase-0 spike found this wants build-time codegen,
-not constexpr), codepoint columns.
+not constexpr).
 
 See the [guided tour](docs/design.dox) for details.
 

@@ -769,3 +769,34 @@ class ErrorTaxonomyTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EndOfTests(unittest.TestCase):
+    """Lexer.end_of: where a token ends, in the lexer's column unit."""
+
+    SOURCE = "ab\N{GRINNING FACE}\N{LATIN SMALL LETTER E WITH ACUTE}\n  cd"
+
+    def lexer(self, columns):
+        # No skip rule: every byte is some token, so each end is the next start.
+        return scilex.Lexer([(1, r"[a-z]+"), (2, r"\s+"), (3, r".")], columns=columns)
+
+    def test_each_end_is_the_next_start_in_every_unit(self):
+        for columns in ("bytes", "codepoints", "utf16"):
+            lexer = self.lexer(columns)
+            tokens = lexer.tokenize(self.SOURCE, eof=True)
+            for tok, nxt in zip(tokens, tokens[1:]):
+                self.assertEqual(lexer.end_of(self.SOURCE, tok), nxt.position, (columns, tok))
+
+    def test_bytes_source(self):
+        lexer = self.lexer("codepoints")
+        data = self.SOURCE.encode()
+        tokens = lexer.tokenize(data, eof=True)
+        self.assertEqual(lexer.end_of(data, tokens[-2]), tokens[-1].position)
+
+    def test_a_token_from_another_source_is_refused(self):
+        lexer = self.lexer("bytes")
+        token = lexer.tokenize("ab cd")[2]
+        with self.assertRaises(ValueError):
+            lexer.end_of("ab xy", token)
+        with self.assertRaises(ValueError):
+            lexer.end_of("ab", token)
