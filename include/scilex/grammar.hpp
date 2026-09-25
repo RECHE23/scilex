@@ -208,6 +208,31 @@ namespace scilex {
     }
 
     /*!
+     * \brief \p name, refused when it is empty or holds a comma.
+     * \param[in] name   A mode name from an option.
+     * \param[in] word   For errors: the whole option.
+     * \param[in] origin For errors: where the grammar came from.
+     * \param[in] line   For errors: the 1-based line.
+     * \param[in] column For errors: the 1-based column of the option.
+     * \return \p name.
+     * \throws grammar_error When \p name is empty.
+     */
+    inline std::string_view checked_mode(std::string_view   name,
+                                         std::string_view   word,
+                                         const std::string& origin,
+                                         std::size_t        line,
+                                         std::size_t        column)
+    {
+      if (name.empty() || name.find(',') != std::string_view::npos) {
+        std::string cause {"empty mode name in '"};
+        cause += word;
+        cause += '\'';
+        throw grammar_error(origin, line, column, cause);
+      }
+      return name;
+    }
+
+    /*!
      * \brief Gives \p out its transition, refusing a second one.
      * \param[in,out] out       The rule being built.
      * \param[in]     operation The transition.
@@ -252,16 +277,9 @@ namespace scilex {
           ++at;
           continue;
         }
-        const std::size_t      end {std::min(options.find(' ', at), options.size())};
+        const std::size_t      end  {std::min(options.find(' ', at), options.size())};
         const std::string_view word {options.substr(at, end - at)};
-        const std::size_t      col {column + at};
-        const auto             mode_name {[&](std::string_view name) {
-                                            if (name.empty() || name.find(',') != std::string_view::npos) {
-                                              throw grammar_error(origin, line, col,
-                                                                  quoting("empty mode name in ", word, ""));
-                                            }
-                                            return name;
-                                          }};
+        const std::size_t      col  {column + at};
         if (word == "skip") {
           out.skip = true;
         }
@@ -269,16 +287,16 @@ namespace scilex {
           set_transition(out, mode_action::op::pop, {}, origin, line, col);
         }
         else if (word.starts_with("push=")) {
-          set_transition(out, mode_action::op::push, mode_name(word.substr(5)), origin, line, col);
+          set_transition(out, mode_action::op::push, checked_mode(word.substr(5), word, origin, line, col), origin, line, col);
         }
         else if (word.starts_with("set=")) {
-          set_transition(out, mode_action::op::set, mode_name(word.substr(4)), origin, line, col);
+          set_transition(out, mode_action::op::set, checked_mode(word.substr(4), word, origin, line, col), origin, line, col);
         }
         else if (word.starts_with("in=")) {
           std::string_view modes {word.substr(3)};
           while (true) {
             const std::size_t comma {modes.find(',')};
-            out.in_mode.emplace_back(mode_name(modes.substr(0, comma)));
+            out.in_mode.emplace_back(checked_mode(modes.substr(0, comma), word, origin, line, col));
             if (comma == std::string_view::npos) {
               break;
             }

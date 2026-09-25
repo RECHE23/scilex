@@ -24,7 +24,7 @@ namespace {
     catch (const scilex::grammar_error& error) {
       return error;
     }
-    return scilex::grammar_error("<parsed>", 0, 0, "no error");
+    return {"<parsed>", 0, 0, "no error"};
   }
 
   TEST(grammar_plain_rules_take_their_position_as_kind)
