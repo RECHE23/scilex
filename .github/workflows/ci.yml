@@ -126,6 +126,29 @@ jobs:
             scilex/build/fuzz/slow-unit-*
           if-no-files-found: warn
 
+  # A const lexer shared by threads, under ThreadSanitizer (make tsan). The threads guide promises it.
+  tsan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: scilex
+      - uses: actions/checkout@v6
+        with:
+          repository: RECHE23/real-regex
+          ref: v2026.9.7
+          path: real-regex
+      - uses: actions/checkout@v6
+        with:
+          repository: RECHE23/sciforge
+          ref: v2026.9.2
+          path: sciforge
+      - name: Install clang
+        run: sudo apt-get update && sudo apt-get install -y clang-18
+      - name: One lexer, eight threads
+        run: make -C scilex tsan TSAN_CXX=clang++-18
+
   # The coverage bar of the local gate, measured by a second toolchain: Linux clang's source-based
   # coverage must also reach 100 % on every dimension of include/.
   coverage:

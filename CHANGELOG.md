@@ -43,6 +43,10 @@ fuzz oracle.
   one; an invalid pattern stays a plain `scilex.error`.
 - The thread-safety contract, stated in the README and on `lexer`: one const lexer, any number of
   threads, one iterator per thread.
+- `make tsan`, run by the local gate and a CI job: eight threads share each fresh lexer and start at
+  once on a barrier, under ThreadSanitizer, over a DFA, a modal, a layout and a hybrid grammar, and
+  each thread's tokens must equal the single-threaded ones. The contract above was stated from a
+  one-off check; this is what now holds it.
 
 ### Fixed
 - **Python: a positioned error keeps its cause.** `Lexer.tokenize` and `Lexer.scan` rewrote every

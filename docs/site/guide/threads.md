@@ -2,8 +2,10 @@
 
 A lexer is immutable once built: its DFAs are built in the constructor, and every `tokenize` call and
 every `scan` range keeps its own mode stack and walk memos. One `const` lexer can therefore be shared by
-any number of threads, each lexing its own text; the test suite checks this under ThreadSanitizer with
-eight threads over four grammars, the hybrid ones included.
+any number of threads, each lexing its own text. `make tsan` checks this under ThreadSanitizer, locally
+and in CI: eight threads share each fresh lexer and start at once, over four grammars — one entirely on
+its DFA, a modal one, one with layout, and a hybrid one with rules on the per-rule path — and every
+thread's tokens must equal the single-threaded ones.
 
 An iterator from `scan` is a cursor: drive each from one thread.
 

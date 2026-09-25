@@ -54,7 +54,7 @@ FORMAT_FILES := $(shell find include tests examples fuzz benchmarks cli -name '*
 
 .PHONY: all build test sanitize coverage coverage-build coverage-html python-stubtest \
         lint misra doc doc-no-coverage doc-check format format-check full-local-gate \
-        python python-test bench bench-lex cli example coverage-gate doc-xml docs-venv docs-site docs-site-gate sabotage-help check-sabotage fuzz-check exhaustive-lex check-pins fuzz version-check install install-smoke uninstall install-cli uninstall-cli release clean help
+        python python-test bench bench-lex cli example coverage-gate doc-xml docs-venv docs-site docs-site-gate sabotage-help check-sabotage fuzz-check tsan exhaustive-lex check-pins fuzz version-check install install-smoke uninstall install-cli uninstall-cli release clean help
 
 .DEFAULT_GOAL := help
 
@@ -175,7 +175,7 @@ symbol-hygiene:
 	  || { echo "symbol-hygiene: std::hash / std::unordered_* in a shipped header (see design.dox)"; exit 1; }
 
 lint:
-	@ls tests/*.cpp | xargs -P $(JOBS) -I{} clang-tidy {} -- $(CXXSTD) $(INCLUDES) -I$(SCIFORGE_INCLUDE) -Ifuzz
+	@ls tests/*.cpp tests/tsan/*.cpp | xargs -P $(JOBS) -I{} clang-tidy {} -- $(CXXSTD) $(INCLUDES) -I$(SCIFORGE_INCLUDE) -Ifuzz -Iexamples
 
 misra:
 	mkdir -p $(BUILD)
@@ -324,6 +324,16 @@ fuzz-check:
 	c++ $(CXXSTD) -O2 -Wall -Wextra -Wpedantic -Werror $(INCLUDES) -Iexamples -Ifuzz fuzz/oracle_check.cpp -o $(BUILD)/fuzz/oracle_check
 	@$(BUILD)/fuzz/oracle_check
 
+# ThreadSanitizer: one const lexer shared by eight threads, every thread's first scan released at once on
+# a barrier, over a DFA grammar, a modal one, one with layout and a hybrid one (tests/tsan/tsan_lexer.cpp).
+# SCILEX_TSAN_INJECT_RACE=1 injects a race to show the harness can report one.
+TSAN_CXX ?= clang++
+tsan:
+	@mkdir -p $(BUILD)
+	$(TSAN_CXX) $(CXXSTD) -O1 -g -fsanitize=thread -Wall -Wextra -Werror $(INCLUDES) -Iexamples tests/tsan/tsan_lexer.cpp -o $(BUILD)/tsan_lexer
+	@# TSan cannot map its shadow memory under the high-entropy ASLR of recent Linux kernels: run without it there.
+	@if command -v setarch >/dev/null 2>&1; then setarch $$(uname -m) -R $(BUILD)/tsan_lexer; else $(BUILD)/tsan_lexer; fi
+
 # Exhaustive lexer-oracle gate: scilex::lexer vs reference.hpp over every small rule-set (1..3 rules
 # from a fixed non-nullable palette, order + skip significant) crossed with every input up to length
 # EL_N (the shared Python enumerator, plus a multi-byte code point), under BOTH error policies. The
@@ -411,8 +421,9 @@ full-local-gate:
 	  fi
 	@if command -v g++-14 >/dev/null 2>&1; then $(MAKE) test CXX=g++-14 BUILD=$(BUILD)/gcc; else echo "full-local-gate: WARN — g++-14 absent, GCC leg skipped"; fi
 	@$(MAKE) sanitize
+	@$(MAKE) tsan
 	@$(MAKE) coverage-gate
-	@echo "full-local-gate: ALL gates green (cheap→doc→tests→lint→sanitize→coverage; first red stops the train)"
+	@echo "full-local-gate: ALL gates green (cheap→doc→tests→lint→sanitize→tsan→coverage; first red stops the train)"
 
 # doc-check builds the docs under the EXACT CI Doxygen (1.9.8, in Docker) via the shared SciForge tool,
 # so a warning the developer's newer local Doxygen tolerates cannot slip past to CI or a release (the
