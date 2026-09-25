@@ -19,6 +19,7 @@
 #define Py_LIMITED_API 0x030B0000
 #include <Python.h>
 
+#include <scilex/grammar.hpp>
 #include <scilex/scilex.hpp>
 #include <scilex/layout.hpp> // opt-in: not pulled in by scilex.hpp
 #include <sciforge/binding/convert.hpp>
@@ -609,6 +610,96 @@ std::string column_unit(scilex::lexer* lexer)
     return "bytes";
 }
 
+// _scilex.parse_grammar(text, origin) -> (rules, names): the .lex grammar parsed by scilex/grammar.hpp,
+// each rule as the (kind, pattern, skip, in_mode, action) tuple compile() takes, so the Python and CLI
+// grammars go through one parser. A malformed grammar raises scilex.GrammarError carrying .line,
+// .column and .cause.
+PyObject* scilex_parse_grammar(PyObject* /*self*/, PyObject* args)
+{
+    const char* text   = nullptr;
+    Py_ssize_t  size   = 0;
+    const char* origin = "<string>";
+    if (PyArg_ParseTuple(args, "s#|s", &text, &size, &origin) == 0) {
+        return nullptr;
+    }
+    try {
+        const scilex::grammar parsed {scilex::parse_grammar(std::string_view(text, static_cast<std::size_t>(size)),
+                                                            origin)};
+        PyObject* rules = PyList_New(0);
+        PyObject* names = PyList_New(0);
+        bool      ok    = rules != nullptr && names != nullptr;
+        for (std::size_t i = 0; ok && i < parsed.rules.size(); ++i) {
+            const scilex::rule& r {parsed.rules[i]};
+            PyObject* in_mode = PyList_New(0);
+            ok = in_mode != nullptr;
+            for (std::size_t m = 0; ok && m < r.in_mode.size(); ++m) {
+                PyObject* name = PyUnicode_FromStringAndSize(r.in_mode[m].data(), static_cast<Py_ssize_t>(r.in_mode[m].size()));
+                ok = name != nullptr && PyList_Append(in_mode, name) == 0;
+                Py_XDECREF(name);
+            }
+            PyObject* action = nullptr;
+            if (ok) {
+                if (!r.action) {
+                    action = Py_NewRef(Py_None);
+                }
+                else if (r.action->operation == scilex::mode_action::op::pop) {
+                    action = Py_BuildValue("(s)", "pop");
+                }
+                else {
+                    action = Py_BuildValue("(ss#)", r.action->operation == scilex::mode_action::op::push ? "push" : "set",
+                                           r.action->target.data(), static_cast<Py_ssize_t>(r.action->target.size()));
+                }
+                ok = action != nullptr;
+            }
+            const std::string_view pattern {r.pattern.pattern()};
+            PyObject* tuple = ok ? Py_BuildValue("(is#OOO)", r.kind, pattern.data(), static_cast<Py_ssize_t>(pattern.size()),
+                                                 r.skip ? Py_True : Py_False, in_mode, action)
+                                 : nullptr;
+            ok = tuple != nullptr && PyList_Append(rules, tuple) == 0;
+            Py_XDECREF(tuple);
+            Py_XDECREF(action);
+            Py_XDECREF(in_mode);
+            PyObject* name = ok ? PyUnicode_FromStringAndSize(parsed.names[i].data(), static_cast<Py_ssize_t>(parsed.names[i].size()))
+                                : nullptr;
+            ok = name != nullptr && PyList_Append(names, name) == 0;
+            Py_XDECREF(name);
+        }
+        if (!ok) {
+            Py_XDECREF(rules);
+            Py_XDECREF(names);
+            return nullptr;
+        }
+        PyObject* result = PyTuple_Pack(2, rules, names);
+        Py_DECREF(rules);
+        Py_DECREF(names);
+        return result;
+    }
+    catch (const scilex::grammar_error& error) {
+        PyObject* type = error_subclass("GrammarError");
+        PyObject* exc  = PyObject_CallFunction(type, "s", error.what());
+        if (exc != nullptr) {
+            PyObject* line   = PyLong_FromSize_t(error.line());
+            PyObject* column = PyLong_FromSize_t(error.column());
+            PyObject* cause  = PyUnicode_FromStringAndSize(error.cause().data(), static_cast<Py_ssize_t>(error.cause().size()));
+            if (line != nullptr && column != nullptr && cause != nullptr) {
+                PyObject_SetAttrString(exc, "line", line);
+                PyObject_SetAttrString(exc, "column", column);
+                PyObject_SetAttrString(exc, "cause", cause);
+            }
+            Py_XDECREF(line);
+            Py_XDECREF(column);
+            Py_XDECREF(cause);
+            PyErr_SetObject(type, exc);
+            Py_DECREF(exc);
+        }
+        Py_DECREF(type);
+        return nullptr;
+    }
+    catch (...) {
+        return set_cpp_error();
+    }
+}
+
 // _scilex.end_of(handle, text, lexeme, offset, line, column) -> (offset, line, column): where the token
 // with that lexeme and start ends in text, under the lexer's column unit (scilex::lexer::end_of). The
 // lexeme must be the bytes of text at offset -- the check that the token was lexed from this text.
@@ -977,6 +1068,11 @@ SCIFORGE_MODULE(_scilex, "scilex.error", m)
           "real_version() -> str\n"
           "The REAL version this compiled extension was built against (real/version.hpp), so a stale\n"
           "build or install can be detected by comparing it to the pinned real-regex version.");
+    m.raw("parse_grammar", scilex_parse_grammar, METH_VARARGS,
+          "parse_grammar(text, origin='<string>') -> (rules, names)\n"
+          "Parse a .lex grammar (scilex/grammar.hpp) into compile()-ready rule tuples and their names.\n\n"
+          "Raises:\n"
+          "    GrammarError: On a malformed line or an invalid pattern (.line, .column, .cause).");
     m.raw("end_of", scilex_end_of, METH_VARARGS,
           "end_of(handle, text, lexeme, offset, line, column) -> (offset, line, column)\n"
           "Where the token with this lexeme and start ends in text, under the lexer's column unit.\n\n"

@@ -835,3 +835,59 @@ class ErrorCauseTests(unittest.TestCase):
         with self.assertRaises(scilex.LexError) as caught:
             list(scilex.Lexer([(2, r"[a-z]+"), (1, r"\)", False, [], ("pop",))]).scan("a)"))
         self.assertIn("cannot pop the mode stack", str(caught.exception))
+
+
+class GrammarTests(unittest.TestCase):
+    """The .lex format through the one C++ parser (scilex/grammar.hpp)."""
+
+    TEXT = 'WS\t\\s+\tskip\nSTR\t"\tpush=str\nTXT\t[^"]+\tin=str\nEND\t"\tin=str pop\nID\t[a-z]+\n'
+
+    def test_rules_and_names(self):
+        g = scilex.parse_grammar(self.TEXT)
+        self.assertEqual(g.names, ["WS", "STR", "TXT", "END", "ID"])
+        self.assertEqual(g.rules[0], (0, r"\s+", True, [], None))
+        self.assertEqual(g.rules[1], (1, '"', False, [], ("push", "str")))
+        self.assertEqual(g.rules[3], (3, '"', False, ["str"], ("pop",)))
+        self.assertEqual(g.name(4), "ID")
+        self.assertEqual(g.name(scilex.ERROR), "?")
+
+    def test_a_parsed_grammar_lexes(self):
+        g = scilex.parse_grammar(self.TEXT)
+        tokens = g.lexer().tokenize('ab "hi there" cd')
+        self.assertEqual([(g.name(t.kind), t.lexeme) for t in tokens],
+                         [("ID", "ab"), ("STR", '"'), ("TXT", "hi there"), ("END", '"'), ("ID", "cd")])
+
+    def test_lexer_options_pass_through(self):
+        lexer = scilex.parse_grammar("A\t[a-z]+\n").lexer(errors="token", columns="codepoints")
+        self.assertEqual(lexer.column_unit, "codepoints")
+        self.assertEqual([t.kind for t in lexer.tokenize("ab!")], [0, scilex.ERROR])
+
+    def test_errors_carry_line_column_and_cause(self):
+        with self.assertRaises(scilex.GrammarError) as caught:
+            scilex.parse_grammar("ID\t[a-z]+\nBAD\ta(\n", "g.lex")
+        error = caught.exception
+        self.assertIsInstance(error, scilex.error)
+        self.assertEqual((error.line, error.column), (2, 6))
+        self.assertTrue(error.cause.startswith("invalid regex: "))
+        self.assertTrue(str(error).startswith("g.lex:2:6: invalid regex: "))
+        with self.assertRaises(scilex.GrammarError) as caught:
+            scilex.parse_grammar("A\ta\tbogus\n")
+        self.assertEqual(caught.exception.cause,
+                         "unknown option 'bogus' (expected skip, in=, push=, set= or pop)")
+        with self.assertRaises(scilex.GrammarError) as caught:
+            scilex.parse_grammar("# nothing\n")
+        self.assertEqual(caught.exception.line, 0)
+
+    def test_load_grammar_names_its_file(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "bad.lex")
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write("A\ta(\n")
+            with self.assertRaises(scilex.GrammarError) as caught:
+                scilex.load_grammar(path)
+            self.assertTrue(str(caught.exception).startswith(path + ":1:"))
+            good = os.path.join(tmp, "good.lex")
+            with open(good, "w", encoding="utf-8") as handle:
+                handle.write("N\t[0-9]+\n")
+            self.assertEqual(scilex.load_grammar(good).names, ["N"])

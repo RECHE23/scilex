@@ -25,6 +25,12 @@ fuzz oracle.
   32-bit (i686); a weekly workflow fuzzes for an hour from a corpus kept between runs.
 
 ### Added
+- **The `.lex` grammar format is a library header**, `scilex/grammar.hpp` (optional; `scilex.hpp` does
+  not include it): `parse_grammar(text, origin)` and `load_grammar(path)` return the rules and their
+  names, and a malformed grammar raises `scilex::grammar_error` with its line and column. The format
+  gains modes — `in=m1,m2`, `push=m`, `set=m`, `pop` beside `skip` — and every existing `.lex` file
+  parses as before. The CLI uses it in place of its own parser; Python reaches it through
+  `scilex.parse_grammar`, `scilex.load_grammar`, `Grammar` and `scilex.GrammarError`.
 - `lexer::end_of(source, token)` (Python: `Lexer.end_of(source, token)`): the position just past a
   token, in the lexer's column unit -- exactly where the scan stood after it. Tokens keep carrying
   only their start, so the stream costs nothing more for callers that never ask; a token that was not

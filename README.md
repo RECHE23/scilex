@@ -265,7 +265,8 @@ $ scilex --example python --layout    # … or its bundled sample, with INDENT/D
 
 **Your own grammar** — the universal mode: bring a `.lex` file and lex anything.
 A grammar is one rule per line — `name`, a tab, `regex`, then an optional tab and
-`skip` (`#` comments and blank lines are ignored):
+space-separated options: `skip`, `in=m1,m2` (the modes the rule is active in), and
+one of `push=m`, `set=m`, `pop` (`#` comments and blank lines are ignored):
 
 ```console
 $ cat my.lex
@@ -287,9 +288,26 @@ Output is one token per line — the kind, a tab, the lexeme, a tab, then `line:
 clear, positioned error (`my.lex:3: invalid regex: …`) — never a crash. See
 `examples/sample.lex` for a worked file.
 
-This `.lex` format is a *tool* convenience parsed by the CLI; the library itself
-stays plain C++ rule lists (`std::vector<scilex::rule>`) — no spec language is
-embedded.
+A modal grammar reads the same way — a string mode entered by `"` and left by the
+next one:
+
+```text
+WS	\s+	skip
+STRING	"	push=str
+TEXT	[^"\\]+	in=str
+ESCAPE	\\.	in=str
+END	"	in=str pop
+IDENT	[A-Za-z_]\w*
+```
+
+The format has one parser, in the optional header `scilex/grammar.hpp`
+(`scilex::parse_grammar(text, origin)`, `scilex::load_grammar(path)`, errors as
+`scilex::grammar_error` with a line and column); `scilex.hpp` does not include it,
+so the lexer itself stays plain C++ rule lists (`std::vector<scilex::rule>`).
+Python reaches the same parser: `scilex.parse_grammar(text)` and
+`scilex.load_grammar(path)` return a `Grammar` whose `.rules` feed `Lexer`,
+`.names` name each kind and `.lexer(...)` builds one; a malformed grammar raises
+`scilex.GrammarError` with `.line`, `.column` and `.cause`.
 
 ## Dependencies
 

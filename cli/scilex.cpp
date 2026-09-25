@@ -14,14 +14,14 @@
  * Option `--layout` runs the indentation pass (emitting NEWLINE / INDENT /
  * DEDENT). Output is one token per line: KIND<TAB>lexeme<TAB>line:col.
  *
- * Grammar files (see `examples/sample.lex`) are a deliberately thin, **CLI-only**
- * format — one rule per line:
+ * Grammar files (see `examples/sample.lex`) use the `.lex` format of the optional
+ * `scilex/grammar.hpp` — one rule per line:
  *
- *   name<TAB>regex[<TAB>skip]          (`#` comments and blank lines ignored)
+ *   name<TAB>regex[<TAB>options]       (`#` comments and blank lines ignored)
  *
- * The CLI parses them straight into `scilex::rule`. The library itself stays
- * plain C++ rule lists; no spec language is embedded — this format lives only in
- * the tool. Built-in grammars reuse the `examples/<lang>.hpp` registry, so the
+ * where the options are `skip`, `in=m1,m2`, and one of `push=m`, `set=m`, `pop`.
+ * The lexer itself takes plain C++ rule lists; `scilex.hpp` does not include the
+ * format. Built-in grammars reuse the `examples/<lang>.hpp` registry, so the
  * nine showcase languages are defined exactly once.
  */
 #include <cstddef>
@@ -36,6 +36,7 @@
 
 #include <real/real.hpp>
 #include <real/version.hpp>
+#include <scilex/grammar.hpp>
 #include <scilex/layout.hpp>
 #include <scilex/scilex.hpp>
 
@@ -157,107 +158,6 @@ namespace {
     }
   }
 
-  //! \brief A grammar parsed from a `.lex` file: the rules plus the names that
-  //!        label each kind (kind i is the rule's 0-based position).
-  struct grammar
-  {
-    std::vector<scilex::rule> rules;
-    std::vector<std::string>  names;
-  };
-
-  //! \brief Throws a clear, positioned grammar-file error; \p column (1-based byte column in the
-  //!        line) is printed when the cause has one.
-  [[noreturn]] void grammar_error(const std::string& path,
-                                  int                line,
-                                  const std::string& why,
-                                  std::size_t        column = 0)
-  {
-    const std::string where {column == 0 ? "" : ":" + std::to_string(column)};
-    throw std::runtime_error(path + ":" + std::to_string(line) + where + ": " + why);
-  }
-
-  //! \brief Splits \p text on tab characters (no trimming of the parts).
-  std::vector<std::string> split_tabs(std::string_view text)
-  {
-    std::vector<std::string> parts;
-    std::size_t              start {0};
-    while (true) {
-      const std::size_t tab {text.find('\t', start)};
-      if (tab == std::string_view::npos) {
-        parts.emplace_back(text.substr(start));
-        return parts;
-      }
-      parts.emplace_back(text.substr(start, tab - start));
-      start = tab + 1;
-    }
-  }
-
-  //! \brief Parses a `.lex` grammar file. Each non-blank, non-`#` line is
-  //!        `name<TAB>regex[<TAB>skip]`. Throws (positioned) on any malformed line
-  //!        or invalid regex — never returns a half-built grammar.
-  grammar parse_grammar(const std::string& path)
-  {
-    std::ifstream input {path};
-    if (!input) {
-      throw std::runtime_error(path + ": cannot open grammar file"
-                               " (for a built-in grammar use --example; --list shows them)");
-    }
-    grammar     parsed;
-    std::string line;
-    int         lineno {0};
-    while (std::getline(input, line)) {
-      ++lineno;
-      if (!line.empty() && line.back() == '\r') {
-        line.pop_back(); // tolerate CRLF
-      }
-      const std::size_t first {line.find_first_not_of(" \t")};
-      if (first == std::string::npos) {
-        continue; // blank line
-      }
-      if (line[first] == '#') {
-        continue; // comment
-      }
-      std::string       content {line.substr(first)};
-      const std::size_t last    {content.find_last_not_of(" \t")};
-      content.erase(last + 1); // trim trailing whitespace
-
-      const std::vector<std::string> fields {split_tabs(content)};
-      if (fields.size() < 2 || fields.size() > 3) {
-        grammar_error(path, lineno, "expected 'name<TAB>regex' with an optional <TAB>skip");
-      }
-      if (fields[0].empty()) {
-        grammar_error(path, lineno, "empty rule name");
-      }
-      if (fields[1].empty()) {
-        grammar_error(path, lineno, "empty pattern");
-      }
-      bool skip {false};
-      if (fields.size() == 3) {
-        if (fields[2] == "skip") {
-          skip = true;
-        }
-        else {
-          grammar_error(path, lineno, "third field must be 'skip' or omitted (got '" + fields[2] + "')");
-        }
-      }
-      const int kind {static_cast<int>(parsed.names.size())};
-      try {
-        parsed.rules.push_back(scilex::rule {kind, real::regex(fields[1]), skip});
-      }
-      catch (const real::regex_error& error) {
-        // The engine's offset is inside the pattern; the pattern starts one tab after the name,
-        // which starts after the leading blanks. What a reader needs is the column in the line.
-        const std::size_t pattern_column {first + fields[0].size() + 1};
-        grammar_error(path, lineno, "invalid regex: " + error.cause(), pattern_column + error.position() + 1);
-      }
-      parsed.names.push_back(fields[0]);
-    }
-    if (parsed.rules.empty()) {
-      throw std::runtime_error(path + ": no rules (the grammar is empty)");
-    }
-    return parsed;
-  }
-
   //! \brief Reads all of \p in into a string.
   std::string read_all(std::istream& in)
   {
@@ -358,7 +258,18 @@ namespace {
                   scilex::error_policy                 errors,
                   scilex::column_unit                  columns)
   {
-    grammar                        parsed {parse_grammar(std::string {args[0]})};
+    const std::string path {args[0]};
+    scilex::grammar   parsed;
+    try {
+      parsed = scilex::load_grammar(path);
+    }
+    catch (const scilex::grammar_error& error) {
+      if (error.line() == 0 && error.cause() == "cannot open grammar file") {
+        throw std::runtime_error(std::string(error.what())
+                                 + " (for a built-in grammar use --example; --list shows them)");
+      }
+      throw;
+    }
     const std::vector<std::string> names  {std::move(parsed.names)};
     const scilex::lexer            lex    {std::move(parsed.rules), {}, {}, errors, columns};
     const std::string              source {read_input(args.size() >= 2 ? args[1] : std::string_view {"-"})};

@@ -59,6 +59,7 @@ from scilex._scilex import (
     compile as _compile,
     dfa_modes_active as _dfa_modes_active,
     end_of as _end_of,
+    parse_grammar as _parse_grammar,
     pike_rules as _pike_rules,
     column_unit as _column_unit,
     error,
@@ -73,7 +74,7 @@ from scilex._scilex import (
 
 __all__ = [
     "Lexer", "Token", "Position", "Layout", "tokenize", "scan", "layout", "error",
-    "LexerError", "LexError", "LayoutError", "END_OF_INPUT", "NEWLINE", "INDENT", "DEDENT", "ERROR", "get_include", "get_config",
+    "LexerError", "LexError", "LayoutError", "GrammarError", "Grammar", "parse_grammar", "load_grammar", "END_OF_INPUT", "NEWLINE", "INDENT", "DEDENT", "ERROR", "get_include", "get_config",
     "real_version",
 ]
 
@@ -106,6 +107,65 @@ class LexError(error):
     """Input no rule can lex: a byte no rule matches, a zero-length winning match, a pop at the root
     mode or a push past the mode stack's bound, or input ending inside a pushed mode. Carries
     ``.position`` (and ``.context`` where the source is known). A subclass of :class:`error`."""
+
+
+class GrammarError(error):
+    """A malformed ``.lex`` grammar (:func:`parse_grammar`, :func:`load_grammar`). Carries ``.line``
+    (1-based; 0 for a grammar-wide error such as no rules), ``.column`` (1-based byte column in the
+    line; 0 when the cause has none) and ``.cause`` (the message without its location). A subclass of
+    :class:`error`."""
+
+
+class Grammar:
+    """A parsed ``.lex`` grammar: :attr:`rules` in the form :class:`Lexer` takes, and :attr:`names`,
+    the name of each rule, indexed by its kind (a rule's kind is its position in the file).
+
+    Build one with :func:`parse_grammar` or :func:`load_grammar`; the format is the CLI's (one rule
+    per line, ``name<TAB>pattern[<TAB>options]``, options ``skip``, ``in=m1,m2`` and one of
+    ``push=m``, ``set=m``, ``pop``).
+    """
+
+    def __init__(self, rules, names):
+        self.rules = rules
+        self.names = names
+
+    def name(self, kind):
+        """The name of ``kind``, or ``"?"`` for a kind no rule of this grammar has (a reserved kind)."""
+        return self.names[kind] if 0 <= kind < len(self.names) else "?"
+
+    def lexer(self, insignificant_modes=(), dfa_modes=(), errors="raise", columns="bytes", dfa="auto"):
+        """A :class:`Lexer` over these rules, with :class:`Lexer`'s options."""
+        return Lexer(self.rules, insignificant_modes, dfa_modes, errors, columns, dfa)
+
+    def __repr__(self):
+        return f"Grammar({len(self.rules)} rules: {', '.join(self.names)})"
+
+
+def parse_grammar(text, origin="<string>"):
+    """Parse a ``.lex`` grammar from ``text`` (see :class:`Grammar` for the format).
+
+    Args:
+        text (str): The grammar.
+        origin (str): What errors name as its origin (a path, or a label).
+
+    Returns:
+        Grammar: The rules and their names.
+
+    Raises:
+        GrammarError: On a malformed line, an invalid pattern (at its column), or no rules.
+    """
+    rules, names = _parse_grammar(text, origin)
+    return Grammar(rules, names)
+
+
+def load_grammar(path):
+    """Read and parse the ``.lex`` grammar at ``path`` (see :func:`parse_grammar`).
+
+    Raises:
+        GrammarError: If the file is malformed; ``OSError`` if it cannot be read.
+    """
+    with open(path, encoding="utf-8") as handle:
+        return parse_grammar(handle.read(), str(path))
 
 
 class LayoutError(error):

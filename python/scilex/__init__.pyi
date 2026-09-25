@@ -1,10 +1,11 @@
 # Type stubs for the SciLex public API (PEP 561; the marker is py.typed).
+import os
 from collections.abc import Iterable, Iterator
 from typing import Final, Literal, final
 
 __all__ = [
     "Lexer", "Token", "Position", "Layout", "tokenize", "scan", "layout", "error",
-    "LexerError", "LexError", "LayoutError", "END_OF_INPUT", "NEWLINE", "INDENT", "DEDENT", "ERROR", "get_include", "get_config",
+    "LexerError", "LexError", "LayoutError", "GrammarError", "Grammar", "parse_grammar", "load_grammar", "END_OF_INPUT", "NEWLINE", "INDENT", "DEDENT", "ERROR", "get_include", "get_config",
     "real_version",
 ]
 
@@ -32,6 +33,27 @@ LexerError = error
 
 class LexError(error): ...
 class LayoutError(error): ...
+class GrammarError(error):
+    line: int
+    column: int
+    cause: str
+
+class Grammar:
+    rules: list[_NormRule]
+    names: list[str]
+    def __init__(self, rules: list[_NormRule], names: list[str]) -> None: ...
+    def name(self, kind: int) -> str: ...
+    def lexer(
+        self,
+        insignificant_modes: Iterable[str] = ...,
+        dfa_modes: Iterable[str] = ...,
+        errors: Literal["raise", "token"] = ...,
+        columns: Literal["bytes", "codepoints", "utf16"] = ...,
+        dfa: Literal["auto", "requested"] = ...,
+    ) -> Lexer: ...
+
+def parse_grammar(text: str, origin: str = ...) -> Grammar: ...
+def load_grammar(path: str | os.PathLike[str]) -> Grammar: ...
 
 #: A mode transition: ("push", mode), ("set", mode), or ("pop",).
 _Action = tuple[str, str] | tuple[str]

@@ -1,5 +1,6 @@
 # sample.lex — a thin SciLex grammar for the `scilex` CLI.
-# Format: one rule per line   name<TAB>regex[<TAB>skip]   ('#' comments and blank lines ignored).
+# Format: one rule per line   name<TAB>regex[<TAB>options]   ('#' comments and blank lines ignored),
+# options being skip, in=m1,m2 and one of push=m, set=m, pop (see scilex/grammar.hpp).
 # Try it:
 #     scilex examples/sample.lex <file>
 #     echo 'x = 41 + 1' | scilex examples/sample.lex
