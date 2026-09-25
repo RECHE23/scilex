@@ -54,7 +54,7 @@ FORMAT_FILES := $(shell find include tests examples fuzz benchmarks cli -name '*
 
 .PHONY: all build test sanitize coverage coverage-build coverage-html python-stubtest \
         lint misra doc doc-no-coverage doc-check format format-check full-local-gate \
-        python python-test bench bench-lex cli example fuzz-check exhaustive-lex check-pins fuzz version-check install install-smoke uninstall install-cli uninstall-cli release clean help
+        python python-test bench bench-lex cli example coverage-gate fuzz-check exhaustive-lex check-pins fuzz version-check install install-smoke uninstall install-cli uninstall-cli release clean help
 
 .DEFAULT_GOAL := help
 
@@ -136,6 +136,14 @@ coverage: coverage-build
 	@python3 tools/anonymize_coverage_html.py $(COV_DIR)/html $(CURDIR),scilex \
 	    $(abspath $(CURDIR)/../sciforge),sciforge $(abspath $(CURDIR)/../real-regex),real-regex
 	@echo "HTML coverage report: $(COV_DIR)/html/index.html"
+
+# The coverage bar the local gate and CI share: every dimension of the TOTAL row at 100%.
+coverage-gate:
+	@mkdir -p $(BUILD); \
+	  $(MAKE) coverage > $(BUILD)/coverage.log 2>&1; rc=$$?; cat $(BUILD)/coverage.log; \
+	  test $$rc -eq 0 || { echo "coverage-gate: make coverage failed"; exit 1; }; \
+	  awk '/^TOTAL/{seen=1; if (gsub(/100\.00%/, "&") != 4) bad=1} END{exit (seen && !bad) ? 0 : 1}' $(BUILD)/coverage.log \
+	    || { echo "coverage-gate: coverage is below 100% on some dimension — see above"; exit 1; }
 
 coverage-html:
 	@mkdir -p $(COV_DIR)
@@ -287,12 +295,18 @@ exhaustive-lex:
 # exception unwinding (the oracle's own catch is never reached); FUZZ_LDFLAGS=-Wl,-ld_classic links
 # a binary whose exceptions work.
 FUZZ_TIME    ?= 30
+# 2 KiB is past every stretch that arms a DFA walk memo (32 bytes) many times over; the scaling of long
+# inputs is fuzz-check's (its 64 KiB cases), where it costs one run rather than every execution.
+FUZZ_MAX_LEN ?= 2048
 FUZZ_LDFLAGS ?=
+# The fuzzer build needs a clang with libFuzzer; a versioned one is named here (CI: clang++-18).
+FUZZ_CLANG   ?= clang++
 fuzz:
 	@mkdir -p $(BUILD)/fuzz/corpus
 	@cp examples/*.hpp tests/*.cpp $(BUILD)/fuzz/corpus/ 2>/dev/null || true
-	clang++ $(CXXSTD) -O1 -g -fsanitize=fuzzer,address,undefined $(INCLUDES) -Iexamples -Ifuzz fuzz/fuzz_lexer.cpp $(FUZZ_LDFLAGS) -o $(BUILD)/fuzz/fuzz_lexer
-	$(BUILD)/fuzz/fuzz_lexer -max_total_time=$(FUZZ_TIME) -timeout=10 -max_len=8192 $(BUILD)/fuzz/corpus
+	$(FUZZ_CLANG) $(CXXSTD) -O1 -g -fsanitize=fuzzer,address,undefined $(INCLUDES) -Iexamples -Ifuzz fuzz/fuzz_lexer.cpp $(FUZZ_LDFLAGS) -o $(BUILD)/fuzz/fuzz_lexer
+	$(BUILD)/fuzz/fuzz_lexer -max_total_time=$(FUZZ_TIME) -timeout=10 -max_len=$(FUZZ_MAX_LEN) \
+	    -artifact_prefix=$(BUILD)/fuzz/ $(BUILD)/fuzz/corpus
 
 # Version-consistency gate: pyproject.toml is the single source of truth — `make
 # release` bumps __init__.py from it, CMakeLists.txt derives it. Asserts the three
@@ -344,10 +358,7 @@ full-local-gate:
 	  fi
 	@if command -v g++-14 >/dev/null 2>&1; then $(MAKE) test CXX=g++-14 BUILD=$(BUILD)/gcc; else echo "full-local-gate: WARN — g++-14 absent, GCC leg skipped"; fi
 	@$(MAKE) sanitize
-	@set -euo pipefail; \
-	  $(MAKE) coverage 2>&1 | tee $(BUILD)/coverage.log; \
-	  awk '/^TOTAL/{seen=1; if (gsub(/100\.00%/, "&") != 4) bad=1} END{exit (seen && !bad) ? 0 : 1}' $(BUILD)/coverage.log \
-	    || { echo "full-local-gate: coverage is below 100% on some dimension — see above"; exit 1; }
+	@$(MAKE) coverage-gate
 	@echo "full-local-gate: ALL gates green (cheap→doc→tests→lint→sanitize→coverage; first red stops the train)"
 
 # doc-check builds the docs under the EXACT CI Doxygen (1.9.8, in Docker) via the shared SciForge tool,

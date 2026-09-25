@@ -1,0 +1,96 @@
+name: Fuzz (long)
+
+# The per-push `fuzz` job in ci.yml is a smoke: two minutes from a corpus that starts over on every
+# run, which catches a regression that fails on the first inputs and nothing deeper. This workflow
+# gives the same target the time a mutation-based fuzzer needs to reach rare paths, and keeps the
+# corpus between runs so every week starts where the last one stopped.
+#
+# A finding turns the job red and uploads the reproducer (crash-*, leak-*, timeout-*, oom-*,
+# slow-unit-*) as an artifact; replay it locally by running build/fuzz/fuzz_lexer on the file. The
+# corpus is saved even on a red run: the failing input goes to the artifact prefix, not the corpus.
+on:
+  schedule:
+    - cron: '41 5 * * 0'   # weekly, Sunday 05:41 UTC
+  workflow_dispatch:
+    inputs:
+      seconds:
+        description: 'Fuzzing time, in seconds (60-18000)'
+        required: false
+        default: '3600'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-long
+  cancel-in-progress: false
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    # The fuzzing time is bounded by the input check below (5 h at most); the build and the corpus
+    # save take minutes. 330 minutes leaves room for both at the maximum and stays under GitHub's
+    # 360-minute job limit.
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: scilex
+      - uses: actions/checkout@v6
+        with:
+          repository: RECHE23/real-regex
+          ref: v2026.9.7
+          path: real-regex
+      - uses: actions/checkout@v6
+        with:
+          repository: RECHE23/sciforge
+          ref: v2026.9.2
+          path: sciforge
+      # The dispatch input reaches the shell through the environment, never spliced into the script,
+      # and is refused unless it is a whole number of seconds inside the job's budget.
+      - name: Fuzzing time
+        env:
+          SECONDS_INPUT: ${{ inputs.seconds || '3600' }}
+        run: |
+          case "$SECONDS_INPUT" in
+            ''|*[!0-9]*) echo "::error::seconds must be a whole number, got '$SECONDS_INPUT'"; exit 1 ;;
+          esac
+          if [ "$SECONDS_INPUT" -lt 60 ] || [ "$SECONDS_INPUT" -gt 18000 ]; then
+            echo "::error::seconds must be within 60-18000, got $SECONDS_INPUT"; exit 1
+          fi
+          echo "FUZZ_TIME=$SECONDS_INPUT" >> "$GITHUB_ENV"
+      - name: Restore the corpus
+        uses: actions/cache/restore@v5
+        with:
+          path: scilex/build/fuzz/corpus
+          key: fuzz-long-scilex-${{ github.run_id }}
+          restore-keys: fuzz-long-scilex-
+      - name: Install clang + libFuzzer
+        run: sudo apt-get update && sudo apt-get install -y clang-18 libclang-rt-18-dev
+      # FUZZ_TIME comes from the environment set above; the Makefile reads it with `?=`.
+      - name: Fuzz
+        run: make -C scilex fuzz FUZZ_CLANG=clang++-18
+      - name: Corpus size
+        if: always()
+        run: |
+          n=$(find scilex/build/fuzz/corpus -type f 2>/dev/null | wc -l | tr -d ' ')
+          echo "corpus: $n unit(s)" | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Save the corpus
+        if: always()
+        uses: actions/cache/save@v5
+        with:
+          path: scilex/build/fuzz/corpus
+          key: fuzz-long-scilex-${{ github.run_id }}
+      - name: Upload the findings
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-long-findings
+          path: |
+            scilex/build/fuzz/crash-*
+            scilex/build/fuzz/leak-*
+            scilex/build/fuzz/timeout-*
+            scilex/build/fuzz/oom-*
+            scilex/build/fuzz/slow-unit-*
+          if-no-files-found: warn
+          retention-days: 90

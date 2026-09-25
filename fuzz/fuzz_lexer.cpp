@@ -23,10 +23,13 @@
  * Sanitizers (ASan/UBSan) and libFuzzer's timeout cover no-crash and
  * termination; the oracle covers correctness. Build & run: `make fuzz`.
  */
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -271,6 +274,48 @@ namespace {
                                                     }()};
     return all;
   }
+
+  //! \brief A seeded rule-set with its two lexers, built once per slot. Building a lexer decides every
+  //!        rule and builds its DFAs, which cost more than lexing and checking an 8 KiB input: with four
+  //!        lexers built per input the target ran at under one execution per second. The input picks one
+  //!        of \ref seeded_slots rule-sets per mode; the space of rule-sets itself is swept exhaustively
+  //!        by `make exhaustive-lex`, so the fuzzer spends its time on inputs.
+  struct seeded_grammar
+  {
+    std::vector<scilex::rule>    rules;
+    std::optional<scilex::lexer> lex;       //!< Empty when the assembly is unconstructible (mode c).
+    std::optional<scilex::lexer> token_lex;
+  };
+
+  constexpr std::uint64_t seeded_slots {256};
+
+  //! \brief How many of the fixed grammars one input is checked against (see LLVMFuzzerTestOneInput).
+  constexpr std::size_t grammars_per_input {3};
+
+  //! \brief The slot's rule-set from \p assemble and its lexers, built on first use.
+  //! \param[in] cache    One mode's slots.
+  //! \param[in] slot     The slot, below \ref seeded_slots.
+  //! \param[in] assemble The mode's rule-set generator, given the slot's own seed.
+  //! \return The slot's grammar.
+  const seeded_grammar& seeded_slot(std::vector<std::unique_ptr<seeded_grammar>>& cache,
+                                    std::uint64_t                                 slot,
+                                    std::vector<scilex::rule> (*assemble)(std::uint64_t))
+  {
+    std::unique_ptr<seeded_grammar>& entry {cache[slot]};
+    if (!entry) {
+      entry = std::make_unique<seeded_grammar>();
+      entry->rules = assemble(fnv1a(std::to_string(slot)));
+      try {
+        entry->lex.emplace(entry->rules); // ctor copies; rules stays for the reference
+        entry->token_lex.emplace(token_lexer(entry->rules));
+      }
+      catch (const std::invalid_argument&) {
+        entry->lex.reset(); // an unconstructible assembly: skipped, not a finding
+        entry->token_lex.reset();
+      }
+    }
+    return *entry;
+  }
 } // namespace
 
 extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data,
@@ -278,26 +323,32 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data,
 {
   const std::string_view input {reinterpret_cast<const char*>(data), size};
 
-  // Mode (a): every real grammar, all applicable invariants (incl. layout).
-  for (const prepared_grammar& gram : prepared_grammars()) {
+  // Mode (a): real grammars, all applicable invariants (incl. layout). The independent reference costs a
+  // match call per rule per position, so checking all nine grammars on every input left the target near
+  // one execution per second; each input checks grammars_per_input of them, in a rotation its hash picks,
+  // and `make fuzz-check` still runs all nine over its fixed inputs on every gate.
+  const std::uint64_t                         hash {fnv1a(input)};
+  const std::vector<prepared_grammar>&        all  {prepared_grammars()};
+  const std::size_t                           first {static_cast<std::size_t>(hash % all.size())};
+  for (std::size_t k {0}; k < std::min(grammars_per_input, all.size()); ++k) {
+    const prepared_grammar& gram {all[(first + k) % all.size()]};
     run_or_die(gram.source->name, gram.rules, gram.lex, gram.token_lex, input, gram.source->has_layout);
   }
 
-  // Mode (b): a rule-set seeded by the input itself (structural, no layout).
-  const std::vector<scilex::rule> rules {rules_from_seed(fnv1a(input))};
-  const scilex::lexer             lex   {rules}; // ctor copies; rules stays for the reference
-  run_or_die("random", rules, lex, token_lexer(rules), input, false);
-
-  // Mode (c): a multi-mode rule-set, seeded distinctly. Valid by construction,
-  // but guard the build so a future palette change can never turn a bad assembly
-  // into a crash — it is skipped, not reported as a finding.
-  const std::vector<scilex::rule> mm_rules {multi_mode_rules_from_seed(fnv1a(input) ^ 0x9e3779b97f4a7c15ULL)};
-  try {
-    const scilex::lexer mm_lex {mm_rules};
-    run_or_die("multimode", mm_rules, mm_lex, token_lexer(mm_rules), input, false);
+  // Mode (b): a rule-set picked by the input (structural, no layout).
+  static std::vector<std::unique_ptr<seeded_grammar>> random_slots(seeded_slots);
+  const seeded_grammar& random {seeded_slot(random_slots, hash % seeded_slots, &rules_from_seed)};
+  if (random.lex) {
+    run_or_die("random", random.rules, *random.lex, *random.token_lex, input, false);
   }
-  catch (const std::invalid_argument&) {
-    // an unconstructible assembly: skip it (not a finding)
+
+  // Mode (c): a multi-mode rule-set, picked distinctly. Valid by construction, but the build is
+  // guarded so that a future palette change can never turn a bad assembly into a crash.
+  static std::vector<std::unique_ptr<seeded_grammar>> multimode_slots(seeded_slots);
+  const seeded_grammar& multimode {seeded_slot(multimode_slots, (hash >> 32U) % seeded_slots,
+                                               &multi_mode_rules_from_seed)};
+  if (multimode.lex) {
+    run_or_die("multimode", multimode.rules, *multimode.lex, *multimode.token_lex, input, false);
   }
 
   return 0;

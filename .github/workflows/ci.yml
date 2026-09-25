@@ -8,7 +8,7 @@ name: CI
 # runs there via `make full-local-gate` on each slice — so CI deliberately omits macOS
 # and covers the *non-local* platforms instead: Linux (clang + g++-14), Windows/MSVC
 # and ARM. Run on main only (plus PRs); workflow_dispatch is available for ad-hoc runs.
-# Doc-only pushes are skipped. Coverage is a local gate (Apple-clang llvm-cov); not here.
+# Doc-only pushes are skipped. Coverage runs here too, under Linux clang, against the same 100 % bar.
 
 on:
   push:
@@ -86,3 +86,92 @@ jobs:
         run: bash sciforge/tools/check-pins.sh scilex
       - name: Exhaustive lexer-oracle check (scilex::lexer vs reference.hpp)
         run: make -C scilex exhaustive-lex
+
+  # The property oracle, twice: fuzz-check over the fixed adversarial inputs and every example grammar
+  # (deterministic, scaling cases included), then a libFuzzer smoke from a fresh corpus. The smoke catches
+  # what crashes early; the weekly fuzz-long workflow gives the same target hours and a kept corpus.
+  fuzz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: scilex
+      - uses: actions/checkout@v6
+        with:
+          repository: RECHE23/real-regex
+          ref: v2026.9.7
+          path: real-regex
+      - uses: actions/checkout@v6
+        with:
+          repository: RECHE23/sciforge
+          ref: v2026.9.2
+          path: sciforge
+      - name: Install clang + libFuzzer
+        run: sudo apt-get update && sudo apt-get install -y clang-18 libclang-rt-18-dev
+      - name: Deterministic oracle (fuzz-check)
+        run: make -C scilex fuzz-check
+      - name: libFuzzer smoke (ASan + UBSan)
+        run: make -C scilex fuzz FUZZ_TIME=120 FUZZ_CLANG=clang++-18
+      - name: Upload the findings
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fuzz-findings
+          path: |
+            scilex/build/fuzz/crash-*
+            scilex/build/fuzz/leak-*
+            scilex/build/fuzz/timeout-*
+            scilex/build/fuzz/oom-*
+            scilex/build/fuzz/slow-unit-*
+          if-no-files-found: warn
+
+  # The coverage bar of the local gate, measured by a second toolchain: Linux clang's source-based
+  # coverage must also reach 100 % on every dimension of include/.
+  coverage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: scilex
+      - uses: actions/checkout@v6
+        with:
+          repository: RECHE23/real-regex
+          ref: v2026.9.7
+          path: real-regex
+      - uses: actions/checkout@v6
+        with:
+          repository: RECHE23/sciforge
+          ref: v2026.9.2
+          path: sciforge
+      - name: Install clang + llvm
+        run: sudo apt-get update && sudo apt-get install -y clang-18 llvm-18 cmake
+      - name: Coverage at 100 % (coverage-gate)
+        run: make -C scilex coverage-gate COV_CXX=clang++-18 PROFDATA=llvm-profdata-18 LLVM_COV=llvm-cov-18
+
+  # A 32-bit build, run: size_t and pointers of 32 bits, every test executed, not only compiled. The
+  # binary's ELF class is checked, so a toolchain that ignored -m32 cannot pass for one that did not.
+  i686:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: scilex
+      - uses: actions/checkout@v6
+        with:
+          repository: RECHE23/real-regex
+          ref: v2026.9.7
+          path: real-regex
+      - uses: actions/checkout@v6
+        with:
+          repository: RECHE23/sciforge
+          ref: v2026.9.2
+          path: sciforge
+      - name: Install the 32-bit toolchain
+        run: sudo apt-get update && sudo apt-get install -y g++-multilib cmake
+      - name: Build and test with -m32
+        run: make -C scilex test CXX=g++ BUILD=build32 "CMAKE_CXX=-DCMAKE_CXX_COMPILER=g++ -DCMAKE_CXX_FLAGS=-m32"
+      - name: The test binary is 32-bit
+        run: readelf -h scilex/build32/scilex_tests_bin | grep -q 'Class:.*ELF32'

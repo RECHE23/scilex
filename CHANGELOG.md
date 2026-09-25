@@ -15,6 +15,14 @@ fuzz oracle.
   → 111.9 M (g++ 13.3 -O2; 107.8 M before the hybrid), 133.7 M → 110.3 M (clang 18; 106.8 M before).
   arm64 keeps more of the gap: 2.22 G instructions retired on 20 MiB (Apple clang), 1.99 G before the
   hybrid.
+- **The libFuzzer target runs ~7× more inputs per second** (0.7 → ~5 under ASan + UBSan, x86-64). It
+  built four lexers, DFAs included, for every input; the seeded rule-sets now come from 256 slots per
+  mode built once, each input checks three of the nine example grammars in a rotation its hash picks
+  (`make fuzz-check` still runs all nine), and `-max_len` is 2 KiB (`FUZZ_MAX_LEN`). What remains is
+  the independent reference's per-call cost in REAL.
+- CI runs the fuzz oracle (fuzz-check and a two-minute libFuzzer smoke), coverage under Linux clang
+  18 against the local gate's 100 % bar (`make coverage-gate`), and the test suite built and run as
+  32-bit (i686); a weekly workflow fuzzes for an hour from a corpus kept between runs.
 
 ### Added
 - `scilex/version.hpp` (`SCILEX_VERSION_MAJOR/MINOR/PATCH`, `SCILEX_VERSION_STRING`), included by
