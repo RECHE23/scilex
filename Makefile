@@ -54,7 +54,7 @@ FORMAT_FILES := $(shell find include tests examples fuzz benchmarks cli -name '*
 
 .PHONY: all build test sanitize coverage coverage-build coverage-html python-stubtest \
         lint misra doc doc-no-coverage doc-check format format-check full-local-gate \
-        python python-test bench bench-lex cli example coverage-gate fuzz-check exhaustive-lex check-pins fuzz version-check install install-smoke uninstall install-cli uninstall-cli release clean help
+        python python-test bench bench-lex cli example coverage-gate sabotage-help check-sabotage fuzz-check exhaustive-lex check-pins fuzz version-check install install-smoke uninstall install-cli uninstall-cli release clean help
 
 .DEFAULT_GOAL := help
 
@@ -136,6 +136,15 @@ coverage: coverage-build
 	@python3 tools/anonymize_coverage_html.py $(COV_DIR)/html $(CURDIR),scilex \
 	    $(abspath $(CURDIR)/../sciforge),sciforge $(abspath $(CURDIR)/../real-regex),real-regex
 	@echo "HTML coverage report: $(COV_DIR)/html/index.html"
+
+# The sabotage harness (tools/sabotage.py): break one exact thing, run one exact check, put it back,
+# rebuilding the extension module around a header or binding change. check-sabotage runs its
+# self-test: the artifact map, the rebuild before the check and after the revert, and SIGTERM.
+sabotage-help:
+	@python3 tools/sabotage.py --help
+
+check-sabotage:
+	@python3 tools/sabotage.py --self-test
 
 # The coverage bar the local gate and CI share: every dimension of the TOTAL row at 100%.
 coverage-gate:
@@ -349,6 +358,7 @@ full-local-gate:
 	@$(MAKE) fuzz-check
 	@$(MAKE) exhaustive-lex
 	@$(MAKE) python-test
+	@$(MAKE) check-sabotage
 	@if $(MYPY_PYTHON) -c 'import mypy' >/dev/null 2>&1; then $(MAKE) python-stubtest; else echo "full-local-gate: WARN — mypy absent from MYPY_PYTHON, python-stubtest skipped (CI runs it)"; fi
 	@set -euo pipefail; \
 	  mkdir -p $(BUILD); \
