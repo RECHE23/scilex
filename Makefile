@@ -303,7 +303,8 @@ example: cli
 	  || { echo "FAIL: examples/cpp/quickstart.cpp printed: $$out"; exit 1; }
 	@python3 tools/check_readme_quickstart.py --self-test && python3 tools/check_readme_quickstart.py
 	@python3 -c "import sys; s=open('README.md').read(); i=s.index('A modal grammar reads the same way'); \
-	  sys.stdout.write(s[i:].split('\x60\x60\x60text\n',1)[1].split('\x60\x60\x60',1)[0])" > $(BUILD)/cli-errors/readme_modal.lex
+	  block=s[i:].split('\n\n',2)[1]; sys.stdout.write(''.join(l[4:]+'\n' for l in block.split('\n')))" \
+	  > $(BUILD)/cli-errors/readme_modal.lex
 	@out="$$(printf 'say "a \\"b\\" c" now' | $(BUILD)/bin/scilex $(BUILD)/cli-errors/readme_modal.lex - 2>&1)"; \
 	 printf '%s\n' "$$out" | grep -q '^ESCAPE	\\"	1:8' && printf '%s\n' "$$out" | grep -q '^END	"	1:15' \
 	 && printf '%s\n' "$$out" | grep -q '^IDENT	now	1:17' \

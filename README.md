@@ -288,17 +288,15 @@ Output is one token per line — the kind, a tab, the lexeme, a tab, then `line:
 clear, positioned error (`my.lex:3: invalid regex: …`) — never a crash. See
 `examples/sample.lex` for a worked file.
 
-A modal grammar reads the same way — a string mode entered by `"` and left by the
-next one:
+A modal grammar reads the same way — a string mode entered by a double quote and
+left by the next one:
 
-```text
-WS	\s+	skip
-STRING	"	push=str
-TEXT	[^"\\]+	in=str
-ESCAPE	\\.	in=str
-END	"	in=str pop
-IDENT	[A-Za-z_]\w*
-```
+    WS	\s+	skip
+    STRING	"	push=str
+    TEXT	[^"\\]+	in=str
+    ESCAPE	\\.	in=str
+    END	"	in=str pop
+    IDENT	[A-Za-z_]\w*
 
 The format has one parser, in the optional header `scilex/grammar.hpp`
 (`scilex::parse_grammar(text, origin)`, `scilex::load_grammar(path)`, errors as
