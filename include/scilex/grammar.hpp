@@ -35,6 +35,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <real/real.hpp>
@@ -207,6 +208,30 @@ namespace scilex {
     }
 
     /*!
+     * \brief Gives \p out its transition, refusing a second one.
+     * \param[in,out] out       The rule being built.
+     * \param[in]     operation The transition.
+     * \param[in]     target    The mode it enters (empty for pop).
+     * \param[in]     origin    For errors: where the grammar came from.
+     * \param[in]     line      For errors: the 1-based line.
+     * \param[in]     column    For errors: the 1-based column of the option.
+     * \throws grammar_error When \p out already has a transition.
+     */
+    inline void set_transition(rule&              out,
+                               mode_action::op    operation,
+                               std::string_view   target,
+                               const std::string& origin,
+                               std::size_t        line,
+                               std::size_t        column)
+    {
+      if (out.action) {
+        throw grammar_error(origin, line, column, "a rule fires at most one transition (push=, set= or pop)");
+      }
+      mode_action action {.operation = operation, .target = std::string(target)};
+      out.action = std::move(action);
+    }
+
+    /*!
      * \brief Applies the space-separated \p options of one rule to \p out.
      * \param[in]     options The options field.
      * \param[in]     column  The 1-based column the field starts at.
@@ -230,14 +255,6 @@ namespace scilex {
         const std::size_t      end {std::min(options.find(' ', at), options.size())};
         const std::string_view word {options.substr(at, end - at)};
         const std::size_t      col {column + at};
-        const auto             transition {[&](mode_action::op operation, std::string_view target) {
-                                             if (out.action) {
-                                               throw grammar_error(origin, line, col, "a rule fires at most one "
-                                                                   "transition (push=, set= or pop)");
-                                             }
-                                             out.action                                                     = mode_action {.operation = operation,
-                                                                                                 .target    = std::string(target)};
-                                           }};
         const auto             mode_name {[&](std::string_view name) {
                                             if (name.empty() || name.find(',') != std::string_view::npos) {
                                               throw grammar_error(origin, line, col,
@@ -249,13 +266,13 @@ namespace scilex {
           out.skip = true;
         }
         else if (word == "pop") {
-          transition(mode_action::op::pop, {});
+          set_transition(out, mode_action::op::pop, {}, origin, line, col);
         }
         else if (word.starts_with("push=")) {
-          transition(mode_action::op::push, mode_name(word.substr(5)));
+          set_transition(out, mode_action::op::push, mode_name(word.substr(5)), origin, line, col);
         }
         else if (word.starts_with("set=")) {
-          transition(mode_action::op::set, mode_name(word.substr(4)));
+          set_transition(out, mode_action::op::set, mode_name(word.substr(4)), origin, line, col);
         }
         else if (word.starts_with("in=")) {
           std::string_view modes {word.substr(3)};
