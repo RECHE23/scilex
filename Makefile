@@ -272,6 +272,7 @@ example: cli
 	  sys.stdout.write(s[i:].split('\x60\x60\x60text\n',1)[1].split('\x60\x60\x60',1)[0])" > $(BUILD)/cli-errors/readme_modal.lex
 	@out="$$(printf 'say "a \\"b\\" c" now' | $(BUILD)/bin/scilex $(BUILD)/cli-errors/readme_modal.lex - 2>&1)"; \
 	 printf '%s\n' "$$out" | grep -q '^ESCAPE	\\"	1:8' && printf '%s\n' "$$out" | grep -q '^END	"	1:15' \
+	 && printf '%s\n' "$$out" | grep -q '^IDENT	now	1:17' \
 	  && echo "  the README's modal .lex grammar enters and leaves its string mode, escapes included" \
 	  || { echo "FAIL: the README's modal grammar lexed: $$out"; exit 1; }
 	@$(BUILD)/bin/scilex --version | grep -qE '^scilex [0-9]+\.[0-9]+\.[0-9]+ \(REAL [0-9]+\.[0-9]+\.[0-9]+\)$$' \
