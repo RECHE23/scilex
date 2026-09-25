@@ -800,3 +800,38 @@ class EndOfTests(unittest.TestCase):
             lexer.end_of("ab xy", token)
         with self.assertRaises(ValueError):
             lexer.end_of("ab", token)
+
+
+class ErrorCauseTests(unittest.TestCase):
+    """A positioned error keeps its cause: each failure reads as itself, not as "no rule matches"."""
+
+    def cause(self, rules, text):
+        with self.assertRaises(scilex.LexError) as caught:
+            scilex.Lexer(rules).tokenize(text)
+        return str(caught.exception)
+
+    def test_no_rule_matches(self):
+        message = self.cause([(1, r"[a-z]+")], "ab@")
+        self.assertIn("no rule matches", message)
+        self.assertIn("line 1, column 3", message)
+
+    def test_a_pop_at_the_root(self):
+        message = self.cause([(2, r"[a-z]+"), (1, r"\)", False, [], ("pop",))], "a)")
+        self.assertIn("cannot pop the mode stack", message)
+        self.assertIn("line 1, column 2", message)
+        self.assertNotIn("no rule matches", message)
+
+    def test_a_zero_length_match(self):
+        message = self.cause([(1, r"a*")], "b")
+        self.assertIn("zero-length match", message)
+        self.assertNotIn("no rule matches", message)
+
+    def test_an_unterminated_mode(self):
+        message = self.cause([(1, r"\(", False, [], ("push", "in")), (2, r"[a-z]+", False, ["in"])], "(ab")
+        self.assertIn("unterminated mode 'in'", message)
+        self.assertNotIn("no rule matches", message)
+
+    def test_the_scan_path_keeps_the_cause_too(self):
+        with self.assertRaises(scilex.LexError) as caught:
+            list(scilex.Lexer([(2, r"[a-z]+"), (1, r"\)", False, [], ("pop",))]).scan("a)"))
+        self.assertIn("cannot pop the mode stack", str(caught.exception))

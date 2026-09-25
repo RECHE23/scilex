@@ -39,6 +39,10 @@ fuzz oracle.
   threads, one iterator per thread.
 
 ### Fixed
+- **Python: a positioned error keeps its cause.** `Lexer.tokenize` and `Lexer.scan` rewrote every
+  positioned error as "no rule matches at line …", so a pop at the root, a zero-length match, an
+  unterminated mode or a mode stack too deep all read as a missing rule. The message is now the
+  lexer's own, followed by the position and the context snippet.
 - **The xml example grammar is linear under error recovery.** Its comment and CDATA rules were lazy,
   so they ran on Pike and rescanned the rest of the input at every `<`: 16 KiB of `<!-- x>` took
   3.5 s under `error_policy::token`. They are rewritten so that `match()` is the longest match —

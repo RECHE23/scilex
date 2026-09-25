@@ -128,7 +128,9 @@ def _attach_position(exc, source=None):
     Always sets ``.position`` (from the byte fields the C++ layer attaches). When
     ``source`` is given (the tokenize/scan paths have it), also sets ``.context`` — a
     few bytes either side of the offending byte, that byte fenced in ``‹ ›`` — and
-    rewrites the message to include the position and that snippet. Layout errors have
+    appends the position and that snippet to the message, which keeps its cause (no rule
+    matches, a pop at the root, a zero-length match, an unterminated mode, a mode stack too
+    deep). Layout errors have
     no source here, so they keep ``.position`` only. Positions are **byte** offsets
     (SciLex's UTF-8 model), so the snippet is sliced from the encoded bytes and decoded
     with ``errors="replace"``: a window edge splitting a codepoint shows ``�``, never
@@ -146,7 +148,7 @@ def _attach_position(exc, source=None):
     here = data[offset:offset + 1].decode("utf-8", "replace")
     after = data[offset + 1:offset + 1 + window].decode("utf-8", "replace")
     exc.context = f"{before}‹{here}›{after}"
-    exc.args = (f"no rule matches at line {exc.line}, column {exc.column}: {exc.context}",)
+    exc.args = (f"{exc}; at line {exc.line}, column {exc.column}: {exc.context}",)
 
 
 def _normalize_action(action, index):
