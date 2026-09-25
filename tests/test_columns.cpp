@@ -224,11 +224,11 @@ namespace {
 
   TEST(end_of_refuses_a_token_from_another_source)
   {
-    const scilex::lexer lex  {make_lexer(scilex::column_unit::bytes)};
-    const std::string   src  {"ab cd"};
-    const std::string   copy {src};
+    const scilex::lexer lex   {make_lexer(scilex::column_unit::bytes)};
+    const std::string   src   {"ab cd"};
+    const std::string   other {"ab cd"}; // the same text in another buffer: not the token's source
     const auto          toks = lex.tokenize(src);
-    EXPECT_THROWS(static_cast<void>(lex.end_of(copy, toks[0])), std::invalid_argument);
+    EXPECT_THROWS(static_cast<void>(lex.end_of(other, toks[0])), std::invalid_argument);
     EXPECT_THROWS(static_cast<void>(lex.end_of(std::string_view(src).substr(0, 1), toks[0])),
                   std::invalid_argument);
     scilex::token past {toks[1]};
