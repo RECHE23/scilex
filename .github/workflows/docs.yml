@@ -1,7 +1,8 @@
 name: Docs
 
-# Build the Doxygen API reference (with the embedded coverage report and the
-# guided tour) and publish it to GitHub Pages on every push to the default branch.
+# Build the site -- the Sphinx guides and references at the root, the Doxygen API reference (with the
+# embedded coverage report and the guided tour) under api/ -- and publish it to GitHub Pages on every
+# push to the default branch.
 # Enable Pages once in the repository settings with "GitHub Actions" as the source.
 # SciLex compiles against REAL's headers, so REAL is checked out as a sibling
 # (mirroring ci.yml) for the coverage build that `make doc` runs.
@@ -37,14 +38,21 @@ jobs:
           repository: RECHE23/sciforge
           ref: v2026.9.2
           path: sciforge
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
       - name: Install Doxygen, Graphviz, Clang and LLVM coverage tools
         run: sudo apt-get update && sudo apt-get install -y doxygen graphviz clang llvm
-      - name: Generate the API reference (Doxygen + embedded coverage + guided tour)
-        run: make -C scilex doc
+      - name: Install the extension's build backend (the Python reference imports the built module)
+        run: python -m pip install setuptools
+      - name: The site's gate (every Sphinx warning fatal, every shown example run)
+        run: make -C scilex docs-site-gate
+      - name: Build the site (guides and references, the Doxygen reference and coverage under api/)
+        run: make -C scilex docs-site
       - uses: actions/configure-pages@v6
       - uses: actions/upload-pages-artifact@v5
         with:
-          path: scilex/build/doc/html
+          path: scilex/build/site/html
 
   deploy:
     needs: build

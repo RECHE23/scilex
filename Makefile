@@ -54,7 +54,7 @@ FORMAT_FILES := $(shell find include tests examples fuzz benchmarks cli -name '*
 
 .PHONY: all build test sanitize coverage coverage-build coverage-html python-stubtest \
         lint misra doc doc-no-coverage doc-check format format-check full-local-gate \
-        python python-test bench bench-lex cli example coverage-gate sabotage-help check-sabotage fuzz-check exhaustive-lex check-pins fuzz version-check install install-smoke uninstall install-cli uninstall-cli release clean help
+        python python-test bench bench-lex cli example coverage-gate doc-xml docs-venv docs-site docs-site-gate sabotage-help check-sabotage fuzz-check exhaustive-lex check-pins fuzz version-check install install-smoke uninstall install-cli uninstall-cli release clean help
 
 .DEFAULT_GOAL := help
 
@@ -198,6 +198,40 @@ doc-no-coverage:
 	mkdir -p $(BUILD)/doc
 	doxygen Doxyfile
 	@echo "API reference: $(BUILD)/doc/html/index.html"
+
+# The Sphinx site (docs/site): guides, the C++ reference through Breathe from Doxygen's XML, the Python
+# reference from the built extension's docstrings, with the Doxygen pages under api/ and the coverage
+# report under api/coverage/. The toolchain is docs/requirements.txt, installed into DOCS_VENV.
+DOCS_VENV   ?= $(BUILD)/.venv-docs
+SPHINXBUILD ?= $(DOCS_VENV)/bin/sphinx-build
+
+docs-venv:
+	@test -x $(SPHINXBUILD) || { python3 -m venv $(DOCS_VENV) && $(DOCS_VENV)/bin/pip install -q -r docs/requirements.txt; }
+
+# The XML Breathe reads, from the Doxyfile with HTML off. Its own pass, quiet and not failing: its
+# only warnings are the documentation's references to private members, which the XML output cannot
+# resolve, and the strict HTML pass (doc-no-coverage, WARN_AS_ERROR) reads the same sources.
+doc-xml:
+	@mkdir -p $(BUILD)/doc
+	@( cat Doxyfile; printf 'GENERATE_HTML = NO\nGENERATE_XML = YES\nXML_OUTPUT = xml\nWARN_AS_ERROR = NO\nQUIET = YES\n' ) | doxygen - >/dev/null 2>&1
+	@echo "doc-xml: $(BUILD)/doc/xml"
+
+docs-site: docs-venv python doc doc-xml
+	rm -rf $(BUILD)/site
+	PYTHONPATH=python $(SPHINXBUILD) -q -b html -d $(BUILD)/site/doctrees docs/site $(BUILD)/site/html
+	@rm -rf $(BUILD)/site/html/.doctrees $(BUILD)/site/html/api
+	@cp -R $(BUILD)/doc/html $(BUILD)/site/html/api
+	@! grep -rlE '/Users/|/home/runner/' $(BUILD)/site/html | head -3 | grep . \
+	  || { echo "docs-site: a machine-local path is about to be published (above)"; exit 1; }
+	@echo "docs-site: $(BUILD)/site/html/index.html"
+
+# The site's gate: every Sphinx warning fatal (and all of them reported), then every shown Python
+# example run as a doctest. Needs no coverage build: the Doxygen XML is enough.
+docs-site-gate: docs-venv python doc-no-coverage doc-xml
+	rm -rf $(BUILD)/site-gate
+	PYTHONPATH=python $(SPHINXBUILD) -q -W --keep-going -b html -d $(BUILD)/site-gate/doctrees docs/site $(BUILD)/site-gate/html
+	@python3 tools/check_site_examples.py --self-test
+	@PYTHONPATH=python python3 tools/check_site_examples.py
 
 format:
 	uncrustify -c $(SCIFORGE_LINT)/uncrustify.cfg --replace --no-backup $(FORMAT_FILES)
@@ -359,6 +393,7 @@ full-local-gate:
 	@$(MAKE) symbol-hygiene
 	@$(MAKE) doc-no-coverage
 	@$(MAKE) doc-check
+	@$(MAKE) docs-site-gate
 	@$(MAKE) misra
 	@$(MAKE) test
 	@$(MAKE) example

@@ -1,0 +1,15 @@
+/* SciLex site accents over pydata-sphinx-theme: a teal primary, tabular figures in tables. */
+html[data-theme="light"] {
+  --pst-color-primary: #2e6c70;
+  --pst-color-secondary: #8a6618;
+}
+html[data-theme="dark"] {
+  --pst-color-primary: #72b4b7;
+  --pst-color-secondary: #d9b25c;
+}
+table {
+  font-variant-numeric: tabular-nums;
+}
+.sd-card-title {
+  font-weight: 600;
+}

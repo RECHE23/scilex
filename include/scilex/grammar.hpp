@@ -47,7 +47,7 @@ namespace scilex {
    * \brief Thrown for a malformed `.lex` grammar: where (origin, 1-based line, and 1-based byte column
    *        in the line when the cause has one) and why.
    *
-   * \ref what reads `origin:line[:column]: cause`, the form compilers and editors recognize, or
+   * `what()` reads `origin:line[:column]: cause`, the form compilers and editors recognize, or
    * `origin: cause` for an error with no line (an unreadable file, a grammar with no rules).
    */
   class grammar_error : public std::runtime_error
