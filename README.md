@@ -323,6 +323,9 @@ make sanitize    # tests under AddressSanitizer + UndefinedBehaviorSanitizer
 make lint        # clang-tidy
 make format      # uncrustify, in place
 make doc         # API reference (Doxygen) with embedded coverage
+make fuzz        # libFuzzer + ASan/UBSan over the property oracle (FUZZ_TIME seconds)
+make full-local-gate  # every gate, cheap first; the pre-push check
+make sabotage-help    # the sabotage harness: break one thing, run one check, put it back
 ```
 
 The API reference is published at <https://reche23.github.io/scilex/>.
@@ -330,12 +333,9 @@ The API reference is published at <https://reche23.github.io/scilex/>.
 Override the compiler with `make test CXX=g++-14`.
 
 **Coverage bar.** SciLex holds the SciLang-stack gate — **100% on all four
-dimensions** (lines, functions, regions and branches) of `include/`, checked by
-`make coverage` and enforced by `make full-local-gate` (using Apple clang 16).
-The published report on GitHub Pages / the doc tarball (built on clang 18) reads
-mid-90s (newer clang instruments more branches). This is the documented toolchain
-distinction; see the live report for exact figures. (REAL is the other documented
-exception to the 100% gate — see its README.)
+dimensions** (lines, functions, regions and branches) of `include/`, enforced by
+`make coverage-gate`: locally by `make full-local-gate` (Apple clang), and in CI under
+Linux clang 18 on every push.
 
 `scilex::scilex` is the CMake target — `add_subdirectory`, `FetchContent`, or an
 installed config package. The config calls `find_dependency(real)`, so installing
