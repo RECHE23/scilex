@@ -107,6 +107,7 @@ namespace {
     EXPECT_EQ(refusal("A\ta\tpush=\n").cause(), "empty mode name in 'push='");
     EXPECT_EQ(refusal("A\ta\tset=\n").cause(), "empty mode name in 'set='");
     EXPECT_EQ(refusal("A\ta\tin=x,,y\n").cause(), "empty mode name in 'in=x,,y'");
+    EXPECT_EQ(refusal("A\ta\tpush=x,y\n").cause(), "a mode name cannot hold a comma: 'push=x,y'");
 
     const scilex::grammar_error none {refusal("# only a comment\n\n")};
     EXPECT_EQ(none.line(), 0U);

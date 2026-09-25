@@ -208,14 +208,14 @@ namespace scilex {
     }
 
     /*!
-     * \brief \p name, refused when it is empty or holds a comma.
+     * \brief \p name, refused when it is empty or holds a comma (which separates the modes of `in=`).
      * \param[in] name   A mode name from an option.
      * \param[in] word   For errors: the whole option.
      * \param[in] origin For errors: where the grammar came from.
      * \param[in] line   For errors: the 1-based line.
      * \param[in] column For errors: the 1-based column of the option.
      * \return \p name.
-     * \throws grammar_error When \p name is empty.
+     * \throws grammar_error When \p name is empty or holds a comma.
      */
     inline std::string_view checked_mode(std::string_view   name,
                                          std::string_view   word,
@@ -224,7 +224,8 @@ namespace scilex {
                                          std::size_t        column)
     {
       if (name.empty() || name.find(',') != std::string_view::npos) {
-        std::string cause {"empty mode name in '"};
+        // A comma separates the modes of in=, so no mode can be named with one.
+        std::string cause {name.empty() ? "empty mode name in '" : "a mode name cannot hold a comma: '"};
         cause += word;
         cause += '\'';
         throw grammar_error(origin, line, column, cause);
