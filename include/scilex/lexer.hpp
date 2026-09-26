@@ -46,6 +46,7 @@ namespace scilex {
 
   class token_iterator;
   class token_range;
+  class token_stream;
 
   /*!
    * \brief Whether tokenization appends a synthetic end-of-input token.
@@ -384,6 +385,16 @@ namespace scilex {
     token_range scan(std::string_view source,
                      eof_policy       policy = eof_policy::omit) const&& = delete;
 
+    /*!
+     * \brief A stream: text fed in pieces, the tokens returned as soon as no text still to come can change
+     *        them, and exactly the tokens \ref tokenize gives the whole text (see \ref token_stream).
+     * \return A stream over this lexer, which must outlive it.
+     */
+    [[nodiscard]] token_stream stream() const&;
+
+    //! \brief Deleted: the stream would point into a temporary lexer.
+    token_stream               stream() const&& = delete;
+
     //! \brief The per-mode-id layout-significance policy (see \ref scilex::layout).
     //!        Index by a token's `mode_id`; `false` marks an insignificant mode.
     //!        Empty unless the lexer was built with `insignificant_modes`.
@@ -471,6 +482,7 @@ namespace scilex {
   private:
 
     friend class token_iterator;
+    friend class token_stream;
 
     //! \brief Per mode, what the munches over one source have proved (\c real::dfa_munch_memo); one
     //!        object per tokenization or iterator, made by \ref memos_for. An unarmed memo holds
@@ -520,9 +532,66 @@ namespace scilex {
                    token&              out,
                    munch_memos&        memos) const
     {
+      return scan_step(source, cursor, stack, out, memos, whole_text {}) == scan_status::token;
+    }
+
+    //! \brief What \ref scan_step did.
+    enum class scan_status : std::uint8_t
+    {
+      token,   //!< Produced a token.
+      end,     //!< Reached the end of the input.
+      pending, //!< Stopped where more text could change what comes next (the caller restores its cursor).
+    };
+
+    //! \brief The gate of a scan over a whole text: every munch may go ahead, and the end is the end.
+    struct whole_text
+    {
+      //! \brief Always.
+      //! \return True.
+      [[nodiscard]] static constexpr bool ready(std::size_t /*mode*/,
+                                                std::size_t /*offset*/) noexcept
+      {
+        return true;
+      }
+
+      //! \brief Always.
+      //! \return True.
+      [[nodiscard]] static constexpr bool at_end() noexcept
+      {
+        return true;
+      }
+    };
+
+    /*!
+     * \brief \ref scan_next with a gate asked before each munch: `gate.ready(mode, offset)` is false where
+     *        text not yet seen could change the munch there, and `gate.at_end()` whether the end of
+     *        \p source is the end of the input. A scan over a whole text passes \ref whole_text; a stream
+     *        (\ref token_stream) passes one that stops at the first munch still open.
+     * \tparam Gate The gate's type.
+     * \param[in]     source The text available.
+     * \param[in,out] cursor Current position; on \ref scan_status::pending it may have moved over skipped
+     *                matches, which the caller undoes.
+     * \param[in,out] stack  The mode stack (likewise).
+     * \param[out]    out    The token, on \ref scan_status::token.
+     * \param[in,out] memos  What earlier munches over \p source proved.
+     * \param[in]     gate   The gate.
+     * \return What the step did.
+     * \throws lex_error As \ref scan_next.
+     */
+    template <typename Gate>
+    scan_status scan_step(std::string_view    source,
+                          position&           cursor,
+                          std::vector<frame>& stack,
+                          token&              out,
+                          munch_memos&        memos,
+                          const Gate&         gate) const
+    {
       while (cursor.offset < source.size()) {
-        const std::size_t  mode {stack.back().mode_id};
-        const munch_result m    {munch_at(mode, source, cursor.offset, memos)};
+        const std::size_t mode {stack.back().mode_id};
+        if (!gate.ready(mode, cursor.offset)) {
+          return scan_status::pending;
+        }
+        const munch_result m {munch_at(mode, source, cursor.offset, memos)};
 
         if (!m.have) {
           if (errors_ == error_policy::raise) {
@@ -536,13 +605,21 @@ namespace scilex {
           // match attempt. The lexeme is the exact offending bytes.
           const position err_start {cursor};
           advance(source, cursor, 1); // the byte at err_start is unmatched by definition
-          while (cursor.offset < source.size()
-                 && !starts_a_match(mode, source, cursor.offset, memos)) {
+          while (cursor.offset < source.size()) {
+            if (!gate.ready(mode, cursor.offset)) {
+              return scan_status::pending;
+            }
+            if (starts_a_match(mode, source, cursor.offset, memos)) {
+              break;
+            }
             advance(source, cursor, 1);
+          }
+          if (cursor.offset == source.size() && !gate.at_end()) {
+            return scan_status::pending; // the run may go on into text still to come
           }
           out = token {scilex::error, source.substr(err_start.offset, cursor.offset - err_start.offset),
                        err_start, mode};
-          return true;
+          return scan_status::token;
         }
         if (m.len == 0) {
           // A rule won with a zero-length match (a nullable rule and no longer match at this
@@ -568,9 +645,12 @@ namespace scilex {
           // Tag the token with the mode it was lexed in (captured before the
           // transition above) — Layout Awareness reads it; the scan is untouched.
           out = token {rules_[best_idx].kind, source.substr(start.offset, best_len), start, mode};
-          return true;
+          return scan_status::token;
         }
         // Skip rule: keep scanning for the next emitted token (possibly in a new mode).
+      }
+      if (!gate.at_end()) {
+        return scan_status::pending;
       }
       if (stack.size() > 1) {
         if (errors_ == error_policy::raise) {
@@ -582,9 +662,9 @@ namespace scilex {
         // the root so the next call reports a clean end of input.
         out = token {scilex::error, source.substr(cursor.offset, 0), cursor, stack.back().mode_id};
         stack.resize(1);
-        return true;
+        return scan_status::token;
       }
-      return false;
+      return scan_status::end;
     }
 
     //! \brief Interns a mode name to its id, assigning the next id on first sight.
@@ -1272,6 +1352,183 @@ namespace scilex {
                                  eof_policy       policy) const&
   {
     return token_range(*this, source, policy);
+  }
+
+  /*!
+   * \brief Text fed in pieces, lexed as it arrives, with exactly the tokens \ref lexer::tokenize gives the
+   *        whole text: the same munches, modes, positions and errors.
+   *
+   * A token is returned only once no text still to come can change it, which is not "every token but the
+   * last": a rule `a[^z]*z` gives way to one token the moment a `z` arrives, however many tokens other rules
+   * made of the text before it. So before each munch the stream asks every rule of the active mode whether
+   * more text could change its match there (`real::regex::can_extend`), and stops at the first munch
+   * where one could. \ref finish lexes the rest with the end of the text as the end.
+   *
+   * The stream keeps the text from the first token it has not returned; what it returned is dropped at the
+   * next \ref feed. So memory follows the longest token, not the input -- and a token's lexeme views that
+   * buffer: it is valid until the next \ref feed or \ref finish. Positions are in the whole text.
+   *
+   * \code
+   * scilex::token_stream in {lex.stream()};
+   * while (read(chunk)) {
+   *   for (const scilex::token& t : in.feed(chunk)) { use(t); }
+   * }
+   * for (const scilex::token& t : in.finish()) { use(t); }
+   * \endcode
+   */
+  class token_stream
+  {
+  public:
+
+    /*!
+     * \brief A stream over \p owner, at the start of the text.
+     * \param[in] owner The lexer (must outlive the stream).
+     */
+    explicit token_stream(const lexer& owner)
+      : owner_(&owner),
+        stack_ {frame {.mode_id = 0, .entry_pos = cursor_}}
+    {}
+
+    /*!
+     * \brief Appends \p chunk and returns the tokens no text still to come can change.
+     * \param[in] chunk The next piece of the text.
+     * \return The tokens, in order; their lexemes are valid until the next call.
+     * \throws lex_error Where \ref lexer::tokenize would throw on the whole text, once the text decides it.
+     * \throws std::logic_error After \ref finish.
+     */
+    [[nodiscard]] std::vector<token> feed(std::string_view chunk)
+    {
+      if (finished_) {
+        throw std::logic_error("token_stream::feed after finish");
+      }
+      drop_returned();
+      buffer_.append(chunk);
+      return collect(false);
+    }
+
+    /*!
+     * \brief Ends the text and returns the tokens that remain.
+     * \return The tokens, in order; their lexemes are valid until the stream is destroyed.
+     * \throws lex_error Where \ref lexer::tokenize would throw on the whole text.
+     * \throws std::logic_error When called twice.
+     */
+    [[nodiscard]] std::vector<token> finish()
+    {
+      if (finished_) {
+        throw std::logic_error("token_stream::finish called twice");
+      }
+      drop_returned();
+      finished_ = true;
+      return collect(true);
+    }
+
+    //! \brief Bytes the stream holds: from the first token not yet returned to the end of what was fed.
+    //! \return The count.
+    [[nodiscard]] std::size_t buffered() const noexcept
+    {
+      return buffer_.size() - cursor_.offset;
+    }
+
+  private:
+
+    //! \brief The gate a stream scans with: a munch goes ahead only where no rule of the mode can extend.
+    struct gate
+    {
+      const token_stream* stream; //!< The stream (its lexer and buffer).
+      bool                final;  //!< The end of the buffer is the end of the text.
+
+      //! \brief Whether the munch at \p offset in mode \p mode is final.
+      //! \param[in] mode   The active mode.
+      //! \param[in] offset Where the munch starts, in the buffer.
+      //! \return True when no text still to come can change it.
+      [[nodiscard]] bool ready(std::size_t mode,
+                               std::size_t offset) const
+      {
+        if (final) {
+          return true;
+        }
+        const lexer& lex {*stream->owner_};
+        for (std::size_t idx {0}; idx < lex.rules_.size(); ++idx) {
+          if (lex.rule_active_in_mode(idx, mode) && lex.rules_[idx].pattern.can_extend(stream->buffer_, offset)) {
+            return false;
+          }
+        }
+        return true;
+      }
+
+      //! \brief Whether the end of the buffer is the end of the text.
+      //! \return True after \ref finish.
+      [[nodiscard]] bool at_end() const noexcept
+      {
+        return final;
+      }
+    };
+
+    //! \brief Lexes the buffer from the cursor as far as the gate allows.
+    //! \param[in] final Whether the end of the buffer is the end of the text.
+    //! \return The tokens produced, their positions in the whole text.
+    std::vector<token> collect(bool final)
+    {
+      std::vector<token>  out;
+      lexer::munch_memos  memos {owner_->memos_for(buffer_)};
+      const gate          g {.stream = this, .final = final};
+      token               next {};
+      while (true) {
+        const position           saved_cursor {cursor_};
+        const std::vector<frame> saved_stack  {stack_};
+        lexer::scan_status       status       {lexer::scan_status::end};
+        try {
+          status = owner_->scan_step(buffer_, cursor_, stack_, next, memos, g);
+        }
+        catch (const lex_error& e) {
+          finished_ = true;
+          throw lex_error(e.what(), in_text(e.where()));
+        }
+        if (status == lexer::scan_status::pending) {
+          cursor_ = saved_cursor; // undo any skipped matches the step went over
+          stack_  = saved_stack;
+          return out;
+        }
+        if (status == lexer::scan_status::end) {
+          return out;
+        }
+        next.start = in_text(next.start);
+        out.push_back(next);
+      }
+    }
+
+    //! \brief Drops the text before the cursor: returned, and no longer viewed by anything valid.
+    void drop_returned()
+    {
+      const std::size_t k {cursor_.offset};
+      buffer_.erase(0, k);
+      base_          += k;
+      cursor_.offset  = 0;
+      for (frame& f : stack_) {
+        f.entry_pos.offset -= k; // modular: a mode entered before the dropped text keeps a consistent offset
+      }
+    }
+
+    //! \brief \p where, a position in the buffer, as a position in the whole text.
+    //! \param[in] where A position whose offset is relative to the buffer.
+    //! \return The same position, offset from the start of the text.
+    [[nodiscard]] position in_text(position where) const noexcept
+    {
+      where.offset += base_;
+      return where;
+    }
+
+    const lexer*       owner_;              //!< The lexer.
+    std::string        buffer_;             //!< The text from the first token not yet returned.
+    std::size_t        base_     {0};       //!< Offset of the buffer's first byte in the whole text.
+    position           cursor_   {0, 1, 1}; //!< Where lexing resumes, in the buffer (line and column in the text).
+    std::vector<frame> stack_;              //!< The mode stack.
+    bool               finished_ {false};   //!< \ref finish was called, or a lex_error ended the text.
+  };
+
+  inline token_stream lexer::stream() const&
+  {
+    return token_stream(*this);
   }
 } // namespace scilex
 
