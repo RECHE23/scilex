@@ -219,10 +219,11 @@ TEST(stream_errors_where_tokenize_does)
 // come, so it is returned only once a rule matches after it, or at the end. And it ends at the first
 // position where a rule COULD match: in `@"ab 1"` it ends at the quote, which opens a string whose close
 // may not have arrived yet, not at the `1` inside it that matches on its own.
+// A run that reaches the end of the text is returned by finish.
 TEST(stream_recovers_as_tokenize_does)
 {
   const scilex::lexer lex {scilex::examples::json::make_rules(), {}, {}, scilex::error_policy::token};
-  for (const std::string text : {"[1, @@#, 2, $$]", "[@\"ab 1\", 2]"}) {
+  for (const std::string text : {"[1, @@#, 2, $$]", "[@\"ab 1\", 2]", "[1, $$"}) {
     const std::vector<std::string> whole {describe_all(lex.tokenize(text))};
     for (std::size_t cut {0}; cut <= text.size(); ++cut) {
       for (std::size_t second {cut}; second <= text.size(); ++second) {
@@ -260,5 +261,50 @@ TEST(stream_reports_an_unterminated_mode_where_it_was_entered)
             + std::to_string(e.where().column) + " " + e.what();
     }
     EXPECT_EQ(got, expected);
+  }
+}
+
+// A zero-length win is fatal under either policy: the stream throws where tokenize does, however the
+// text is cut -- `[0-9]*` wins with nothing at the `x`, once no digit can still arrive before it.
+TEST(stream_refuses_a_zero_length_win_where_tokenize_does)
+{
+  std::vector<scilex::rule> rules;
+  rules.push_back({.kind = 0, .pattern = real::regex("[0-9]*"), .skip = false});
+  const scilex::lexer lex  {std::move(rules)};
+  const std::string   text {"12x"};
+  std::string         expected;
+  try {
+    static_cast<void>(lex.tokenize(text));
+  }
+  catch (const scilex::lex_error& e) {
+    expected = std::to_string(e.where().offset) + " " + e.what();
+  }
+  EXPECT(!expected.empty());
+  for (std::size_t cut {0}; cut <= text.size(); ++cut) {
+    scilex::token_stream in {lex.stream()};
+    std::string          got;
+    try {
+      static_cast<void>(in.feed(text.substr(0, cut)));
+      static_cast<void>(in.feed(text.substr(cut)));
+      static_cast<void>(in.finish());
+    }
+    catch (const scilex::lex_error& e) {
+      got = std::to_string(e.where().offset) + " " + e.what();
+    }
+    EXPECT_EQ(got, expected);
+  }
+}
+
+// Recovery: a mode still pushed at the end is one zero-width error token, as tokenize gives it, and only
+// finish can know the text ended inside the mode.
+TEST(stream_recovers_an_unterminated_mode_as_tokenize_does)
+{
+  const scilex::lexer            lex   {scilex::examples::xml::make_rules(), {}, {}, scilex::error_policy::token};
+  const std::string              text  {"<root>text <open attr"};
+  const std::vector<std::string> whole {describe_all(lex.tokenize(text))};
+  EXPECT(!whole.empty());
+  EXPECT(whole.back().rfind(std::to_string(scilex::error) + "||", 0) == 0); // zero-width, at the end
+  for (std::size_t cut {0}; cut <= text.size(); ++cut) {
+    EXPECT(streamed(lex, text, {cut}) == whole);
   }
 }
