@@ -25,6 +25,15 @@ fuzz oracle.
   32-bit (i686); a weekly workflow fuzzes for an hour from a corpus kept between runs.
 
 ### Added
+- **Text fed in pieces: `lexer::stream()` and `Lexer.stream()`.** A `scilex::token_stream` (Python
+  `scilex.TokenStream`) takes the text as it arrives — `feed(chunk)`, then `finish()` — and returns
+  exactly the tokens `tokenize` gives the whole text, with the same munches, modes, positions and
+  errors, wherever the pieces are cut. A token comes out once no text still to come can change it,
+  which REAL's `can_extend` answers per rule; the stream keeps only the text from the first token it
+  has not returned, so a 72 KB JSON document fed in 64-byte pieces never holds more than 128 bytes.
+  Every example grammar is checked against `tokenize` for every cut in two and for random pieces. A
+  Python stream takes `str` or `bytes` pieces (a `bytes` piece may end inside a UTF-8 sequence), and
+  its errors carry `.position` and the bytes around it. See Guide → Streaming.
 - **The `.lex` grammar format is a library header**, `scilex/grammar.hpp` (optional; `scilex.hpp` does
   not include it): `parse_grammar(text, origin)` and `load_grammar(path)` return the rules and their
   names, and a malformed grammar raises `scilex::grammar_error` with its line and column. The format
@@ -86,6 +95,11 @@ fuzz oracle.
   whole source (REAL 2026.9.7's `real::dfa_munch_memo`), so `a*b` beside `a` over `aaa…` — n(n+1)/2
   steps before — lexes 256 KiB in 8.8 ms. The quadratic worst case remains only through a rule left
   on Pike. Requires `real-regex>=2026.9.7`.
+
+- **Build requires `real-regex >= 2026.9.8`** (was `>= 2026.9.7`), the first release carrying
+  `basic_regex::can_extend`, which the stream asks; the FetchContent tag and CI move with it. Rules
+  left on Pike now scan through lazy DFAs each thread leases from its regex's pool, so threads
+  sharing a lexer no longer queue on such a rule's lock.
 
 ### Added
 - `scilex::layout(tokens, source, tab_policy, mode_significant)`: `tab_policy::python` measures

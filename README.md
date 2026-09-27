@@ -97,6 +97,13 @@ tokens = lx.tokenize("foo 42", eof=True)
 for tok in lx.scan("foo 42"):
     print(tok.kind, tok.lexeme, tok.position)
 
+# Text in pieces: exactly tokenize's tokens, each once no text to come can change it
+stream = lx.stream()
+for chunk in ("fo", "o 4", "2"):
+    for tok in stream.feed(chunk):
+        print(tok.lexeme)
+tail = stream.finish()
+
 # Errors with context
 try:
     lx.tokenize("foo @")
@@ -216,11 +223,11 @@ A lexer is immutable once built. Its DFAs are built in the constructor, and ever
 `tokenize` call and every `scan` range keeps its own mode stack and walk memos, so one
 `const` lexer can be shared by any number of threads, each lexing its own text —
 checked under ThreadSanitizer with eight threads over four grammars, the hybrid ones
-included. An iterator from `scan` is a cursor: drive each from a single thread. Two
-caveats on scaling, not on safety: rules left on Pike (`pike_rules(mode)`) call
-`real::regex`, whose lazy-DFA cache is shared per regex behind a lock in REAL 2026.9.7;
-and in Python, `scan` holds the GIL for each step while `tokenize` releases it around
-inputs of 4 KB or more.
+included. An iterator from `scan` and a stream from `stream()` are cursors: drive each
+from a single thread. Rules left on Pike (`pike_rules(mode)`) call `real::regex`, whose
+lazy DFAs each thread leases from the regex's own pool, so they take no lock. In Python,
+`scan` and a stream's `feed` hold the GIL for each call while `tokenize` releases it
+around inputs of 4 KB or more.
 
 ## Layout Awareness (Level A)
 

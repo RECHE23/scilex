@@ -10,4 +10,5 @@ errors
 positions
 performance
 threads
+streaming
 ```

@@ -5,6 +5,9 @@
 //   _scilex.tokenize(handle, text, eof) -> list  # [(kind, lexeme, offset, line, column, mode), …]
 //   _scilex.scan_start(handle, text, eof) -> capsule  # a lazy scan cursor
 //   _scilex.scan_next(cursor) -> tuple | None    # the next 6-token tuple, or None at the end
+//   _scilex.stream_start(handle) -> capsule       # text fed in pieces (scilex::token_stream)
+//   _scilex.stream_feed(stream, chunk) -> list     # the tokens no text still to come can change
+//   _scilex.stream_finish(stream) -> list          # the tokens left once the text has ended
 //   _scilex.layout(tokens, insignificant=()) -> list  # mode-aware NEWLINE/INDENT/DEDENT
 //   _scilex.error                             # raised on a bad pattern, unlexable input, or bad indent
 //
@@ -51,8 +54,9 @@ namespace sb = sciforge::binding;
 // bad_alloc -> MemoryError, other std::exception -> scilex.error, else internal error.
 PyObject* set_cpp_error() { return sb::set_cpp_error(sciforge_module_error()); }
 
-constexpr const char* CAPSULE_NAME      = "scilex.lexer";
-constexpr const char* SCAN_CAPSULE_NAME = "scilex.scan";
+constexpr const char* CAPSULE_NAME        = "scilex.lexer";
+constexpr const char* SCAN_CAPSULE_NAME   = "scilex.scan";
+constexpr const char* STREAM_CAPSULE_NAME = "scilex.stream";
 
 // The subclass of scilex.error named `subclass` (LexError, LayoutError), defined by the scilex
 // package; scilex.error itself when the package has not defined it (the extension imported alone).
@@ -387,6 +391,41 @@ void scan_capsule_free(PyObject* capsule)
     auto* state = static_cast<scan_state*>(PyCapsule_GetPointer(capsule, SCAN_CAPSULE_NAME));
     if (state != nullptr) {
         free_scan_state(state);
+    }
+}
+
+// A stream over a lexer: the scilex::token_stream, a reference to the lexer capsule (keeping the rules
+// alive), and the lexeme type, fixed by the first chunk. `tail` keeps the last bytes fed -- at least the
+// stream's held text plus `stream_context_bytes` before it -- so an error reports the bytes around its
+// position the way tokenize does, though the text before them was dropped; `tail_base` is the offset of
+// its first byte in the whole text. Trimmed only once it holds twice what it must, so feeding stays
+// linear however long the held token grows.
+struct stream_state
+{
+    PyObject*                           lexer_capsule {nullptr}; // owned ref, keeps the lexer alive
+    std::optional<scilex::token_stream> stream;                  // engaged once the capsule exists
+    int                                 is_bytes      {-1};      // -1 until the first chunk, then 0 or 1
+    std::string                         tail;                    // the last bytes fed (see above)
+    std::size_t                         tail_base     {0};       // offset of tail[0] in the whole text
+};
+
+// Bytes of context an error needs before the stream's held text (the wrapper's window before the byte).
+constexpr std::size_t stream_context_bytes = 8;
+
+// Frees a stream_state: destroy the stream (it points at the lexer) FIRST, then release the lexer ref.
+void free_stream_state(stream_state* state)
+{
+    PyObject* lexer_capsule = state->lexer_capsule;
+    delete state;
+    Py_XDECREF(lexer_capsule);
+}
+
+// Capsule destructor: releases the lexer reference and frees the stream.
+void stream_capsule_free(PyObject* capsule)
+{
+    auto* state = static_cast<stream_state*>(PyCapsule_GetPointer(capsule, STREAM_CAPSULE_NAME));
+    if (state != nullptr) {
+        free_stream_state(state);
     }
 }
 
@@ -889,6 +928,141 @@ PyObject* scilex_scan_next(PyObject* /*self*/, PyObject* args)
     return build_token_object(*state->it, state->is_bytes, mode.get());
 }
 
+// _scilex.stream_start(handle) -> a stream capsule at the start of the text.
+PyObject* scilex_stream_start(PyObject* /*self*/, PyObject* args)
+{
+    PyObject* capsule = nullptr;
+    if (PyArg_ParseTuple(args, "O", &capsule) == 0) {
+        return nullptr;
+    }
+    auto* lexer = static_cast<scilex::lexer*>(PyCapsule_GetPointer(capsule, CAPSULE_NAME));
+    if (lexer == nullptr) {
+        return nullptr; // wrong capsule (error already set)
+    }
+    auto* state = new stream_state;
+    state->lexer_capsule = Py_NewRef(capsule);
+    state->stream.emplace(*lexer);
+    PyObject* stream = PyCapsule_New(state, STREAM_CAPSULE_NAME, stream_capsule_free);
+    if (stream == nullptr) {
+        free_stream_state(state);
+        return nullptr;
+    }
+    return stream;
+}
+
+// Builds the Python list for tokens a stream returned, in the stream's lexeme type (str when no chunk
+// fixed one). Their lexemes view the stream's buffer, so this runs before the stream is touched again.
+PyObject* stream_token_list(const stream_state& state, const std::vector<scilex::token>& tokens)
+{
+    const auto* lexer = static_cast<const scilex::lexer*>(PyCapsule_GetPointer(state.lexer_capsule, CAPSULE_NAME));
+    if (lexer == nullptr) {
+        return nullptr;
+    }
+    return build_token_list(tokens, state.is_bytes == 1,
+                            [&](std::size_t id) -> const std::string& { return lexer->mode_name(id); });
+}
+
+// _scilex.stream_feed(stream, chunk) -> list: appends chunk (str or bytes, the type of the first chunk)
+// and returns the tokens no text still to come can change. Holds the GIL: a stream is one caller's.
+PyObject* scilex_stream_feed(PyObject* /*self*/, PyObject* args)
+{
+    PyObject* capsule   = nullptr;
+    PyObject* chunk_obj = nullptr;
+    if (PyArg_ParseTuple(args, "OO", &capsule, &chunk_obj) == 0) {
+        return nullptr;
+    }
+    auto* state = static_cast<stream_state*>(PyCapsule_GetPointer(capsule, STREAM_CAPSULE_NAME));
+    if (state == nullptr) {
+        return nullptr; // wrong capsule (error already set)
+    }
+    const char* data     = nullptr;
+    Py_ssize_t  size     = 0;
+    bool        is_bytes = false;
+    if (read_source(chunk_obj, &data, &size, &is_bytes) < 0) {
+        return nullptr; // not str/bytes (TypeError set)
+    }
+    if (state->is_bytes >= 0 && (state->is_bytes == 1) != is_bytes) {
+        PyErr_SetString(PyExc_TypeError, state->is_bytes == 1 ? "stream fed str after bytes"
+                                                              : "stream fed bytes after str");
+        return nullptr;
+    }
+    state->is_bytes = is_bytes ? 1 : 0;
+    const std::string_view chunk {data, static_cast<std::size_t>(size)};
+    try {
+        state->tail.append(chunk);
+        const std::vector<scilex::token> tokens {state->stream->feed(chunk)};
+        PyObject* result = stream_token_list(*state, tokens);
+        const std::size_t keep {state->stream->buffered() + stream_context_bytes};
+        if (state->tail.size() > 2 * keep) {
+            const std::size_t drop {state->tail.size() - keep};
+            state->tail.erase(0, drop);
+            state->tail_base += drop;
+        }
+        return result;
+    }
+    catch (const scilex::lex_error& error) {
+        set_positioned_error(error.what(), error.where(), "LexError");
+        return nullptr;
+    }
+    catch (...) {
+        return set_cpp_error();
+    }
+}
+
+// _scilex.stream_finish(stream) -> list: ends the text and returns the tokens that remain.
+PyObject* scilex_stream_finish(PyObject* /*self*/, PyObject* args)
+{
+    PyObject* capsule = nullptr;
+    if (PyArg_ParseTuple(args, "O", &capsule) == 0) {
+        return nullptr;
+    }
+    auto* state = static_cast<stream_state*>(PyCapsule_GetPointer(capsule, STREAM_CAPSULE_NAME));
+    if (state == nullptr) {
+        return nullptr; // wrong capsule (error already set)
+    }
+    try {
+        const std::vector<scilex::token> tokens {state->stream->finish()};
+        return stream_token_list(*state, tokens);
+    }
+    catch (const scilex::lex_error& error) {
+        set_positioned_error(error.what(), error.where(), "LexError");
+        return nullptr;
+    }
+    catch (...) {
+        return set_cpp_error();
+    }
+}
+
+// _scilex.stream_buffered(stream) -> int: the bytes the stream holds (scilex::token_stream::buffered).
+PyObject* scilex_stream_buffered(PyObject* /*self*/, PyObject* args)
+{
+    PyObject* capsule = nullptr;
+    if (PyArg_ParseTuple(args, "O", &capsule) == 0) {
+        return nullptr;
+    }
+    auto* state = static_cast<stream_state*>(PyCapsule_GetPointer(capsule, STREAM_CAPSULE_NAME));
+    if (state == nullptr) {
+        return nullptr;
+    }
+    return PyLong_FromSize_t(state->stream->buffered());
+}
+
+// _scilex.stream_window(stream) -> (offset, bytes): the last bytes fed and the offset of the first in the
+// whole text -- enough to show the bytes around a stream error, whose text before them was dropped.
+PyObject* scilex_stream_window(PyObject* /*self*/, PyObject* args)
+{
+    PyObject* capsule = nullptr;
+    if (PyArg_ParseTuple(args, "O", &capsule) == 0) {
+        return nullptr;
+    }
+    auto* state = static_cast<stream_state*>(PyCapsule_GetPointer(capsule, STREAM_CAPSULE_NAME));
+    if (state == nullptr) {
+        return nullptr;
+    }
+    return Py_BuildValue("(ny#)", static_cast<Py_ssize_t>(state->tail_base), state->tail.data(),
+                         static_cast<Py_ssize_t>(state->tail.size()));
+}
+
 // _scilex.layout(tokens) -> list. Rewrites an end_of_input-terminated sequence of
 // (kind, lexeme, offset, line, column) tuples with synthetic newline/indent/dedent
 // tokens inserted from each line's indentation; returns the same tuple shape.
@@ -1109,6 +1283,40 @@ SCIFORGE_MODULE(_scilex, "scilex.error", m)
           "    tuple | None: (kind, lexeme, offset, line, column, mode), or None when exhausted.\n\n"
           "Raises:\n"
           "    error: If some position is matched by no rule (after earlier tokens are yielded).");
+    m.raw("stream_start", scilex_stream_start, METH_VARARGS,
+          "stream_start(handle)\n"
+          "Begin a stream over text fed in pieces; returns a stream capsule for stream_feed().\n\n"
+          "Args:\n"
+          "    handle (capsule): A handle from compile().\n\n"
+          "Returns:\n"
+          "    capsule: A stream at the start of the text.");
+    m.raw("stream_feed", scilex_stream_feed, METH_VARARGS,
+          "stream_feed(stream, chunk)\n"
+          "Append chunk and return the tokens no text still to come can change.\n\n"
+          "Args:\n"
+          "    stream (capsule): A stream from stream_start().\n"
+          "    chunk (str | bytes): The next piece of the text, of the first chunk's type.\n\n"
+          "Returns:\n"
+          "    list: Tokens in source order, positions in the whole text, skip matches omitted.\n\n"
+          "Raises:\n"
+          "    error: Where tokenize would raise on the whole text, once the text decides it\n"
+          "        (carrying .offset/.line/.column), or after stream_finish().\n"
+          "    TypeError: If chunk is not str or bytes, or not the first chunk's type.");
+    m.raw("stream_finish", scilex_stream_finish, METH_VARARGS,
+          "stream_finish(stream)\n"
+          "End the text and return the tokens that remain.\n\n"
+          "Args:\n"
+          "    stream (capsule): A stream from stream_start().\n\n"
+          "Returns:\n"
+          "    list: The remaining tokens in source order.\n\n"
+          "Raises:\n"
+          "    error: Where tokenize would raise on the whole text, or when called twice.");
+    m.raw("stream_buffered", scilex_stream_buffered, METH_VARARGS,
+          "stream_buffered(stream) -> int\n"
+          "The bytes the stream holds: from the first token not yet returned to the end of what was fed.");
+    m.raw("stream_window", scilex_stream_window, METH_VARARGS,
+          "stream_window(stream) -> (offset, bytes)\n"
+          "The last bytes fed and the offset of the first in the whole text (an error's surroundings).");
     m.raw("layout", scilex_layout, METH_VARARGS,
           "layout(tokens, insignificant=(), source=None, tabs='columns')\n"
           "Insert NEWLINE/INDENT/DEDENT tokens from indentation (mode-aware).\n\n"

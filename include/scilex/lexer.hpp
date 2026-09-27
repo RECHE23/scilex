@@ -272,10 +272,10 @@ namespace scilex {
    * A lexer is immutable once built: its DFAs are built in the constructor, and every
    * \ref tokenize call and every \ref scan range keeps its own mode stack and walk
    * memos. One `const` lexer may therefore be shared by any number of threads, each
-   * tokenizing its own source. A \ref token_iterator is a cursor: drive each one from
-   * a single thread. Rules left on Pike (\ref pike_rules) call `real::regex`, whose
-   * lazy-DFA cache is shared per regex behind a lock in REAL 2026.9.7, so a grammar
-   * with such rules may not scale with the thread count the way a DFA mode does.
+   * tokenizing its own source. A \ref token_iterator and a \ref token_stream are cursors:
+   * drive each one from a single thread. Rules left on Pike (\ref pike_rules) call
+   * `real::regex`, whose lazy DFAs each thread leases from the regex's own pool (REAL
+   * 2026.9.8 and later), so threads scanning with such a rule take no lock.
    */
   class lexer
   {

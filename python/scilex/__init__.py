@@ -67,13 +67,18 @@ from scilex._scilex import (
     real_version,
     scan_next as _scan_next,
     scan_start as _scan_start,
+    stream_buffered as _stream_buffered,
+    stream_feed as _stream_feed,
+    stream_finish as _stream_finish,
+    stream_start as _stream_start,
+    stream_window as _stream_window,
     tokenize as _tokenize,
 )
 # real_version() returns the REAL version this compiled extension was built against
 # (from real/version.hpp) -- compare it to the pinned real-regex version to detect a stale build.
 
 __all__ = [
-    "Lexer", "Token", "Position", "Layout", "tokenize", "scan", "layout", "error",
+    "Lexer", "TokenStream", "Token", "Position", "Layout", "tokenize", "scan", "layout", "error",
     "LexerError", "LexError", "LayoutError", "GrammarError", "Grammar", "parse_grammar", "load_grammar", "END_OF_INPUT", "NEWLINE", "INDENT", "DEDENT", "ERROR", "get_include", "get_config",
     "real_version",
 ]
@@ -181,7 +186,7 @@ class LayoutError(error):
 # .offset/.line/.column shortcuts; both with __eq__/__hash__/__repr__ and working manual constructors.
 
 
-def _attach_position(exc, source=None):
+def _attach_position(exc, source=None, base=0):
     """Enrich a lexing :class:`error` with a structured ``.position`` and, when the
     source is known, a ``.context`` snippet around the offending byte.
 
@@ -194,7 +199,9 @@ def _attach_position(exc, source=None):
     no source here, so they keep ``.position`` only. Positions are **byte** offsets
     (SciLex's UTF-8 model), so the snippet is sliced from the encoded bytes and decoded
     with ``errors="replace"``: a window edge splitting a codepoint shows ``�``, never
-    raises.
+    raises. ``base`` is the offset of ``source``'s first byte in the text, when ``source`` is only
+    the part of it a :class:`TokenStream` still holds; a position outside that part (an unterminated
+    mode entered in text the stream has dropped) gets the position in the message but no snippet.
     """
     offset = getattr(exc, "offset", None)
     if offset is None:
@@ -204,9 +211,13 @@ def _attach_position(exc, source=None):
         return
     data = source if isinstance(source, bytes) else source.encode("utf-8")
     window = 8
-    before = data[max(0, offset - window):offset].decode("utf-8", "replace")
-    here = data[offset:offset + 1].decode("utf-8", "replace")
-    after = data[offset + 1:offset + 1 + window].decode("utf-8", "replace")
+    at = offset - base
+    if not 0 <= at <= len(data):
+        exc.args = (f"{exc}; at line {exc.line}, column {exc.column}",)
+        return
+    before = data[max(0, at - window):at].decode("utf-8", "replace")
+    here = data[at:at + 1].decode("utf-8", "replace")
+    after = data[at + 1:at + 1 + window].decode("utf-8", "replace")
     exc.context = f"{before}‹{here}›{after}"
     exc.args = (f"{exc}; at line {exc.line}, column {exc.column}: {exc.context}",)
 
@@ -486,6 +497,92 @@ class Lexer:
                 yield fields  # a C-native Token
 
         return _iterate()
+
+    def stream(self):
+        """A :class:`TokenStream` over this lexer: text fed in pieces, lexed as it arrives.
+
+        Returns:
+            TokenStream: A stream at the start of the text.
+        """
+        return TokenStream(self)
+
+
+class TokenStream:
+    """Text fed in pieces, lexed as it arrives, with exactly the tokens :meth:`Lexer.tokenize`
+    gives the whole text: the same munches, modes, positions and errors.
+
+    A token is returned only once no text still to come can change it, which is not "every
+    token but the last": a rule ``a[^z]*z`` gives way to one token the moment a ``z`` arrives,
+    however many tokens other rules made of the text before it. The stream keeps only the text
+    from the first token it has not returned, so memory follows the longest token, not the
+    input. Positions are in the whole text, in bytes, as :meth:`Lexer.tokenize` gives them::
+
+        stream = lexer.stream()
+        for chunk in chunks:
+            for token in stream.feed(chunk):
+                use(token)
+        for token in stream.finish():
+            use(token)
+
+    Every chunk is of the first one's type: ``str`` chunks give ``str`` lexemes, ``bytes``
+    chunks ``bytes`` lexemes (and a ``bytes`` chunk may end inside a UTF-8 sequence). A stream
+    is one caller's: :meth:`feed` holds the GIL.
+
+    Args:
+        lexer (Lexer): The lexer; the stream keeps it alive.
+    """
+
+    __slots__ = ("_stream",)
+
+    def __init__(self, lexer):
+        self._stream = _stream_start(lexer._handle)
+
+    def feed(self, chunk):
+        """Append ``chunk`` and return the tokens no text still to come can change.
+
+        Args:
+            chunk (str | bytes): The next piece of the text, of the first chunk's type.
+
+        Returns:
+            list[Token]: The tokens, in source order (skip matches omitted).
+
+        Raises:
+            LexError: Where :meth:`Lexer.tokenize` would raise on the whole text, once the text
+                decides it (with ``.position`` and ``.context``); the stream is then finished.
+            error: After :meth:`finish`.
+            TypeError: If ``chunk`` is not ``str`` or ``bytes``, or not the first chunk's type.
+        """
+        try:
+            return _stream_feed(self._stream, chunk)
+        except error as exc:
+            self._attach(exc)
+            raise
+
+    def finish(self):
+        """End the text and return the tokens that remain.
+
+        Returns:
+            list[Token]: The tokens, in source order (skip matches omitted).
+
+        Raises:
+            LexError: Where :meth:`Lexer.tokenize` would raise on the whole text.
+            error: When called twice.
+        """
+        try:
+            return _stream_finish(self._stream)
+        except error as exc:
+            self._attach(exc)
+            raise
+
+    @property
+    def buffered(self):
+        """int: Bytes the stream holds, from the first token not yet returned to the end of what
+        was fed."""
+        return _stream_buffered(self._stream)
+
+    def _attach(self, exc):
+        base, window = _stream_window(self._stream)
+        _attach_position(exc, window, base)
 
 
 class Layout:
