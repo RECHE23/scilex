@@ -169,6 +169,9 @@ target_include_directories(scilex_tests_bin PRIVATE "${SCIFORGE_INCLUDE_DIR}")
 # tests/test_spec.cpp pins the spec.dox examples against the independent oracle in fuzz/reference.hpp
 # (it is not under include/, so it stays out of the coverage report).
 target_include_directories(scilex_tests_bin PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/fuzz")
+# tests/test_stream.cpp runs the example grammars, included by name as the fuzz and tsan targets do: a
+# `../examples/` path would put them under tests/ for clang-tidy's header filter.
+target_include_directories(scilex_tests_bin PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/examples")
 set_target_properties(scilex_tests_bin PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
 
 # Warnings-as-errors everywhere. AppleClang accepts the Clang flag set.

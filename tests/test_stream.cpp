@@ -11,15 +11,15 @@
 #include <sciforge/test/framework.hpp>
 #include "scilex/scilex.hpp"
 
-#include "../examples/cpp.hpp"
-#include "../examples/css.hpp"
-#include "../examples/json.hpp"
-#include "../examples/lisp.hpp"
-#include "../examples/math.hpp"
-#include "../examples/python.hpp"
-#include "../examples/sql.hpp"
-#include "../examples/xml.hpp"
-#include "../examples/yaml.hpp"
+#include "cpp.hpp"
+#include "css.hpp"
+#include "json.hpp"
+#include "lisp.hpp"
+#include "math.hpp"
+#include "python.hpp"
+#include "sql.hpp"
+#include "xml.hpp"
+#include "yaml.hpp"
 
 namespace {
 
@@ -33,6 +33,7 @@ namespace {
   std::vector<std::string> describe_all(const std::vector<scilex::token>& tokens)
   {
     std::vector<std::string> out;
+    out.reserve(tokens.size());
     for (const scilex::token& t : tokens) {
       out.push_back(describe(t));
     }
@@ -152,7 +153,7 @@ TEST(stream_returns_decided_tokens_and_holds_only_the_rest)
 
   std::string doc {"["};
   for (int i {0}; i < 2000; ++i) {
-    doc += "{\"k\": [1, 2.5, true, null, \"text\"]},";
+    doc += R"({"k": [1, 2.5, true, null, "text"]},)";
   }
   doc += "0]";
   scilex::token_stream long_in {lex.stream()};
@@ -204,6 +205,14 @@ TEST(stream_errors_where_tokenize_does)
     refused = true;
   }
   EXPECT(refused);
+  bool twice {false};
+  try {
+    static_cast<void>(done.finish());
+  }
+  catch (const std::logic_error&) {
+    twice = true;
+  }
+  EXPECT(twice);
 }
 
 // Recovery: an error run is one token, however the cuts split it -- the run may go on into text still to
