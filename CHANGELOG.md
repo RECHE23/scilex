@@ -8,6 +8,11 @@ fuzz oracle.
 ## Unreleased
 
 ### Changed
+- **Build requires `real-regex >= 2026.9.8`** (was `>= 2026.9.7`), the first release carrying
+  `basic_regex::can_extend`, which the stream asks; the FetchContent tag and CI move with it. Rules
+  left on Pike now scan through lazy DFAs each thread leases from its regex's pool, so threads
+  sharing a lexer no longer queue on such a rule's lock. `BENCHMARKS.md` stays stamped against
+  2026.9.7: its tables were not re-measured with 2026.9.8.
 - **A token on the DFA costs what it did before the per-rule hybrid, within 4 % on x86-64.** A token
   whose rule carries no mode action no longer calls the out-of-line mode transition, a mode wholly on
   its DFA no longer carries the Pike merge's frame, and a scan makes one walk memo per mode up front.
@@ -56,6 +61,9 @@ fuzz oracle.
   once on a barrier, under ThreadSanitizer, over a DFA, a modal, a layout and a hybrid grammar, and
   each thread's tokens must equal the single-threaded ones. The contract above was stated from a
   one-off check; this is what now holds it.
+- **A documentation site** (<https://reche23.github.io/scilex/>), built on real-regex's Sphinx toolchain:
+  guides (grammar format, modes, layout, errors, positions, performance, threads, streaming), a
+  tutorial, and the C++ and Python references, its Python examples run as doctests by the local gate.
 
 ### Fixed
 - **Python: a positioned error keeps its cause.** `Lexer.tokenize` and `Lexer.scan` rewrote every
@@ -68,6 +76,11 @@ fuzz oracle.
   the same matches on every suffix checked, and now on the DFA. `fuzz-check` gains scaling cases.
 - **The mode stack is bounded** by `scilex::max_mode_depth` (65 536 frames); a push past it is a
   `lex_error` under either policy. 16 MiB of `(` under the python grammar grew it past 1 GB.
+- `.lex`: a comma in a `push=` or `set=` mode name is refused as such, where it read as an empty mode
+  name.
+- `scilex/grammar.hpp` compiles without warnings under `-Wshadow` (a caught `real::regex_error` named
+  `error` hid `scilex::error`); the tests now build with `-Wshadow`, the spelling of MSVC's `/W4`
+  hiding warnings, so the local gate sees them before CI does.
 - The README's C++ quickstart compiles (it is `examples/cpp/quickstart.cpp`, run by `make example`),
   the published API reference no longer carries private members, header sources or build-machine
   paths, and a GitHub release's notes are the tag's CHANGELOG section instead of a bare
@@ -95,11 +108,6 @@ fuzz oracle.
   whole source (REAL 2026.9.7's `real::dfa_munch_memo`), so `a*b` beside `a` over `aaa…` — n(n+1)/2
   steps before — lexes 256 KiB in 8.8 ms. The quadratic worst case remains only through a rule left
   on Pike. Requires `real-regex>=2026.9.7`.
-
-- **Build requires `real-regex >= 2026.9.8`** (was `>= 2026.9.7`), the first release carrying
-  `basic_regex::can_extend`, which the stream asks; the FetchContent tag and CI move with it. Rules
-  left on Pike now scan through lazy DFAs each thread leases from its regex's pool, so threads
-  sharing a lexer no longer queue on such a rule's lock.
 
 ### Added
 - `scilex::layout(tokens, source, tab_policy, mode_significant)`: `tab_policy::python` measures
