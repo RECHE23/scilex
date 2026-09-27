@@ -427,8 +427,8 @@ def stats(values, base=0x1F):
           ident_rule = i;
         }
       }
-      const scilex::lexer            lex     {rules, {"bracket"}};
-      const std::vector<std::size_t> on_pike {lex.pike_rules("default")};
+      const scilex::lexer            hybrid  {rules, {"bracket"}};
+      const std::vector<std::size_t> on_pike {hybrid.pike_rules("default")};
       if (std::ranges::find(on_pike, ident_rule) == on_pike.end()) {
         return false; // the code-point predicate must stay on Pike
       }

@@ -355,8 +355,8 @@ namespace scilex {
       try {
         parsed.rules.push_back(rule {.kind = kind, .pattern = real::regex(fields.text[1])});
       }
-      catch (const real::regex_error& error) {
-        throw grammar_error(origin, line_no, fields.column[1] + error.position(), "invalid regex: " + error.cause());
+      catch (const real::regex_error& invalid) {
+        throw grammar_error(origin, line_no, fields.column[1] + invalid.position(), "invalid regex: " + invalid.cause());
       }
       if (fields.text.size() == 3) {
         detail::apply_grammar_options(fields.text[2], fields.column[2], origin, line_no, parsed.rules.back());

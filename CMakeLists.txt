@@ -178,7 +178,9 @@ set_target_properties(scilex_tests_bin PROPERTIES CXX_STANDARD 20 CXX_STANDARD_R
 if(MSVC)
     target_compile_options(scilex_tests_bin PRIVATE /W4 /WX /Zc:__cplusplus /EHsc /utf-8)
 else()
-    target_compile_options(scilex_tests_bin PRIVATE -Wall -Wextra -Wpedantic -Werror)
+    # -Wshadow is MSVC /W4's C4456/C4457/C4459 (a name hiding a local, a parameter or a global), which a
+    # POSIX-only local gate would otherwise first see in CI.
+    target_compile_options(scilex_tests_bin PRIVATE -Wall -Wextra -Wpedantic -Wshadow -Werror)
 endif()
 
 if(SCILEX_SANITIZE)
