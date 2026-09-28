@@ -7,6 +7,8 @@ fuzz oracle.
 
 ## Unreleased
 
+## 2026.9.2 — 2026-09-28
+
 ### Changed
 - **Build requires `real-regex >= 2026.9.9`** (was `>= 2026.9.7`). 2026.9.8 carries
   `basic_regex::can_extend`, which the stream asks, and leases each thread its own lazy DFAs, so threads

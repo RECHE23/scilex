@@ -83,7 +83,7 @@ __all__ = [
     "real_version",
 ]
 
-__version__ = "2026.9.1"
+__version__ = "2026.9.2"
 
 #: Reserved kind of SciLex's synthetic end-of-input token
 #: (``std::numeric_limits<int>::min()``); user kinds must avoid it.
