@@ -191,10 +191,10 @@ stays on Pike, while the lazy `x*?y` agrees on every input and keeps it. The
 constructor **decides** this for every rule with `real::dfa_faithful` — exactly, not by
 sampling — so the **token stream is byte identical** either way (Pike is the floor) and
 `layout` is unchanged. The DFA is built once, in the
-constructor, and that is its cost: measured 2026-09-24 (arm64, `-O2`, minimum of 7, REAL
-`2026.9.7`), building the example grammars' lexers takes 0.07–5.6 ms instead of 0.01–0.12 ms, and the
-Python grammar's five modes ~26 ms (~140 ms against REAL `2026.9.6`, whose DFA construction was
-slower). A caller that builds many short-lived lexers can pass
+constructor, and that is its cost: measured 2026-09-27 (arm64, `-O2`, minimum of 7, REAL
+`2026.9.9`), building the example grammars' lexers takes 0.06–2.9 ms instead of 0.01–0.12 ms, and the
+Python grammar's five modes ~13.5 ms (~26 ms against REAL `2026.9.8` and ~140 ms against `2026.9.6`,
+whose DFA constructions were slower). A caller that builds many short-lived lexers can pass
 `dfa_policy::requested`. From Python: `Lexer(..., dfa="requested")`.
 
 ## Unicode identifiers vs DFA speed — the grammar author's choice

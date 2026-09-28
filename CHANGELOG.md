@@ -8,11 +8,12 @@ fuzz oracle.
 ## Unreleased
 
 ### Changed
-- **Build requires `real-regex >= 2026.9.8`** (was `>= 2026.9.7`), the first release carrying
-  `basic_regex::can_extend`, which the stream asks; the FetchContent tag and CI move with it. Rules
-  left on Pike now scan through lazy DFAs each thread leases from its regex's pool, so threads
-  sharing a lexer no longer queue on such a rule's lock. `BENCHMARKS.md` stays stamped against
-  2026.9.7: its tables were not re-measured with 2026.9.8.
+- **Build requires `real-regex >= 2026.9.9`** (was `>= 2026.9.7`). 2026.9.8 carries
+  `basic_regex::can_extend`, which the stream asks, and leases each thread its own lazy DFAs, so threads
+  sharing a lexer no longer queue on a Pike rule's lock; 2026.9.9 builds a `real::dfa` about three times
+  faster, so a lexer's constructor takes about half as long: the Python grammar ~13.5 ms instead of ~26,
+  the example grammars 0.06–2.9 ms instead of 0.07–5.6 (arm64, `-O2`, minimum of 7). The FetchContent tag
+  and CI move with it. `BENCHMARKS.md` stays stamped against 2026.9.7: its tables were not re-measured.
 - **A token on the DFA costs what it did before the per-rule hybrid, within 4 % on x86-64.** A token
   whose rule carries no mode action no longer calls the out-of-line mode transition, a mode wholly on
   its DFA no longer carries the Pike merge's frame, and a scan makes one walk memo per mode up front.
