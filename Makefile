@@ -177,10 +177,13 @@ symbol-hygiene:
 lint:
 	@ls tests/*.cpp tests/tsan/*.cpp | xargs -P $(JOBS) -I{} clang-tidy {} -- $(CXXSTD) $(INCLUDES) -I$(SCIFORGE_INCLUDE) -Ifuzz -Iexamples
 
+# The clang-tidy CI pins, named in SciForge's lint/misra.mk (MISRA_TIDY, MISRA_TIDY_CHECK).
+include $(SCIFORGE_LINT)/misra.mk
 misra:
 	mkdir -p $(BUILD)
 	printf '#include <scilex/scilex.hpp>\nint main(){ try { const scilex::lexer l({{0, real::regex("a")}}); return l.tokenize("a").size() == 1 ? 0 : 1; } catch (...) { return 2; } }\n' > $(BUILD)/misra_tu.cpp
-	clang-tidy --config-file=$(SCIFORGE_LINT)/clang-tidy-misra \
+	@$(MISRA_TIDY_CHECK)
+	$(MISRA_TIDY) --config-file=$(SCIFORGE_LINT)/clang-tidy-misra \
 	    --header-filter='include/scilex/.*' \
 	    $(BUILD)/misra_tu.cpp -- $(CXXSTD) $(INCLUDES)
 

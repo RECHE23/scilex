@@ -44,7 +44,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           repository: RECHE23/sciforge
-          ref: v2026.9.2
+          ref: v2026.10.0
           path: sciforge
       # The dispatch input reaches the shell through the environment, never spliced into the script,
       # and is refused unless it is a whole number of seconds inside the job's budget.
