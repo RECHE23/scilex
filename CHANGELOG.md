@@ -8,14 +8,19 @@ fuzz oracle.
 ## Unreleased
 
 ### Changed
-- **Build requires `real-regex >= 2026.10.0`** (was `>= 2026.9.9`); the FetchContent tag and CI move with it.
-  The example grammars gain nothing from it: on Pike they spend −1.2 to +1.4 % of 2026.9.9's instructions
-  (x86-64, g++ 15.3 `-O2`) and lex 1–4 % slower on arm64 (Apple clang 16 `-O2`, in both run orders), and their
-  DFAs build within 3.5 % (arm64). A rule that alternates 64 literals or more is a trie in REAL's byte program,
-  so a lexer whose keyword rule lists 2 000 words builds and lexes 256 KiB in 7.3 % fewer instructions
-  (x86-64). A lexer holds 60–120 KiB more while it lives (cpp 0.15 → 0.21 MiB, Python 0.32 → 0.44 MiB, counted
-  at `operator new`), and none of it after destruction, as before. `BENCHMARKS.md` stays stamped against
-  2026.9.7: its tables were not re-measured.
+- **Build requires `real-regex >= 2026.10.6`** (was `>= 2026.9.9`); the FetchContent tag and CI move with it.
+  Against 2026.9.9, on arm64 (Apple clang 16 `-O2`, three alternated runs, minimum), with every token stream
+  identical (124 lexes over the example grammars, the benchmark inputs and 650 000 tokens of off-grammar text,
+  with and without error recovery, layout and code-point columns):
+  - **Pike lexers are faster**: json 8.6 → 44.2 MB/s, math −33 %, python −20 %, css −15 %, lisp −14 %, yaml
+    −6 %, cpp, sql and xml within 1 %; a modal lexer −22 %, a mono-mode one −28 %.
+  - **The default DFA path holds**: every grammar within 2 % but yaml +4.5 % at 1.0 % FEWER instructions
+    (g++ 14 `-O2`, arm64; json and cpp −1.0 % too), so placement; DFAs build within 2.7 %.
+  - **A lexer holds what it did**: 1–2 % more live heap than with 2026.9.9 (python 535 → 542 KiB, cpp 208 → 211
+    KiB, counted at `operator new`), none of it after destruction. 2026.10.0 alone had added 20–30 %.
+  - A rule that alternates 64 literals or more is a trie in REAL's byte program, so a lexer whose keyword rule
+    lists 2 000 words builds and lexes 256 KiB in 7.3 % fewer instructions (x86-64, measured at 2026.10.0).
+  `BENCHMARKS.md` stays stamped against 2026.9.7: its tables were not re-measured.
 
 ## 2026.9.2 — 2026-09-28
 
