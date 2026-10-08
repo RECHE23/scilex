@@ -186,6 +186,20 @@ class LayoutError(error):
 # .offset/.line/.column shortcuts; both with __eq__/__hash__/__repr__ and working manual constructors.
 
 
+def _codepoint_end(data, at):
+    """End of the valid UTF-8 sequence starting at ``data[at]``, or ``at + 1`` when there is none."""
+    if at >= len(data):
+        return at
+    lead = data[at]
+    width = 2 if 0xC2 <= lead < 0xE0 else 3 if 0xE0 <= lead < 0xF0 else 4 if 0xF0 <= lead < 0xF5 else 1
+    if width > 1:
+        try:
+            data[at:at + width].decode("utf-8")
+        except UnicodeDecodeError:
+            return at + 1
+    return at + width
+
+
 def _attach_position(exc, source=None, base=0):
     """Enrich a lexing :class:`error` with a structured ``.position`` and, when the
     source is known, a ``.context`` snippet around the offending byte.
@@ -197,9 +211,10 @@ def _attach_position(exc, source=None, base=0):
     matches, a pop at the root, a zero-length match, an unterminated mode, a mode stack too
     deep). Layout errors have
     no source here, so they keep ``.position`` only. Positions are **byte** offsets
-    (SciLex's UTF-8 model), so the snippet is sliced from the encoded bytes and decoded
-    with ``errors="replace"``: a window edge splitting a codepoint shows ``�``, never
-    raises. ``base`` is the offset of ``source``'s first byte in the text, when ``source`` is only
+    (SciLex's UTF-8 model), so the snippet is sliced from the encoded bytes: the fence holds
+    the whole codepoint that starts at the offending byte when it is valid UTF-8 (the byte
+    alone otherwise), and both window edges move to codepoint boundaries, so a valid
+    codepoint is never cut in two. Invalid bytes decode to ``�``; building it never raises. ``base`` is the offset of ``source``'s first byte in the text, when ``source`` is only
     the part of it a :class:`TokenStream` still holds; a position outside that part (an unterminated
     mode entered in text the stream has dropped) gets the position in the message but no snippet.
     """
@@ -215,9 +230,16 @@ def _attach_position(exc, source=None, base=0):
     if not 0 <= at <= len(data):
         exc.args = (f"{exc}; at line {exc.line}, column {exc.column}",)
         return
-    before = data[max(0, at - window):at].decode("utf-8", "replace")
-    here = data[at:at + 1].decode("utf-8", "replace")
-    after = data[at + 1:at + 1 + window].decode("utf-8", "replace")
+    here_end = _codepoint_end(data, at)
+    start = max(0, at - window)
+    while start < at and 0x80 <= data[start] < 0xC0:  # a continuation byte: its lead is cut off
+        start += 1
+    end = min(len(data), here_end + window)
+    while here_end < end < len(data) and 0x80 <= data[end] < 0xC0:  # end would cut a codepoint
+        end -= 1
+    before = data[start:at].decode("utf-8", "replace")
+    here = data[at:here_end].decode("utf-8", "replace")
+    after = data[here_end:end].decode("utf-8", "replace")
     exc.context = f"{before}‹{here}›{after}"
     exc.args = (f"{exc}; at line {exc.line}, column {exc.column}: {exc.context}",)
 

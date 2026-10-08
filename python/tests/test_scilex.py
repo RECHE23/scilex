@@ -297,8 +297,31 @@ class ErrorContextTests(unittest.TestCase):
             lexer.tokenize("café")
         exc = caught.exception
         self.assertEqual(exc.position.offset, 3)   # the 'é' lead byte
-        self.assertTrue(exc.context.startswith("caf"))
-        self.assertIsInstance(exc.context, str)    # built without raising
+        self.assertEqual(exc.context, "caf‹é›")    # the whole codepoint is fenced
+
+    def test_context_never_cuts_a_valid_codepoint(self):
+        # The right window edge falls inside a two-byte codepoint and moves back before it, and
+        # the offending codepoint is fenced whole.
+        lexer = scilex.Lexer([(0, r"\s+", True), (1, r"[a-z]+", False)])
+        with self.assertRaises(scilex.error) as caught:
+            lexer.tokenize("ab пxривет")
+        self.assertEqual(caught.exception.context, "ab ‹п›xрив")  # 8 bytes on would end inside 'е'
+        self.assertNotIn("\ufffd", str(caught.exception))
+
+    def test_context_window_starts_on_a_codepoint(self):
+        # 8 bytes back from '@' land on the second byte of a three-byte '€'; the window
+        # starts at the next codepoint instead.
+        lexer = scilex.Lexer([(1, r"€+", False)])
+        with self.assertRaises(scilex.error) as caught:
+            lexer.tokenize("€€€€@")
+        self.assertEqual(caught.exception.context, "€€‹@›")
+
+    def test_context_fences_one_invalid_byte(self):
+        # A byte that starts no valid sequence is fenced alone and shown as U+FFFD.
+        lexer = scilex.Lexer([(0, r"\s+", True), (1, r"[a-z]+", False)])
+        with self.assertRaises(scilex.error) as caught:
+            lexer.tokenize(b"ab\xd0x")
+        self.assertEqual(caught.exception.context, "ab‹\ufffd›x")
 
     def test_context_in_eof_mode(self):
         with self.assertRaises(scilex.error) as caught:

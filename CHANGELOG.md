@@ -7,6 +7,12 @@ fuzz oracle.
 
 ## Unreleased
 
+### Fixed
+- **A lexing error's context no longer cuts a character in two.** `.context` (and the message) fenced the
+  offending byte, so an error on a multibyte character showed its lead byte alone and the rest as `�`:
+  `ab ‹�›�рив�` for `ab привет`. The fence now holds the whole character when it is valid UTF-8, one byte
+  otherwise, and the window around it starts and ends on character boundaries: `ab ‹п›риве`.
+
 ## 2026.10.0 — 2026-10-08
 
 ### Changed
