@@ -7,6 +7,8 @@ fuzz oracle.
 
 ## Unreleased
 
+## 2026.10.0 — 2026-10-08
+
 ### Changed
 - **Build requires `real-regex >= 2026.10.6`** (was `>= 2026.9.9`); the FetchContent tag and CI move with it.
   Against 2026.9.9, on arm64 (Apple clang 16 `-O2`, three alternated runs, minimum), with every token stream
