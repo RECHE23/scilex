@@ -7,6 +7,14 @@ fuzz oracle.
 
 ## Unreleased
 
+### Changed
+- **Build requires `real-regex >= 2026.10.7`** (was `>= 2026.10.6`); the FetchContent tag and CI move with it.
+  A rule ending on a lookaround over a Unicode class (`\w+(?=\()`, `\w+(?!\w)`) is tested in place instead of
+  through REAL's lookaround sub-simulation: such a grammar lexes 6.5 % faster end to end over mixed-script text
+  (178 663 tokens, the CLI, arm64), with every token stream identical to 2026.10.6's (126 lexes over the example
+  grammars, the benchmark inputs and off-grammar text, with and without error recovery). The example grammars'
+  default DFA path counts exactly the same instructions (g++ 14 `-O2`, xml, python, yaml, cpp).
+
 ### Fixed
 - **A lexing error's context no longer cuts a character in two.** `.context` (and the message) fenced the
   offending byte, so an error on a multibyte character showed its lead byte alone and the rest as `�`:
