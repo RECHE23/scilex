@@ -104,6 +104,79 @@ class ConcurrencyTests(unittest.TestCase):
         self.assertTrue(all(snapshot == expected for snapshot in results))
 
 
+class StreamGilTests(unittest.TestCase):
+    def test_a_large_piece_lexes_as_tokenize_does(self):
+        # A piece of 4 KB or more is lexed with the GIL released, and so is a finish holding as
+        # much: both branches give tokenize's tokens.
+        lexer = sample_lexer()
+        text = "ab + 12 " * 700 + "tail"
+        self.assertGreaterEqual(len(text.encode()), _GIL_THRESHOLD)
+        expected = [(t.kind, t.lexeme, t.offset) for t in lexer.tokenize(text)]
+        stream = lexer.stream()
+        got = [(t.kind, t.lexeme, t.offset) for t in stream.feed(text) + stream.finish()]
+        self.assertEqual(got, expected)
+        held = lexer.stream()
+        long_token = "x" * (2 * _GIL_THRESHOLD)
+        self.assertEqual(held.feed(long_token), [])  # the identifier may still grow
+        self.assertGreaterEqual(held.buffered, _GIL_THRESHOLD)
+        self.assertEqual([t.lexeme for t in held.finish()], [long_token])
+
+    def test_separate_streams_over_one_lexer_run_in_parallel(self):
+        lexer = sample_lexer()
+        text = "ab + 12 " * 1000
+        expected = [(t.kind, t.lexeme, t.offset) for t in lexer.tokenize(text)]
+        results, errors, guard = [], [], threading.Lock()
+
+        def worker():
+            try:
+                stream = lexer.stream()
+                tokens = stream.feed(text[:5000]) + stream.feed(text[5000:]) + stream.finish()
+                snapshot = [(t.kind, t.lexeme, t.offset) for t in tokens]
+            except Exception as exc:  # pragma: no cover - a failure here is the finding
+                with guard:
+                    errors.append(exc)
+                return
+            with guard:
+                results.append(snapshot)
+
+        threads = [threading.Thread(target=worker) for _ in range(8)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        self.assertEqual(errors, [])
+        self.assertEqual(len(results), 8)
+        self.assertTrue(all(snapshot == expected for snapshot in results))
+
+    def test_one_stream_fed_by_two_threads_refuses_the_second(self):
+        # The first feed holds the stream for as long as it lexes with the GIL released; a second
+        # thread reaching the same stream meanwhile is refused rather than racing on its buffer.
+        # The refusal is counted, not timed: the long feed is retried until another thread met it.
+        lexer = scilex.Lexer([(0, r"\ba*b", False), (1, r"a", False)])  # \b keeps it off the DFA
+        refused = 0
+        for size in (20_000, 40_000, 80_000):
+            stream = lexer.stream()
+            started = threading.Event()
+
+            def long_feed():
+                started.set()
+                stream.feed("a" * size)
+
+            thread = threading.Thread(target=long_feed)
+            thread.start()
+            started.wait()
+            while thread.is_alive():
+                try:
+                    stream.feed("")
+                except RuntimeError:
+                    refused += 1
+                    break
+            thread.join()
+            if refused:
+                break
+        self.assertGreater(refused, 0)
+
+
 class GuardTests(unittest.TestCase):
     def test_layout_rejects_bytes_lexemes(self):
         # layout is a str/indentation pass; a bytes-lexeme stream (from a bytes

@@ -32,6 +32,7 @@
 #include <sciforge/binding/module.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <exception>
 #include <map>
@@ -407,6 +408,36 @@ struct stream_state
     int                                 is_bytes      {-1};      // -1 until the first chunk, then 0 or 1
     std::string                         tail;                    // the last bytes fed (see above)
     std::size_t                         tail_base     {0};       // offset of tail[0] in the whole text
+    std::atomic<bool>                   busy          {false};   // a feed or finish is running
+};
+
+// Holds a stream for one call. A large piece is lexed with the GIL released, so another thread could
+// reach the same stream meanwhile; the second caller is refused, as CPython's buffered streams refuse a
+// reentrant call, instead of racing on the stream's buffer.
+class stream_claim
+{
+public:
+    explicit stream_claim(stream_state& state)
+      : state_(&state),
+        held_(!state.busy.exchange(true))
+    {
+        if (!held_) {
+            PyErr_SetString(PyExc_RuntimeError, "a stream is being fed by another thread");
+        }
+    }
+    stream_claim(const stream_claim&)            = delete;
+    stream_claim& operator=(const stream_claim&) = delete;
+    ~stream_claim()
+    {
+        if (held_) {
+            state_->busy.store(false);
+        }
+    }
+    [[nodiscard]] bool held() const noexcept { return held_; }
+
+private:
+    stream_state* state_;
+    bool          held_;
 };
 
 // Bytes of context an error needs before the stream's held text (the wrapper's window before the byte).
@@ -986,11 +1017,24 @@ PyObject* scilex_stream_feed(PyObject* /*self*/, PyObject* args)
                                                               : "stream fed bytes after str");
         return nullptr;
     }
+    const stream_claim claim {*state};
+    if (!claim.held()) {
+        return nullptr;
+    }
     state->is_bytes = is_bytes ? 1 : 0;
+    // chunk_obj is a borrowed argument -- alive for the whole call and immutable, so its buffer is
+    // stable while the GIL is released below; the stream copies it before returning.
     const std::string_view chunk {data, static_cast<std::size_t>(size)};
     try {
         state->tail.append(chunk);
-        const std::vector<scilex::token> tokens {state->stream->feed(chunk)};
+        std::vector<scilex::token> tokens;
+        if (size >= gil_release_collect_min_bytes) {
+            const GilRelease unlocked;
+            tokens = state->stream->feed(chunk);
+        }
+        else {
+            tokens = state->stream->feed(chunk);
+        }
         PyObject* result = stream_token_list(*state, tokens);
         const std::size_t keep {state->stream->buffered() + stream_context_bytes};
         if (state->tail.size() > 2 * keep) {
@@ -1020,8 +1064,19 @@ PyObject* scilex_stream_finish(PyObject* /*self*/, PyObject* args)
     if (state == nullptr) {
         return nullptr; // wrong capsule (error already set)
     }
+    const stream_claim claim {*state};
+    if (!claim.held()) {
+        return nullptr;
+    }
     try {
-        const std::vector<scilex::token> tokens {state->stream->finish()};
+        std::vector<scilex::token> tokens;
+        if (state->stream->buffered() >= static_cast<std::size_t>(gil_release_collect_min_bytes)) {
+            const GilRelease unlocked;
+            tokens = state->stream->finish();
+        }
+        else {
+            tokens = state->stream->finish();
+        }
         return stream_token_list(*state, tokens);
     }
     catch (const scilex::lex_error& error) {
@@ -1042,6 +1097,10 @@ PyObject* scilex_stream_buffered(PyObject* /*self*/, PyObject* args)
     }
     auto* state = static_cast<stream_state*>(PyCapsule_GetPointer(capsule, STREAM_CAPSULE_NAME));
     if (state == nullptr) {
+        return nullptr;
+    }
+    const stream_claim claim {*state};
+    if (!claim.held()) {
         return nullptr;
     }
     return PyLong_FromSize_t(state->stream->buffered());

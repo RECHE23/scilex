@@ -548,7 +548,9 @@ class TokenStream:
 
     Every chunk is of the first one's type: ``str`` chunks give ``str`` lexemes, ``bytes``
     chunks ``bytes`` lexemes (and a ``bytes`` chunk may end inside a UTF-8 sequence). A stream
-    is one caller's: :meth:`feed` holds the GIL.
+    is one caller's: a piece of 4 KB or more is lexed with the GIL released, as
+    :meth:`Lexer.tokenize` lexes a long text, and a second thread that reaches the same stream
+    meanwhile is refused with ``RuntimeError``. Separate streams over one lexer run in parallel.
 
     Args:
         lexer (Lexer): The lexer; the stream keeps it alive.
@@ -573,6 +575,7 @@ class TokenStream:
                 decides it (with ``.position`` and ``.context``); the stream is then finished.
             error: After :meth:`finish`.
             TypeError: If ``chunk`` is not ``str`` or ``bytes``, or not the first chunk's type.
+            RuntimeError: If another thread is feeding or finishing this stream.
         """
         try:
             return _stream_feed(self._stream, chunk)
@@ -589,6 +592,7 @@ class TokenStream:
         Raises:
             LexError: Where :meth:`Lexer.tokenize` would raise on the whole text.
             error: When called twice.
+            RuntimeError: If another thread is feeding or finishing this stream.
         """
         try:
             return _stream_finish(self._stream)
