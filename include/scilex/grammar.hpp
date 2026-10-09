@@ -8,7 +8,8 @@
  *
  * One rule per line: a name, a tab, the pattern, then optionally a tab and space-separated options.
  * Blank lines and lines whose first non-blank character is `#` are ignored; a trailing `\r` is
- * dropped. The options are:
+ * dropped, and so are the spaces and tabs that end a line, so a pattern never ends in one: write a
+ * final space `[ ]` or `\x20`. The options are:
  *
  * - `skip` — matches are consumed but not emitted;
  * - `in=m1,m2` — the modes the rule is active in (default: `default` only);
@@ -342,9 +343,14 @@ namespace scilex {
       if (first == std::string_view::npos || line[first] == '#') {
         continue; // blank or comment
       }
+      const std::string_view untrimmed {line};
       line = line.substr(0, line.find_last_not_of(" \t") + 1);
 
       const detail::grammar_fields fields {detail::split_grammar_line(line, first)};
+      if (fields.text.size() < 2 && untrimmed.find('\t', first) != std::string_view::npos) {
+        throw grammar_error(origin, line_no, line.size() + 2,
+                            "empty pattern: the blanks that end a line are dropped (write a space as [ ] or \\x20)");
+      }
       if (fields.text.size() < 2 || fields.text.size() > 3) {
         throw grammar_error(origin, line_no, 0, "expected 'name<TAB>pattern' with an optional <TAB>options");
       }

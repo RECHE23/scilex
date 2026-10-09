@@ -92,6 +92,13 @@ namespace {
     EXPECT_EQ(empty_pattern.column(), 3U);
     EXPECT_EQ(empty_pattern.cause(), "empty pattern");
 
+    // The blanks that end a line are dropped, so a pattern of spaces vanishes: named, not a field count.
+    const scilex::grammar_error blank_pattern {refusal("A\ta\nSPACE\t \n")};
+    EXPECT_EQ(blank_pattern.line(), 2U);
+    EXPECT_EQ(blank_pattern.column(), 7U);
+    EXPECT_EQ(blank_pattern.cause().rfind("empty pattern: the blanks that end a line are dropped", 0), 0U);
+    EXPECT_EQ(scilex::parse_grammar("SPACE\t[ ]\t\n").rules.size(), 1U); // the spelling the cause names
+
     const scilex::grammar_error bad_regex {refusal("ID\t[a-z]+\nBAD\ta(\n")};
     EXPECT_EQ(bad_regex.line(), 2U);
     EXPECT_EQ(bad_regex.column(), 6U); // the pattern starts at column 5, and the engine points at its (

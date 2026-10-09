@@ -2,7 +2,8 @@
 
 A grammar file holds one rule per line: a name, a tab, the pattern, then optionally a tab and
 space-separated options. Blank lines and lines whose first non-blank character is `#` are ignored,
-and a trailing `\r` is dropped, so CRLF files read the same.
+and a trailing `\r` is dropped, so CRLF files read the same. The spaces and tabs that end a line are
+dropped too, so a pattern never ends in a blank: write a final space `[ ]` or `\x20`.
 
 | option | effect |
 | --- | --- |
