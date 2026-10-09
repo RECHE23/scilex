@@ -7,6 +7,8 @@ fuzz oracle.
 
 ## Unreleased
 
+## 2026.10.1 — 2026-10-09
+
 ### Changed
 - **Build requires `real-regex >= 2026.10.7`** (was `>= 2026.10.6`); the FetchContent tag and CI move with it.
   A rule ending on a lookaround over a Unicode class (`\w+(?=\()`, `\w+(?!\w)`) is tested in place instead of
