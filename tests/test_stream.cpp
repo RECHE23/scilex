@@ -142,6 +142,39 @@ TEST(stream_waits_while_a_rule_could_still_swallow_the_tokens_before)
   EXPECT(describe_all(open.finish()) == describe_all(lex.tokenize("abc de")));
 }
 
+// A rule that reads the text before its token -- a lookbehind, a word boundary -- reads it in a stream as in
+// tokenize: the stream keeps those bytes when it drops what it returned, whatever the cuts.
+TEST(stream_keeps_the_text_a_rule_reads_before_its_token)
+{
+  const std::vector<scilex::rule> rules {
+    {.kind = 1, .pattern = real::regex("@")},
+    {.kind = 2, .pattern = real::regex(R"((?<=@@)\d+)")},
+    {.kind = 3, .pattern = real::regex(R"(\b\d+)")},
+    {.kind = 4, .pattern = real::regex(R"(\d+)")},
+    {.kind = 5, .pattern = real::regex("[a-z]+")},
+    {.kind = 6, .pattern = real::regex(R"(\s+)"), .skip = true},
+  };
+  const scilex::lexer            lex   {rules};
+  const std::string_view         text  {"@@12 ab34 @5 x9 @@77 7"};
+  const std::vector<std::string> whole {describe_all(lex.tokenize(text))};
+  EXPECT_EQ(whole.size(), static_cast<std::size_t>(13));
+  if (whole.size() != 13U) {
+    return; // the checks below index the thirteen tokens
+  }
+  EXPECT(whole[2] == "2|12|2:1:3|0");   // after @@ the lookbehind rule wins
+  EXPECT(whole[4] == "4|34|7:1:8|0");   // inside ab34 there is no word boundary before the digits
+  EXPECT(whole[6] == "3|5|11:1:12|0");  // after a single @, \b\d+ does
+  EXPECT(whole[12] == "3|7|21:1:22|0"); // and after a space
+  for (std::size_t cut {0}; cut <= text.size(); ++cut) {
+    EXPECT(streamed(lex, text, {cut}) == whole);
+  }
+  std::vector<std::size_t> bytes;
+  for (std::size_t at {1}; at < text.size(); ++at) {
+    bytes.push_back(at);
+  }
+  EXPECT(streamed(lex, text, bytes) == whole); // a byte at a time: every token's context was dropped and kept
+}
+
 // A token the next byte decides is returned at once, and the stream holds only what it has not returned.
 TEST(stream_returns_decided_tokens_and_holds_only_the_rest)
 {

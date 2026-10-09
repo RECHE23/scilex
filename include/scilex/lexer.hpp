@@ -323,6 +323,9 @@ namespace scilex {
       build_dispatch();
       build_significance(insignificant_modes);
       build_dfa_modes(dfa_modes, dfa);
+      for (const rule& r : rules_) {
+        left_context_ = std::max(left_context_, r.pattern.left_context());
+      }
     }
 
     //! \brief The unit this lexer counts \c position::column in (positions do not carry it, so a
@@ -878,10 +881,10 @@ namespace scilex {
     {
       const unsigned char first {static_cast<unsigned char>(source[offset])};
       if (hybrid == nullptr) {
-        return pike_munch_in_mode(mode, source.substr(offset), first, nullptr);
+        return pike_munch_in_mode(mode, source, offset, first, nullptr);
       }
       munch_result       best         {dfa_munch(*hybrid, source, offset, memos[mode])};
-      const munch_result rest_of_mode {pike_munch_in_mode(mode, source.substr(offset), first, &hybrid->on_pike)};
+      const munch_result rest_of_mode {pike_munch_in_mode(mode, source, offset, first, &hybrid->on_pike)};
       if (rest_of_mode.have
           && (!best.have || rest_of_mode.len > best.len
               || (rest_of_mode.len == best.len && rest_of_mode.idx < best.idx))) {
@@ -1013,13 +1016,15 @@ namespace scilex {
       return 1; // codepoints: an ASCII byte or a lead (its continuations already scored 0)
     }
 
-    //! \brief The per-rule Pike + first-byte-dispatch munch in \p mode at the start of
-    //!        \p rest (\p lead is rest's first byte). Zero allocation; shared by
-    //!        scan_next's Pike branch. A zero-length match is reported
-    //!        as a candidate (it wins only when nothing matches >0); scan_next's shared
-    //!        guard turns such a win into a lexical error.
+    //! \brief The per-rule Pike + first-byte-dispatch munch in \p mode at \p offset of \p source
+    //!        (\p lead is the byte there). Each rule matches anchored at \p offset in the whole
+    //!        source, so a lookbehind, `\b` or a line start reads the text before the token as it
+    //!        does in `match(text, pos)`. Zero allocation; shared by scan_next's Pike branch. A
+    //!        zero-length match is reported as a candidate (it wins only when nothing matches >0);
+    //!        scan_next's shared guard turns such a win into a lexical error.
     munch_result pike_munch_in_mode(std::size_t              mode,
-                                    std::string_view         rest,
+                                    std::string_view         source,
+                                    std::size_t              offset,
                                     unsigned char            lead,
                                     const std::vector<bool>* only) const
     {
@@ -1037,15 +1042,16 @@ namespace scilex {
                                 return; // this rule is answered by the mode's DFA
                               }
                               // NOLINTNEXTLINE(clang-analyzer-core.NonNullParamChecker)
-                              const auto matched {rules_[idx].pattern.match(rest)};
+                              const auto matched {rules_[idx].pattern.match(source, offset)};
                               // A zero-length match participates (it can only win when no rule
                               // matches >0 here); the shared guard in scan_next turns that win
                               // into a lexical error rather than a stalled scan. Maximal munch
                               // still prefers any longer non-empty match.
+                              const std::size_t length {matched ? matched.end() - offset : 0};
                               if (matched
-                                  && (!have || matched.end() > best_len
-                                      || (matched.end() == best_len && idx < best_idx))) {
-                                best_len = matched.end();
+                                  && (!have || length > best_len
+                                      || (length == best_len && idx < best_idx))) {
+                                best_len = length;
                                 best_idx = idx;
                                 have     = true;
                               }
@@ -1190,6 +1196,7 @@ namespace scilex {
     std::vector<dispatch>                        per_mode_;         //!< Dispatch index, one per mode (by id).
     std::vector<std::shared_ptr<const mode_dfa>> per_mode_dfa_;     //!< Per-mode DFA fast path (nullptr = Pike).
     std::vector<bool>                            mode_significant_; //!< Layout policy (empty = all significant).
+    std::size_t                                  left_context_ {0}; //!< Bytes before a token start any rule may read.
   };
 
   /*!
@@ -1364,9 +1371,11 @@ namespace scilex {
    * more text could change its match there (`real::regex::can_extend`), and stops at the first munch
    * where one could. \ref finish lexes the rest with the end of the text as the end.
    *
-   * The stream keeps the text from the first token it has not returned; what it returned is dropped at the
-   * next \ref feed. So memory follows the longest token, not the input -- and a token's lexeme views that
-   * buffer: it is valid until the next \ref feed or \ref finish. Positions are in the whole text.
+   * The stream keeps the text from the first token it has not returned, and before it the few bytes a rule
+   * may still read there (a lookbehind's width, one code point for `\b`; `real::regex::left_context`); the
+   * rest of what it returned is dropped at the next \ref feed. So memory follows the longest token, not the
+   * input -- and a token's lexeme views that buffer: it is valid until the next \ref feed or \ref finish.
+   * Positions are in the whole text.
    *
    * \code
    * scilex::token_stream in {lex.stream()};
@@ -1497,13 +1506,15 @@ namespace scilex {
       }
     }
 
-    //! \brief Drops the text before the cursor: returned, and no longer viewed by anything valid.
+    //! \brief Drops the text before the cursor -- returned, and no longer viewed by anything valid -- but
+    //!        the bytes a rule may still read before the next token: a lookbehind, `\b` or `\A` there
+    //!        answers as on the whole text (`real::regex::left_context`).
     void drop_returned()
     {
-      const std::size_t k {cursor_.offset};
+      const std::size_t k {cursor_.offset - std::min(cursor_.offset, owner_->left_context_)};
       buffer_.erase(0, k);
       base_          += k;
-      cursor_.offset  = 0;
+      cursor_.offset -= k;
       for (frame& f : stack_) {
         f.entry_pos.offset -= k; // modular: a mode entered before the dropped text keeps a consistent offset
       }

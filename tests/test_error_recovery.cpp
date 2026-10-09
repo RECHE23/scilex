@@ -141,6 +141,24 @@ namespace {
     EXPECT_EQ(toks[1].lexeme, "foo"sv);
   }
 
+  TEST(a_rule_after_an_error_run_reads_the_run_as_its_context)
+  {
+    // The error bytes before a token are text like any other: a lookbehind reads them, so the run
+    // stops where the rule matches in the whole source.
+    std::vector<scilex::rule> rules;
+    rules.push_back({.kind = 1, .pattern = real::regex(R"((?<=@)\d+)")});
+    scilex::lexer lex {std::move(rules), {}, {}, scilex::error_policy::token};
+    const auto    toks = lex.tokenize("@@12@@");
+    EXPECT_EQ(toks.size(), 3U);
+    if (toks.size() != 3U) {
+      return; // the checks below index the three tokens
+    }
+    EXPECT_EQ(toks[0].lexeme, "@@"sv);
+    EXPECT_EQ(toks[1].kind, 1);
+    EXPECT_EQ(toks[1].lexeme, "12"sv);
+    EXPECT_EQ(toks[2].lexeme, "@@"sv);
+  }
+
   TEST(raise_policy_is_unchanged)
   {
     // The default still throws at the first unmatched byte — recovery is strictly opt-in.
