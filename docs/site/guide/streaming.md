@@ -49,6 +49,13 @@ pieces never holds more than a piece and the token it ends inside. `buffered` is
 
 Positions stay in the whole text, in bytes, as `tokenize` gives them.
 
+## Time
+
+Each `feed` reads again, from its first byte, the token it could not return last time: no engine state
+carries over between pieces. A token that is still open across many pieces is therefore read once per
+piece. A token of `n` bytes fed in pieces of `c` bytes is read on the order of `n²/c` bytes' worth, so
+feed pieces of a few kilobytes — what a socket or a file read returns — rather than a byte at a time.
+
 ## Errors
 
 An error is raised where `tokenize` raises it, once the text decides it: a byte no rule can begin is
@@ -62,7 +69,9 @@ token, returned once a rule matches after it or at the end.
 
 In Python every piece is of the first one's type: `str` pieces give `str` lexemes, `bytes` pieces give
 `bytes` lexemes, and a `bytes` piece may end inside a UTF-8 sequence. A stream is a cursor: drive each
-from one thread. `feed` holds the GIL.
+from one thread. A piece of 4 KB or more is lexed with the GIL released, as `tokenize` lexes a long
+text, so separate streams over one lexer run in parallel; a second thread that reaches the same stream
+meanwhile gets `RuntimeError`.
 
 In C++, `lexer::stream()` returns a `scilex::token_stream`. A token's lexeme views the stream's buffer
 and is valid until the next `feed` or `finish`:
