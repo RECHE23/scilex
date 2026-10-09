@@ -87,6 +87,34 @@ jobs:
       - name: Exhaustive lexer-oracle check (scilex::lexer vs reference.hpp)
         run: make -C scilex exhaustive-lex
 
+  # The CLI and the documents that show code: every example grammar's self-check through the CLI, the
+  # CLI's error reports and policies, and the README's quickstart and modal grammar, compiled and run as
+  # written (make example). Plus the cheap source checks the local gate runs beside it.
+  example:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: scilex
+      - uses: actions/checkout@v6
+        with:
+          repository: RECHE23/real-regex
+          ref: v2026.10.7
+          path: real-regex
+      - uses: actions/checkout@v6
+        with:
+          repository: RECHE23/sciforge
+          ref: v2026.10.0
+          path: sciforge
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - name: CLI self-checks, CLI reports and policies, README code
+        run: make -C scilex example
+      - name: Shipped-header hygiene and version agreement
+        run: make -C scilex symbol-hygiene version-check
+
   # The property oracle, twice: fuzz-check over the fixed adversarial inputs and every example grammar
   # (deterministic, scaling cases included), then a libFuzzer smoke from a fresh corpus. The smoke catches
   # what crashes early; the weekly fuzz-long workflow gives the same target hours and a kept corpus.
