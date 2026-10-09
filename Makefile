@@ -300,6 +300,10 @@ example: cli
 	 test $$code -ne 0 && printf '%s\n' "$$out" | grep -q "^lex error at 1:3: no rule matches" \
 	  && echo "  a lex error names its position and its cause" \
 	  || { echo "FAIL: lex-error report was: $$out (exit $$code)"; exit 1; }
+	@out="$$(printf 'a: {b: 1,\n   c: 2}\nd: 3\n' | $(BUILD)/bin/scilex --example yaml --errors=token - 2>&1)"; \
+	 printf '%s\n' "$$out" | grep -qE '^(INDENT|DEDENT)' \
+	  && { echo "FAIL: --errors=token dropped the yaml grammar's insignificant flow mode: $$out"; exit 1; } \
+	  || echo "  --errors=token keeps an example grammar's layout policy (a multi-line flow adds no INDENT)"
 	@c++ $(CXXSTD) -O2 -Wall -Wextra -Wpedantic -Werror $(INCLUDES) examples/cpp/quickstart.cpp -o $(BUILD)/bin/quickstart
 	@out="$$($(BUILD)/bin/quickstart)"; test "$$out" = "$$(printf '1 if\n2 x\n4 +\n3 42')" \
 	  && echo "  the README quickstart compiles and lexes 'if x + 42' into its four tokens" \

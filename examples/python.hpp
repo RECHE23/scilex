@@ -243,18 +243,38 @@ namespace scilex::examples::python {
     return build_rules(true);
   }
 
-  //! \brief Builds the lexer from its rule list (see \ref make_rules).
-  inline scilex::lexer make_lexer()
+  //! \brief make_lexer() under the error policy and column unit given, its modes and DFA unchanged.
+  //! \param[in] errors  What to do at a byte no rule can lex (see \ref scilex::lexer).
+  //! \param[in] columns The unit token columns are counted in (see \ref scilex::lexer).
+  //! \return The lexer.
+  inline scilex::lexer make_lexer_with(scilex::error_policy errors,
+                                       scilex::column_unit  columns)
   {
     // "bracket" is layout-insignificant (Layout Awareness Level A): code spanning
     // several lines inside ( ) [ ] { } is implicit line continuation — no INDENT.
-    return scilex::lexer(make_rules(), {"bracket"});
+    return scilex::lexer(make_rules(), {"bracket"}, {}, errors, columns);
+  }
+
+  //! \brief Builds the lexer from its rule list (see \ref make_rules).
+  inline scilex::lexer make_lexer()
+  {
+    return make_lexer_with(scilex::error_policy::raise, scilex::column_unit::bytes);
+  }
+
+  //! \brief make_lexer_unicode() under the error policy and column unit given, its modes and DFA unchanged.
+  //! \param[in] errors  What to do at a byte no rule can lex (see \ref scilex::lexer).
+  //! \param[in] columns The unit token columns are counted in (see \ref scilex::lexer).
+  //! \return The lexer.
+  inline scilex::lexer make_lexer_unicode_with(scilex::error_policy errors,
+                                               scilex::column_unit  columns)
+  {
+    return scilex::lexer(make_rules_unicode(), {"bracket"}, {}, errors, columns);
   }
 
   //! \brief The Unicode-identifier variant lexer — same grammar, Unicode identifiers.
   inline scilex::lexer make_lexer_unicode()
   {
-    return scilex::lexer(make_rules_unicode(), {"bracket"});
+    return make_lexer_unicode_with(scilex::error_policy::raise, scilex::column_unit::bytes);
   }
 
   //! \brief A realistic snippet exercising every covered context: a decorator, a

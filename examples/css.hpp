@@ -94,6 +94,16 @@ namespace scilex::examples::css {
     return rules;
   }
 
+  //! \brief make_lexer() under the error policy and column unit given, its modes and DFA unchanged.
+  //! \param[in] errors  What to do at a byte no rule can lex (see \ref scilex::lexer).
+  //! \param[in] columns The unit token columns are counted in (see \ref scilex::lexer).
+  //! \return The lexer.
+  inline scilex::lexer make_lexer_with(scilex::error_policy errors,
+                                       scilex::column_unit  columns)
+  {
+    return scilex::lexer(make_rules(), {}, {"default"}, errors, columns);
+  }
+
   //! \brief Builds the lexer from its rule list (see \ref make_rules).
   //!
   //! This grammar is mono-mode, greedy and assertion-free, so "default" is opted into
@@ -101,7 +111,7 @@ namespace scilex::examples::css {
   //! Pike engine as the floor and an identical token stream (see \ref scilex::lexer).
   inline scilex::lexer make_lexer()
   {
-    return scilex::lexer(make_rules(), {}, {"default"});
+    return make_lexer_with(scilex::error_policy::raise, scilex::column_unit::bytes);
   }
 
   //! \brief A stylesheet exercising a hash colour, a dimension and a percentage.

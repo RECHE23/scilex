@@ -55,49 +55,49 @@ namespace {
   //! \brief One registered example language: its name and reusable entry points.
   struct example
   {
-    std::string_view          name;                      //!< CLI name (`--example <name>`).
-    std::vector<scilex::rule> (* make_rules)();          //!< The rule list (to rebuild under an error policy).
-    scilex::lexer             (* make_lexer)();          //!< Builds the language's lexer.
-    const char              * (*  kind_name)(int);       //!< Names a token kind for printing.
-    std::string_view          sample;                    //!< The built-in sample document.
-    bool                      (*          self_check)(); //!< Invariant self-check (true = ok).
-    bool                      uses_layout;               //!< Run the indentation layout pass.
+    std::string_view          name;                                     //!< CLI name (`--example <name>`).
+    scilex::lexer             (* make_lexer_with)(scilex::error_policy,
+                                                  scilex::column_unit); //!< Builds the language's lexer under the CLI's policies.
+    const char              * (*  kind_name)(int);                      //!< Names a token kind for printing.
+    std::string_view          sample;                                   //!< The built-in sample document.
+    bool                      (*          self_check)();                //!< Invariant self-check (true = ok).
+    bool                      uses_layout;                              //!< Run the indentation layout pass.
   };
 
   // The registry. Each new language: include its header above, add one line here.
   const std::vector<example> registry {
     {"json",
-     &scilex::examples::json::make_rules, &scilex::examples::json::make_lexer, &scilex::examples::json::kind_name,
+     &scilex::examples::json::make_lexer_with, &scilex::examples::json::kind_name,
      scilex::examples::json::sample, &scilex::examples::json::self_check, false},
     {"python",
-     &scilex::examples::python::make_rules, &scilex::examples::python::make_lexer, &scilex::examples::python::kind_name,
+     &scilex::examples::python::make_lexer_with, &scilex::examples::python::kind_name,
      scilex::examples::python::sample, &scilex::examples::python::self_check, true},
     // The Unicode-identifier variant: the SAME grammar (kind names and sample reused), only the
     // identifier rule differs — it reads café / 変数. Its self-check pins that and the DFA demote.
     {"python-unicode",
-     &scilex::examples::python::make_rules_unicode, &scilex::examples::python::make_lexer_unicode,
+     &scilex::examples::python::make_lexer_unicode_with,
      &scilex::examples::python::kind_name, scilex::examples::python::sample,
      &scilex::examples::python::self_check_unicode, true},
     {"cpp",
-     &scilex::examples::cpp::make_rules, &scilex::examples::cpp::make_lexer, &scilex::examples::cpp::kind_name,
+     &scilex::examples::cpp::make_lexer_with, &scilex::examples::cpp::kind_name,
      scilex::examples::cpp::sample, &scilex::examples::cpp::self_check, false},
     {"sql",
-     &scilex::examples::sql::make_rules, &scilex::examples::sql::make_lexer, &scilex::examples::sql::kind_name,
+     &scilex::examples::sql::make_lexer_with, &scilex::examples::sql::kind_name,
      scilex::examples::sql::sample, &scilex::examples::sql::self_check, false},
     {"css",
-     &scilex::examples::css::make_rules, &scilex::examples::css::make_lexer, &scilex::examples::css::kind_name,
+     &scilex::examples::css::make_lexer_with, &scilex::examples::css::kind_name,
      scilex::examples::css::sample, &scilex::examples::css::self_check, false},
     {"lisp",
-     &scilex::examples::lisp::make_rules, &scilex::examples::lisp::make_lexer, &scilex::examples::lisp::kind_name,
+     &scilex::examples::lisp::make_lexer_with, &scilex::examples::lisp::kind_name,
      scilex::examples::lisp::sample, &scilex::examples::lisp::self_check, false},
     {"math",
-     &scilex::examples::math::make_rules, &scilex::examples::math::make_lexer, &scilex::examples::math::kind_name,
+     &scilex::examples::math::make_lexer_with, &scilex::examples::math::kind_name,
      scilex::examples::math::sample, &scilex::examples::math::self_check, false},
     {"xml",
-     &scilex::examples::xml::make_rules, &scilex::examples::xml::make_lexer, &scilex::examples::xml::kind_name,
+     &scilex::examples::xml::make_lexer_with, &scilex::examples::xml::kind_name,
      scilex::examples::xml::sample, &scilex::examples::xml::self_check, false},
     {"yaml",
-     &scilex::examples::yaml::make_rules, &scilex::examples::yaml::make_lexer, &scilex::examples::yaml::kind_name,
+     &scilex::examples::yaml::make_lexer_with, &scilex::examples::yaml::kind_name,
      scilex::examples::yaml::sample, &scilex::examples::yaml::self_check, true},
   };
 
@@ -240,11 +240,8 @@ namespace {
       std::cerr << "unknown example grammar: " << args[1] << " (try --list)\n";
       return 2;
     }
-    // With a non-default error or column policy, rebuild from the rule list with it; otherwise the
-    // grammar's own lexer (with its dfa/layout config) is used unchanged.
-    const bool          plain  {errors == scilex::error_policy::raise && columns == scilex::column_unit::bytes};
-    const scilex::lexer lex    {plain ? lang->make_lexer()
-                             : scilex::lexer {lang->make_rules(), {}, {}, errors, columns}};
+    // The grammar's own lexer, with its layout and DFA configuration, under the requested policies.
+    const scilex::lexer lex    {lang->make_lexer_with(errors, columns)};
     const std::string   source {args.size() >= 3 ? read_input(args[2]) : std::string {lang->sample}};
     dump(lex, source, [lang](int kind) {
            return lang->kind_name(kind);

@@ -80,10 +80,20 @@ namespace scilex::examples::math {
     return rules;
   }
 
+  //! \brief make_lexer() under the error policy and column unit given, its modes and DFA unchanged.
+  //! \param[in] errors  What to do at a byte no rule can lex (see \ref scilex::lexer).
+  //! \param[in] columns The unit token columns are counted in (see \ref scilex::lexer).
+  //! \return The lexer.
+  inline scilex::lexer make_lexer_with(scilex::error_policy errors,
+                                       scilex::column_unit  columns)
+  {
+    return scilex::lexer(make_rules(), {}, {}, errors, columns);
+  }
+
   //! \brief Builds the lexer from its rule list (see \ref make_rules).
   inline scilex::lexer make_lexer()
   {
-    return scilex::lexer(make_rules());
+    return make_lexer_with(scilex::error_policy::raise, scilex::column_unit::bytes);
   }
 
   //! \brief A calculator expression: functions, a scientific number, every
