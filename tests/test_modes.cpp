@@ -322,6 +322,24 @@ TEST(layout_awareness_suppresses_an_insignificant_mode)
   EXPECT_EQ(indent_dedent_count(laid), 0); // the flow body added no structure
 }
 
+TEST(what_follows_a_closing_bracket_continues_its_line)
+{
+  // An insignificant mode is entered by a significant token of the current logical line, so the
+  // token that leaves it, and whatever follows on that closing line, still belong to that line:
+  // `} c` is neither a new line nor a deeper one.
+  std::vector<scilex::rule> rules                          {flow_grammar()};
+  rules.push_back(mode_rule(4, R"([^\s{}\[\]]+)", {"default"}));
+  const scilex::lexer              lexer(std::move(rules), {"flow"});
+  const std::vector<scilex::token> laid                    {
+    scilex::layout(lexer.tokenize("k {\n a\n b\n  } c\nd", scilex::eof_policy::append), lexer.mode_significant())};
+  EXPECT_EQ(indent_dedent_count(laid), 0);
+  int newlines {0};
+  for (const scilex::token& tok : laid) {
+    newlines += static_cast<int>(tok.kind == scilex::newline);
+  }
+  EXPECT_EQ(newlines, 2); // after `k { ... } c`, and after `d`
+}
+
 TEST(an_empty_significance_policy_matches_the_positional_layout)
 {
   // Invariant 1: with no insignificant modes the policy is empty, and layout() with

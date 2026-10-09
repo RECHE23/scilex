@@ -201,7 +201,7 @@ namespace scilex {
     std::vector<std::size_t>            levels        {0};
     std::vector<detail::indent_measure> measured      {{0, 0}}; // python_tabs only: one per level
     bool                                started       {false};
-    std::size_t                         previous_line {0};      // last *significant* line seen
+    std::size_t                         previous_line {0};      // last line a token reached
     position                            end_position  {0, 1, 1};
 
     for (const token& current : tokens) {
@@ -248,15 +248,15 @@ namespace scilex {
         }
         started = true;
       }
-      if (significant) {
-        // Only significant tokens advance this, and they advance it to the line of their LAST byte: a
-        // token spanning lines (a triple-quoted string) leaves the scan on its closing line, so what
-        // follows there continues that line rather than opening one. A final newline in the lexeme is
-        // excluded -- a token that ends with `\n` ends its line, it does not extend it.
-        const std::string_view body {current.lexeme.ends_with('\n') ? current.lexeme.substr(0, current.lexeme.size() - 1)
-                                                                     : current.lexeme};
-        previous_line = current.start.line + static_cast<std::size_t>(std::ranges::count(body, '\n'));
-      }
+      // Every token advances this, to the line of its LAST byte: a token spanning lines (a triple-quoted
+      // string) leaves the scan on its closing line, so what follows there continues that line rather
+      // than opening one. An insignificant token does too: its mode was entered by a significant token
+      // of the current logical line, so the bracket it closes -- and what follows it on that line --
+      // still belongs to that line. A final newline in the lexeme is excluded -- a token that ends with
+      // `\n` ends its line, it does not extend it.
+      const std::string_view body {current.lexeme.ends_with('\n') ? current.lexeme.substr(0, current.lexeme.size() - 1)
+                                                                   : current.lexeme};
+      previous_line = current.start.line + static_cast<std::size_t>(std::ranges::count(body, '\n'));
       out.push_back(current); // every token is kept, significant or not
     }
 
