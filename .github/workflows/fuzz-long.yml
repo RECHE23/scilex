@@ -1,7 +1,8 @@
 name: Fuzz (long)
 
 # The per-push `fuzz` job in ci.yml is a smoke: two minutes from a corpus that starts over on every
-# run, which catches a regression that fails on the first inputs and nothing deeper. This workflow
+# run, which catches a regression that fails on the first inputs and nothing deeper. Its fuzz-check
+# draws 400 random grammars from a fixed seed; this workflow draws 100 000 from a new one each run. This workflow
 # gives the same target the time a mutation-based fuzzer needs to reach rare paths, and keeps the
 # corpus between runs so every week starts where the last one stopped.
 #
@@ -65,6 +66,15 @@ jobs:
           path: scilex/build/fuzz/corpus
           key: fuzz-long-scilex-${{ github.run_id }}
           restore-keys: fuzz-long-scilex-
+      # fuzz-check's random grammars, many more than the per-push 400 and from a seed that changes with
+      # every run; a failure prints its seed, grammar and input, which `oracle_check <seed> <count>`
+      # replays.
+      - name: Random grammars
+        env:
+          SEED: ${{ github.run_number }}
+        run: |
+          make -C scilex fuzz-check
+          scilex/build/fuzz/oracle_check "$SEED" 100000
       - name: Install clang + libFuzzer
         run: sudo apt-get update && sudo apt-get install -y clang-18 libclang-rt-18-dev
       # FUZZ_TIME comes from the environment set above; the Makefile reads it with `?=`.

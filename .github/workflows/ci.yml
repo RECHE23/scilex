@@ -115,8 +115,9 @@ jobs:
       - name: Shipped-header hygiene and version agreement
         run: make -C scilex symbol-hygiene version-check
 
-  # The property oracle, twice: fuzz-check over the fixed adversarial inputs and every example grammar
-  # (deterministic, scaling cases included), then a libFuzzer smoke from a fresh corpus. The smoke catches
+  # The property oracle, twice: fuzz-check over the fixed adversarial inputs, every example grammar and
+  # 400 random grammars, streams included (deterministic, scaling cases included), then a libFuzzer smoke
+  # from a fresh corpus. The smoke catches
   # what crashes early; the weekly fuzz-long workflow gives the same target hours and a kept corpus.
   fuzz:
     runs-on: ubuntu-latest
