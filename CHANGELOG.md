@@ -7,6 +7,13 @@ fuzz oracle.
 
 ## Unreleased
 
+### Fixed
+- **A rule that reads before its token (a leading `^` or `\A`, a multiline `^`) stays off the DFA.** Since
+  2026.10.2 such a rule matches on Pike in the whole source, so a leading `^` holds only at the start of the
+  text, while the default lexer's DFA matched from each token's start, where it always holds: `^#![^\n]*`
+  read as a shebang in the middle of a file. The default lexer and the per-rule path give the same tokens
+  again; no example grammar has such a rule, so none moves to Pike.
+
 ## 2026.10.2 — 2026-10-10
 
 ### Changed
