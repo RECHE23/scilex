@@ -104,10 +104,9 @@ namespace scilex {
    * zero-width assertion no DFA represents, so a rule holding either **stays on the general Pike
    * engine** while the mode's other rules take the DFA (same tokens). That rule is tried at every
    * position its first byte allows, so it keeps a share of the per-rule cost. The narrower Unicode
-   * `\d` and `\s` expand and stay on the DFA. Concretely: the general engine lexes at roughly
-   * **7–14 MB/s**, while the example grammars, wholly on their DFAs, run **5.7–18× that**; the
-   * `python-unicode` grammar, whose identifier rule stays on Pike, runs 3.3× (BENCHMARKS.md) — so the
-   * Unicode identifier costs part of the DFA fast path.
+   * `\d` and `\s` expand and stay on the DFA. BENCHMARKS.md measures the cost per grammar: the
+   * `python-unicode` grammar, whose identifier rule stays on Pike, keeps a smaller part of the DFA's
+   * gain than `python`, whose rules all take the DFA — the Unicode identifier costs part of the fast path.
    *
    * If your identifiers are ASCII by specification (JSON, SQL, C), pin `(?a)` inline in the pattern
    * (or pass `real::flags::ascii`) to keep `\w \d \s \b` ASCII and small, DFA-representable, and fast —
@@ -539,7 +538,7 @@ namespace scilex {
      *        mode, applying the winning rule's mode transition (if any).
      *
      * Skips over skip-rule matches, then fills \p out with the next emitted token,
-     * advancing \p cursor (offset, line, byte column) and the mode \p stack past it.
+     * advancing \p cursor (offset, line, column) and the mode \p stack past it.
      * The single source of scanning truth shared by \ref tokenize and the lazy
      * \ref token_iterator.
      *

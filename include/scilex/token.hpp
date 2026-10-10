@@ -39,16 +39,17 @@ namespace scilex {
   /*!
    * \brief A location in the source text.
    *
-   * Columns are counted in bytes within the line, consistent with REAL's
-   * byte-level UTF-8 model (an ASCII column equals a character column; a
-   * multibyte codepoint spans several byte columns). Lines and columns are
-   * 1-based; \ref offset is a 0-based byte index from the start of the source.
+   * Columns are counted within the line in the unit the lexer's \ref column_unit
+   * names, bytes by default (REAL's byte-level UTF-8 model: a multibyte code point
+   * spans several columns), or code points, or UTF-16 code units. Lines and columns are 1-based;
+   * a line ends at `\n` only (a lone `\r` does not end one). \ref offset is a
+   * 0-based byte index from the start of the source, whatever the column unit.
    */
   struct position
   {
     std::size_t offset; //!< 0-based byte offset from the start of the source.
     std::size_t line;   //!< 1-based line number.
-    std::size_t column; //!< 1-based byte column within the line.
+    std::size_t column; //!< 1-based column within the line, in the lexer's \ref column_unit.
   };
 
   /*!

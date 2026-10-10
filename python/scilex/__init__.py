@@ -47,7 +47,8 @@ context — Python f-strings are the canonical case::
 A plain ``(kind, pattern, skip)`` rule uses neither field. Earlier rules win ties;
 the longest match wins overall (maximal munch). Positions
 are byte-based (SciLex's UTF-8 model): ``offset`` is a 0-based byte index,
-``line``/``column`` are 1-based (a column counts bytes). A position matched by no
+``line``/``column`` are 1-based, a column counting bytes unless the lexer's
+``columns`` says code points or UTF-16 units, and a line ends at ``\n`` only. A position matched by no
 rule raises :class:`scilex.error` (aka :class:`LexerError`) carrying the failure
 ``.position``.
 """
