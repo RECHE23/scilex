@@ -8,6 +8,8 @@ fuzz oracle.
 ## Unreleased
 
 ### Changed
+- **SciForge v2026.10.2**: CI pins and the `sciforge-build` floor (was 2026.6.x), so an isolated wheel
+  build compiles against the hardened binding headers.
 - **Build requires `real-regex >= 2026.10.10`** (was `>= 2026.10.9`); the FetchContent tag and CI move with it.
   2026.10.10 gives `real::dfa::munch`, which a stream reads its gate from, and fixes `can_extend` with a
   lookaround that reads past it, which a stream relies on.
