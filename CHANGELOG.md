@@ -7,6 +7,11 @@ fuzz oracle.
 
 ## Unreleased
 
+### Changed
+- **Build requires `real-regex >= 2026.10.10`** (was `>= 2026.10.9`); the FetchContent tag and CI move with it.
+  2026.10.10 gives `real::dfa::munch`, which a stream reads its gate from, and fixes `can_extend` with a
+  lookaround that reads past it, which a stream relies on.
+
 ### Fixed
 - **A stream no longer loses the tokens before an error.** An error found in a `feed` or `finish` that had
   decided tokens before it dropped them, so what a stream gave depended on where the text was cut
