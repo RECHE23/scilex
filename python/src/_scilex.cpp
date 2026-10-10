@@ -226,9 +226,14 @@ struct Token {
 };
 
 // The manual constructor Token(kind, lexeme, position, mode="default"): borrow the object args (INCREF
-// into the held py_refs) and intern the mode string. Mirrors the former Python Token.__init__.
+// into the held py_refs) and intern the mode string. Mirrors the former Python Token.__init__. The lexeme
+// must be str or bytes and the position a Position, so that repr, == and hash cannot fail later.
 Token       make_token(int kind, PyObject* lexeme, PyObject* position, std::string mode)
 {
+    if (PyUnicode_Check(lexeme) == 0 && PyBytes_Check(lexeme) == 0) {
+        throw sb::cast_error("Token lexeme must be str or bytes");
+    }
+    static_cast<void>(sb::class_unwrap<Position>(position)); // a TypeError for anything else
     return Token {kind, py_ref::borrow(lexeme), py_ref::borrow(position),
                   py_ref::steal(PyUnicode_FromStringAndSize(mode.data(),
                                                             static_cast<Py_ssize_t>(mode.size())))};
@@ -1415,7 +1420,7 @@ SCIFORGE_MODULE(_scilex, "scilex.error", m)
     .def_init<&make_position>(sb::arg("offset"), sb::arg("line"), sb::arg("column"))
     .def_prop_ro<&position_offset>("offset", "0-based byte offset of the position")
     .def_prop_ro<&position_line>("line", "1-based line of the position")
-    .def_prop_ro<&position_column>("column", "1-based byte column of the position")
+    .def_prop_ro<&position_column>("column", "1-based column of the position, in the lexer's column unit (bytes by default)")
     .def_repr<&position_repr>()
     .def_richcompare<&position_eq>()
     .def_hash<&position_hash>();
@@ -1429,7 +1434,7 @@ SCIFORGE_MODULE(_scilex, "scilex.error", m)
     .def_prop_ro<&token_mode>("mode", "the name of the mode the token was lexed in")
     .def_prop_ro<&token_offset>("offset", "position.offset — 0-based byte offset")
     .def_prop_ro<&token_line>("line", "position.line — 1-based line")
-    .def_prop_ro<&token_column>("column", "position.column — 1-based byte column")
+    .def_prop_ro<&token_column>("column", "position.column — 1-based column, in the lexer's column unit")
     .def_repr<&token_repr>()
     .def_richcompare<&token_eq>()
     .def_hash<&token_hash>();

@@ -52,6 +52,7 @@ are byte-based (SciLex's UTF-8 model): ``offset`` is a 0-based byte index,
 rule raises :class:`scilex.error` (aka :class:`LexerError`) carrying the failure
 ``.position``.
 """
+import operator
 import os
 
 from scilex._scilex import (
@@ -330,6 +331,11 @@ class Lexer:
         normalized = []
         for entry in rules:
             kind, pattern = entry[0], entry[1]
+            try:
+                kind = operator.index(kind)
+            except TypeError:
+                raise TypeError(
+                    f"rule {len(normalized)}: kind must be an int, got {type(kind).__name__}") from None
             skip = bool(entry[2]) if len(entry) > 2 else False
             if not isinstance(pattern, str):
                 raise TypeError(
@@ -347,9 +353,9 @@ class Lexer:
                 modes.append(mode)
             action = _normalize_action(entry[4] if len(entry) > 4 else None, len(normalized))
             if modes or action is not None:
-                normalized.append((int(kind), pattern, skip, modes, action))
+                normalized.append((kind, pattern, skip, modes, action))
             else:
-                normalized.append((int(kind), pattern, skip)) # plain rule stays a triple
+                normalized.append((kind, pattern, skip)) # plain rule stays a triple
         self._rules = normalized
         self._dfa_modes = [str(mode) for mode in dfa_modes]
         self._errors = errors

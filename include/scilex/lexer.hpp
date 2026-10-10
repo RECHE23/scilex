@@ -332,9 +332,9 @@ namespace scilex {
      *            \ref columns().
      * \param[in] dfa Which modes are tried for DFA acceleration (\ref dfa_policy); the default
      *            tries all of them.
-     * \throws std::invalid_argument If a transition rule is malformed (empty
-     *         pattern or target), or \p insignificant_modes / \p dfa_modes names an
-     *         unknown mode.
+     * \throws std::invalid_argument If a rule's kind is reserved (\ref end_of_input to \ref scilex::error),
+     *         a transition rule is malformed (empty pattern or target), or \p insignificant_modes /
+     *         \p dfa_modes names an unknown mode.
      */
     explicit lexer(std::vector<rule>               rules,
                    std::vector<std::string>        insignificant_modes        = {},
@@ -754,6 +754,19 @@ namespace scilex {
                             [](const std::vector<std::size_t>& bucket) { return bucket.empty(); });
     }
 
+    //! \brief Refuses a rule whose kind is one SciLex reserves: its tokens would read as an end of input,
+    //!        a layout token or an error run.
+    //! \throws std::invalid_argument On the first such rule.
+    void validate_kinds() const
+    {
+      for (std::size_t idx {0}; idx < rules_.size(); ++idx) {
+        if (rules_[idx].kind <= scilex::error) {
+          throw std::invalid_argument("rule " + std::to_string(idx) + ": kind " + std::to_string(rules_[idx].kind)
+                                      + " is reserved (scilex::end_of_input to scilex::error)");
+        }
+      }
+    }
+
     //! \brief Fail-fast transition checks: a transition rule must consume input, and
     //!        a push/set target must be a defined, non-empty mode.
     //! \throws std::invalid_argument on a violation.
@@ -806,6 +819,7 @@ namespace scilex {
           }
         }
       }
+      validate_kinds();
       validate_transitions();
 
       // Pre-resolve each transition's target mode id once, now that every mode is

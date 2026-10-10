@@ -149,6 +149,23 @@ class TokenStructureTests(unittest.TestCase):
         self.assertEqual(hash(first), hash(second))
         self.assertNotEqual(first, sample_lexer().tokenize("bar")[0])
 
+    def test_token_refuses_a_lexeme_or_position_of_another_type(self):
+        position = scilex.Position(0, 1, 1)
+        self.assertEqual(scilex.Token(1, b"x", position).lexeme, b"x")
+        with self.assertRaises(TypeError):
+            scilex.Token(1, "x", "notpos")
+        with self.assertRaises(TypeError):
+            scilex.Token(1, ["x"], position)
+
+    def test_a_rule_kind_is_an_int_and_not_reserved(self):
+        for kind in (1.7, "3", None):
+            with self.assertRaises(TypeError):
+                scilex.Lexer([(kind, "a")])
+        for kind in (scilex.END_OF_INPUT, scilex.NEWLINE, scilex.ERROR):
+            with self.assertRaises(scilex.error):
+                scilex.Lexer([(kind, "a")])
+        self.assertEqual(scilex.Lexer([(scilex.ERROR + 1, "a")]).tokenize("a")[0].kind, scilex.ERROR + 1)
+
     def test_position_repr_equality_and_hash(self):
         position = scilex.Position(7, 2, 3)
         self.assertEqual(position, scilex.Position(7, 2, 3))

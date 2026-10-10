@@ -27,6 +27,13 @@ fuzz oracle.
   column, so `\t` and 8 spaces opened a block.
 
 ### Fixed
+- **A rule's kind must be an int that SciLex does not reserve.** A kind from `scilex::end_of_input` to
+  `scilex::error` is refused when the lexer is built (`std::invalid_argument`; Python: `scilex.error`): its
+  tokens read as an end of input, a layout token or an error run. Python refuses a kind that is not an
+  integer (`TypeError`), where `int()` turned `1.7` into 1 and `"3"` into 3.
+- **`scilex.Token` checks its arguments**: a lexeme that is not `str` or `bytes`, or a position that is not
+  a `Position`, is a `TypeError` when the token is made. `Token(1, 'x', 'notpos')` was accepted, then its
+  `repr` raised `SystemError`, and a token with an unhashable lexeme raised `scilex.error` from `hash`.
 - **A stream no longer loses the tokens before an error.** An error found in a `feed` or `finish` that had
   decided tokens before it dropped them, so what a stream gave depended on where the text was cut
   (`"abc 12 de @ x"` in one piece: nothing, then the error). The `lex_error` now carries them

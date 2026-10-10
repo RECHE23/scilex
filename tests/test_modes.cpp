@@ -91,6 +91,21 @@ TEST(build_rejects_a_transition_rule_with_an_empty_pattern)
   EXPECT_THROWS(scilex::lexer {std::move(rules)}, std::invalid_argument);
 }
 
+// A rule's kind may not be one SciLex reserves (end_of_input .. error): its tokens would read as an end of
+// input, a layout token or an error run. The first kind past them is the user's.
+TEST(build_rejects_a_reserved_kind)
+{
+  for (const int kind : {scilex::end_of_input, scilex::end_of_input + 1, scilex::error}) {
+    std::vector<scilex::rule> rules;
+    rules.push_back({.kind = 1, .pattern = real::regex("[a-z]+")});
+    rules.push_back({.kind = kind, .pattern = real::regex("[0-9]+")});
+    EXPECT_THROWS(scilex::lexer {std::move(rules)}, std::invalid_argument);
+  }
+  std::vector<scilex::rule> rules;
+  rules.push_back({.kind = scilex::error + 1, .pattern = real::regex("[0-9]+")});
+  EXPECT_EQ(scilex::lexer {std::move(rules)}.tokenize("7").front().kind, scilex::error + 1);
+}
+
 TEST(build_rejects_a_transition_into_an_empty_mode)
 {
   std::vector<scilex::rule> rules;
