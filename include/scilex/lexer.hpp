@@ -1090,7 +1090,8 @@ namespace scilex {
     //! the DFA the longest match of any of its rules, so over such rules the two agree on the length and
     //! on the earliest rule. Which rules pass is not a syntactic property: `as|assert` fails (its
     //! `match()` stops at "as") and the lazy `x*?y` passes; a rule no DFA represents (a `\b`, a `$`, a
-    //! lookaround, a class too wide) raises \c real::dfa_error and fails too. Every failing rule stays
+    //! lookaround, a class too wide) raises \c real::dfa_error and fails too, and a rule that reads the
+    //! text before its token (a leading `^` or `\A`) stays off it. Every failing rule stays
     //! on Pike beside the DFA, and \ref munch_at merges the two, so one such rule no longer sends its
     //! whole mode back to Pike. An exhausted decision budget counts as a failure.
     //! \param[in] to_global The mode's active rules, in ascending global index (= priority).
@@ -1109,7 +1110,9 @@ namespace scilex {
         catch (const real::dfa_error&) {
           faithful = false; // not DFA-able
         }
-        if (faithful) {
+        // A DFA matches from the token's start, where `^`, `\A` or a lookbehind would read the text
+        // before it: Pike matches in the whole source and answers differently past the first token.
+        if (faithful && rules_[g].pattern.left_context() == 0) {
           on_dfa.push_back(g);
         }
         else {

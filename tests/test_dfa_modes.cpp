@@ -392,6 +392,25 @@ TEST(automatic_policy_accelerates_every_exact_mode_and_only_those)
   EXPECT(tokens_equal(automatic.tokenize(src), pike_only(rules).tokenize(src)));
 }
 
+// A rule that reads before its token -- a leading ^ or \A, a multiline ^ -- matches in the whole
+// source on Pike. A DFA matches from the token's start, where those anchors would always hold, so such a
+// rule stays on Pike and the default lexer gives Pike's tokens.
+TEST(a_rule_that_reads_before_its_token_stays_on_pike)
+{
+  const std::vector<rule> rules             {plain(0, R"(^#![^\n]*)"), plain(1, R"(#[^\n]*)"), plain(2, R"(\s+)"),
+                                             plain(3, "[a-z]+"), plain(4, R"((?m)^@)"), plain(5, "@")};
+  const scilex::lexer     automatic         {rules};
+  EXPECT(automatic.pike_rules("default") == (std::vector<std::size_t> {0, 4}));
+  const std::string_view src                {"#!/bin/sh\necho #!not-a-shebang\n@x @y\n"};
+  EXPECT(tokens_equal(automatic.tokenize(src), pike_only(rules).tokenize(src)));
+  const std::vector<token> toks             {automatic.tokenize(src)};
+  bool                     shebang_mid_text {false};
+  for (const token& t : toks) {
+    shebang_mid_text = shebang_mid_text || (t.kind == 0 && t.start.offset > 0);
+  }
+  EXPECT(!shebang_mid_text); // only the first line's #! is a shebang
+}
+
 // The hybrid munch against the per-rule path, on rule sets that mix rules a DFA takes with rules it
 // cannot (a \b, a $, a lazy delimiter, a prefix alternation, a nullable rule): the same tokens, or
 // the same error at the same offset, on every input.
