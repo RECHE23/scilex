@@ -7,6 +7,8 @@ fuzz oracle.
 
 ## Unreleased
 
+## 2026.10.3 — 2026-10-10
+
 ### Fixed
 - **A rule that reads before its token (a leading `^` or `\A`, a multiline `^`) stays off the DFA.** Since
   2026.10.2 such a rule matches on Pike in the whole source, so a leading `^` holds only at the start of the
