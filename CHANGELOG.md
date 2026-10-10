@@ -11,15 +11,6 @@ fuzz oracle.
 - **Build requires `real-regex >= 2026.10.10`** (was `>= 2026.10.9`); the FetchContent tag and CI move with it.
   2026.10.10 gives `real::dfa::munch`, which a stream reads its gate from, and fixes `can_extend` with a
   lookaround that reads past it, which a stream relies on.
-
-### Fixed
-- **A stream no longer loses the tokens before an error.** An error found in a `feed` or `finish` that had
-  decided tokens before it dropped them, so what a stream gave depended on where the text was cut
-  (`"abc 12 de @ x"` in one piece: nothing, then the error). The `lex_error` now carries them
-  (`lex_error::decided()`; Python: `LexError.tokens`): the tokens of the earlier calls and these are every
-  token before the error, wherever the text was cut.
-
-### Changed
 - **A stream runs at 1.4–1.6× `tokenize`'s time** (1 MiB, 4 KiB chunks, arm64: `json` 2.2 → 76 MB/s,
   `python` 0.5 → 78, `cpp` 0.6 → 76; it was 55–264× slower). Before each munch it asked every rule of the
   mode whether more text could change its match (`real::regex::can_extend`, a Pike run). The mode's DFA now
@@ -35,12 +26,16 @@ fuzz oracle.
   advances to the next multiple of 8, and ambiguous tabs and spaces are refused. It counted a tab as one
   column, so `\t` and 8 spaces opened a block.
 
+### Fixed
+- **A stream no longer loses the tokens before an error.** An error found in a `feed` or `finish` that had
+  decided tokens before it dropped them, so what a stream gave depended on where the text was cut
+  (`"abc 12 de @ x"` in one piece: nothing, then the error). The `lex_error` now carries them
+  (`lex_error::decided()`; Python: `LexError.tokens`): the tokens of the earlier calls and these are every
+  token before the error, wherever the text was cut.
 - **An error run ends where a rule with no first byte matches.** Under `error_policy::token`, a run of
   unlexable bytes ends at the first position where a rule matches with some length, but only the rules
   filed by first byte were asked: `(?m)^[ \t]*` (skip) let the run `"!\n  "` swallow the next line's blanks.
   The fuzz oracle matches in the whole text, as the lexer does since 2026.10.2.
-
-### Fixed (`.lex` and CLI)
 - **A `push=` or `set=` into a mode no rule is active in is refused at its line and column**
   (`my.lex:2:5: no rule is active in mode 'strr' (give one in=strr)`). The lexer refused it when built,
   with no line, so a typo in a mode name surfaced as a bare `scilex.error`.
