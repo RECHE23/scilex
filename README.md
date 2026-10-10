@@ -33,7 +33,7 @@ measured optimality.
 - Ordered token rules: `(kind, real::regex, skip)`
 - Maximal-munch matching (longest match wins, rule order for ties)
 - **Contextual lexing (modes)** — per-rule `in_mode` + a push / pop / set mode stack
-- **DFA fast path (automatic)** — every mode whose DFA reproduces the per-rule munch is accelerated with one `real::dfa` pass (5.7–18× on the example grammars, every one wholly on it); the decision is exact (Pike is the floor), the token stream identical; `dfa_policy::requested` restricts it to `dfa_modes`
+- **DFA fast path (automatic)** — every mode whose DFA reproduces the per-rule munch is accelerated with one `real::dfa` pass (3.2–17× on the example grammars, every one wholly on it); the decision is exact (Pike is the floor), the token stream identical; `dfa_policy::requested` restricts it to `dfa_modes`
 - **Layout Awareness** — mode-aware indentation (NEWLINE / INDENT / DEDENT)
 - Source positions (byte offset, line, column counted in bytes, code points or UTF-16 units); each token
   carries its start and its mode, and `lexer::end_of(source, token)` gives where it ends
@@ -87,7 +87,7 @@ lx = scilex.Lexer([
     (1, r"[0-9]+", False),             # number
     (2, r"[A-Za-z_][A-Za-z0-9_]*", False),
 ])
-# Every mode whose DFA is exact is accelerated (5.7–18×): lx.dfa_modes_active names them;
+# Every mode whose DFA is exact is accelerated (3.2–17×): lx.dfa_modes_active names them;
 # scilex.Lexer([...], dfa="requested") keeps the per-rule path.
 
 # Eager
@@ -172,7 +172,7 @@ policy, so an input made only of openers cannot grow it without end.
 Every mode is accelerated by a `real::dfa` where that is exact: instead of trying each candidate rule at
 every position, one DFA pass recognizes the winning rule — the same maximal munch,
 with the order tie-break baked into the automaton. On a mode where many rules share
-leading bytes that is **5.7–18× the regular path** on the full token path of the example grammars.
+leading bytes that is **3.2–17× the regular path** on the full token path of the example grammars.
 
 ```cpp
 scilex::lexer lexer(std::move(rules));   // dfa_policy::automatic: every mode is tried
@@ -205,9 +205,9 @@ behaviour for a language like Python 3. But a Unicode `\w` expands into more UTF
 transitions than a DFA is built from, and `\b` is a zero-width assertion no DFA represents, so a
 rule holding either **stays on the general engine** beside its mode's DFA (same tokens, visible via
 `pike_rules(mode)`). The narrower Unicode `\d` and `\s` expand and stay on the DFA. Concretely the
-general engine runs at **~7–14 MB/s** while every shipped grammar runs wholly on the DFA at **5.7–18×
-that** on arm64 (8.6–27.5× on x86-64, where Pike reads lower); the `python-unicode` grammar, whose
-identifier rule stays on Pike, runs at 34.7 MB/s against 10.4 MB/s for Pike alone (3.3×; 2026-09-24,
+general engine runs at **~8–45 MB/s** while every shipped grammar runs wholly on the DFA at **3.2–17×
+that** on arm64 (4.5–25× on x86-64, where Pike reads lower); the `python-unicode` grammar, whose
+identifier rule stays on Pike, runs at 37.1 MB/s against 13.6 MB/s for Pike alone (2.7×; 2026-10-09,
 arm64, `-O2`, 256 KiB, BENCHMARKS.md) — the Unicode identifier costs part of the DFA.
 
 So: if your identifiers are ASCII by specification (JSON, SQL, C), pin **`(?a)`** inline in the
@@ -386,10 +386,10 @@ C++/Python API, current scope) lives in
 
 ## Performance
 
-See [BENCHMARKS.md](BENCHMARKS.md). In C++ the example grammars lex at 66–134 MB/s on their DFAs
-(arm64, `-O2`); through the Python binding SciLex is 1.3–1.9× faster than `re` on the benign case
+See [BENCHMARKS.md](BENCHMARKS.md). In C++ the example grammars lex at 80–151 MB/s on their DFAs
+(arm64, `-O2`); through the Python binding SciLex is 2.1–2.2× faster than `re` on the benign case
 measured there, and ahead of Pygments and tree-sitter on the two corpora of the cross-tool table; on
-a ReDoS pattern SciLex stays linear while `re` explodes. flex, a code generator, remains ~5–7× faster.
+a ReDoS pattern SciLex stays linear while `re` explodes. flex, a code generator, remains ~6× faster.
 
 **Linear on the DFA; the worst case is quadratic, and only on Pike.** Every rule match is linear in
 the text it scans, but at each token start every candidate rule is tried, and a rule may scan far past

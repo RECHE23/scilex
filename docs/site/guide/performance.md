@@ -41,9 +41,9 @@ up to one bit per source byte for each DFA state such a stretch passed, at most 
 
 ## Measured
 
-On the example grammars, the default lexer runs at 66–134 MB/s against 7–14 MB/s on the per-rule path
-alone — 5.7× to 18× on arm64 and 8.6× to 27.5× on x86-64, where the per-rule path reads lower. Through
-the Python binding SciLex is 1.3–1.9× faster than a `re`-based tokenizer on the benign case measured,
+On the example grammars, the default lexer runs at 80–151 MB/s against 8–45 MB/s on the per-rule path
+alone — 3.2× to 17× on arm64 and 4.5× to 25× on x86-64, where the per-rule path reads lower. Through
+the Python binding SciLex is 2.1–2.2× faster than a `re`-based tokenizer on the benign case measured,
 and ahead of Pygments and tree-sitter on the cross-tool corpora. The tables, their stamps and their
 method are in
 [BENCHMARKS.md](https://github.com/RECHE23/scilex/blob/main/BENCHMARKS.md).

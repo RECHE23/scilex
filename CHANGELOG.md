@@ -7,6 +7,37 @@ fuzz oracle.
 
 ## Unreleased
 
+### Changed
+- **Build requires `real-regex >= 2026.10.9`** (was `>= 2026.10.7`); the FetchContent tag and CI move with it.
+  2026.10.9 gives each rule's left context (`real::regex::left_context`), which a stream now keeps.
+- **`BENCHMARKS.md` is re-stamped** against real-regex 2026.10.9 on both ISAs (2026-10-09, arm64 on AC power
+  and x86-64): Pike rows 7–64 % faster than at the 2026.9.7 stamp and `json` 8.14 → 44.75 MB/s, all of it
+  REAL's (this release's SciLex and the one before its left-context change read the same against the same
+  REAL); the default DFA 80–151 MB/s, 3.2–17× Pike on arm64 and 4.5–25× on x86-64; the Python binding
+  2.15× `re` on the benign case.
+
+### Fixed
+- **A rule reads the text before its token.** Each rule matched the source from the token's start, so a
+  lookbehind never saw what precedes it and `\b` read a token start as a word edge: `(?<=@)\d+` never matched
+  after `@`, and `\b\d+` split `ab12`. Rules now match anchored at the offset in the whole source, as
+  `match(text, pos)` does, in `tokenize`, in a stream (which keeps the bytes a rule may read before its
+  cursor) and in error recovery (a run before a token is that token's context).
+- **What follows a closing bracket on its line continues the logical line.** Python's `x = f(\n a,\n b) + 1`
+  emitted NEWLINE and INDENT before the `+`: the tokens of an insignificant mode did not advance the line
+  the layout pass had reached.
+- **The CLI's `--errors` and `--columns` keep an example grammar's modes and DFA.** They rebuilt the lexer
+  from the bare rules, so YAML's flow collections and Python's brackets emitted INDENT and DEDENT.
+- **A `.lex` pattern lost to the line's trailing blanks is named.** The parser drops the blanks that end a
+  line, so a pattern of spaces read as a missing field; the error now says so and how to write one (`[ ]`).
+- **Python: a stream lexes a piece of 4 KB or more with the GIL released**, as `tokenize` does, and a second
+  thread reaching the same stream meanwhile gets `RuntimeError` instead of racing on its buffer.
+
+### Documentation
+- The streaming guide states what a token open across many pieces costs (read again on each feed).
+
+### Internal
+- CI runs `make example` (the CLI's self-checks and the README's code), `symbol-hygiene` and `version-check`.
+
 ## 2026.10.1 — 2026-10-09
 
 ### Changed
