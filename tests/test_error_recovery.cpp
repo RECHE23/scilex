@@ -3,8 +3,10 @@
 // than thrown; a pushed mode still open at end of input yields one zero-width error token at the EOF;
 // and the fatal cases (a pop at the root, a zero-length match) still throw under either policy. The
 // default policy (raise) is unchanged — the rest of the suite pins that.
+#include <algorithm>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include <sciforge/test/framework.hpp>
@@ -81,6 +83,43 @@ namespace {
     EXPECT_EQ(toks[0].lexeme, "@@"sv);
     EXPECT_EQ(toks[1].lexeme, "ok"sv);
     EXPECT_EQ(toks[1].start.line, 2U);
+  }
+
+  // A rule with no first byte (`(?m)^[ \t]*`, nullable) matches nothing mid-line, so a run starts there; it
+  // ends where that rule matches the blanks of the next line, and goes on where it matches nothing ("\n!":
+  // the line start before `!`). The same with the mode's DFA, and streamed at every cut.
+  TEST(an_error_run_ends_at_a_general_rule_match)
+  {
+    const std::vector<scilex::rule> rules {
+      {.kind = WS, .pattern = real::regex(R"((?m)^[ \t]*)"), .skip = true},
+      {.kind = WORD, .pattern = real::regex("[a-d]+")}};
+    const std::string_view                              in   {"a!\n  c\n!b"};
+    const std::vector<std::pair<int, std::string_view>> want {
+      {WORD, "a"}, {scilex::error, "!\n"}, {WORD, "c"}, {scilex::error, "\n!"}, {WORD, "b"}};
+    for (const scilex::dfa_policy dfa : {scilex::dfa_policy::requested, scilex::dfa_policy::automatic}) {
+      const scilex::lexer                           lex {rules, {}, {}, scilex::error_policy::token, scilex::column_unit::bytes, dfa};
+      std::vector<std::pair<int, std::string_view>> got;
+      for (const scilex::token& tok : lex.tokenize(in)) {
+        got.emplace_back(tok.kind, tok.lexeme);
+      }
+      EXPECT(got == want);
+      for (std::size_t cut {0}; cut <= in.size(); ++cut) {
+        scilex::token_stream                     stream {lex.stream()};
+        std::vector<std::pair<int, std::string>> streamed;
+        for (const std::string_view piece : {in.substr(0, cut), in.substr(cut)}) {
+          for (const scilex::token& tok : stream.feed(piece)) {
+            streamed.emplace_back(tok.kind, tok.lexeme);
+          }
+        }
+        for (const scilex::token& tok : stream.finish()) {
+          streamed.emplace_back(tok.kind, tok.lexeme);
+        }
+        EXPECT_EQ(streamed.size(), want.size());
+        for (std::size_t i {0}; i < std::min(streamed.size(), want.size()); ++i) {
+          EXPECT(streamed[i].first == want[i].first && streamed[i].second == want[i].second);
+        }
+      }
+    }
   }
 
   TEST(the_dfa_scan_path_recovers_identically)

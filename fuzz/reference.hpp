@@ -20,9 +20,10 @@
  * *numbers* never reach the token stream, only name-membership (fixed by the
  * rules) does — and keeps its own mode stack.
  *
- * The encoded spec (verified against `lexer.hpp` this session): at each
+ * The encoded spec: at each
  * position, among the rules **active in the current mode** (empty `in_mode` ⇒
- * the default mode; otherwise the listed modes), try each anchored; the
+ * the default mode; otherwise the listed modes), try each anchored there in the
+ * whole text (a lookbehind or `^` sees what precedes the position); the
  * **longest** match wins; on an **equal length** the **earliest** rule (lowest
  * index) wins; an **empty** match (length 0) never wins; if nothing matches,
  * throw a positioned #1 error at the byte; after a match `apply_transition` may
@@ -207,7 +208,6 @@ namespace scilex::fuzz {
     scilex::position               cursor {0, 1, 1};
     std::vector<scilex::frame>     stack  {scilex::frame {.mode_id = 0, .entry_pos = cursor}};
     while (cursor.offset < source.size()) {
-      const std::string_view rest      {source.substr(cursor.offset)};
       const std::string&     mode_name {modes.names[stack.back().mode_id]};
       std::size_t            best_len  {0};
       const scilex::rule*    best      {nullptr};
@@ -215,8 +215,9 @@ namespace scilex::fuzz {
         if (!rule_active_in(candidate, mode_name)) {
           continue; // brute-force, but only over the rules active in this mode
         }
-        const auto        matched {candidate.pattern.match(rest)};
-        const std::size_t len     {matched ? static_cast<std::size_t>(matched.end()) : 0};
+        // In the whole text, as the lexer matches: a lookbehind or `^` sees what precedes the token.
+        const auto        matched {candidate.pattern.match(source, cursor.offset)};
+        const std::size_t len     {matched ? static_cast<std::size_t>(matched.end()) - cursor.offset : 0};
         // Longest wins; updating only on a STRICTLY longer match keeps the
         // earliest rule on a tie (the spec's order tie-break). Empty (len 0) never wins.
         if (len > 0 && len > best_len) {
@@ -262,13 +263,12 @@ namespace scilex::fuzz {
                                      std::string_view                 source,
                                      std::size_t                      offset)
   {
-    const std::string_view rest {source.substr(offset)};
     for (const scilex::rule& candidate : rules) {
       if (!rule_active_in(candidate, mode_name)) {
         continue;
       }
-      const auto matched {candidate.pattern.match(rest)};
-      if (matched && static_cast<std::size_t>(matched.end()) > 0) {
+      const auto matched {candidate.pattern.match(source, offset)};
+      if (matched && static_cast<std::size_t>(matched.end()) > offset) {
         return true;
       }
     }
@@ -319,7 +319,6 @@ namespace scilex::fuzz {
                                              ++at.offset;
                                            }};
     while (cursor.offset < source.size()) {
-      const std::string_view rest      {source.substr(cursor.offset)};
       const std::string&     mode_name {modes.names[stack.back().mode_id]};
       std::size_t            best_len  {0};
       const scilex::rule*    best      {nullptr};
@@ -328,10 +327,10 @@ namespace scilex::fuzz {
         if (!rule_active_in(candidate, mode_name)) {
           continue;
         }
-        const auto matched {candidate.pattern.match(rest)};
+        const auto matched {candidate.pattern.match(source, cursor.offset)};
         if (matched) {
           any = true;
-          const std::size_t len {static_cast<std::size_t>(matched.end())};
+          const std::size_t len {static_cast<std::size_t>(matched.end()) - cursor.offset};
           if (len > best_len) {
             best_len = len;
             best     = &candidate;
@@ -485,15 +484,14 @@ namespace scilex::fuzz {
     for (std::size_t i {0}; i < eager.size(); ++i) {
       const scilex::token&   tok       {eager[i]};
       const std::string&     mode_name {reference_modes[i]};
-      const std::string_view at        {input.substr(tok.start.offset)};
       std::size_t            longest   {0};
       bool                   kind_fits {false};
       for (const scilex::rule& candidate : rules) {
         if (!rule_active_in(candidate, mode_name)) {
           continue; // only the rules the lexer could have used in this mode
         }
-        const auto        matched {candidate.pattern.match(at)};
-        const std::size_t len     {matched ? static_cast<std::size_t>(matched.end()) : 0};
+        const auto        matched {candidate.pattern.match(input, tok.start.offset)};
+        const std::size_t len     {matched ? static_cast<std::size_t>(matched.end()) - tok.start.offset : 0};
         if (len > longest) {
           longest = len;
         }

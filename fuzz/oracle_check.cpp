@@ -221,6 +221,16 @@ namespace {
     return rules;
   }
 
+  // A rule with no first byte that matches only at a line start (`(?m)^`): it reads before its token, so
+  // the reference matches in the whole text, and an error run ends where it matches the next line's blanks.
+  std::vector<scilex::rule> line_start_grammar()
+  {
+    std::vector<scilex::rule> rules;
+    rules.push_back({.kind = 1, .pattern = real::regex(R"((?m)^[ \t]*)"), .skip = true});
+    rules.push_back({.kind = 2, .pattern = real::regex("[a-d]+")});
+    return rules;
+  }
+
   //! \brief A multi-mode grammar with crafted inputs (balanced, nesting, the three errors).
   struct mode_grammar
   {
@@ -239,6 +249,7 @@ namespace {
     out.push_back({"mm.rootpop", root_pop_grammar(), {"ab", "a)", ")"}});
     out.push_back({"mm.set", set_grammar(), {"ab#xy\ncd", "ab#xy", "#\nab"}});
     out.push_back({"mm.raw", raw_grammar(), {"xy", "a<<bc>>d", "<<bc"}});
+    out.push_back({"mm.linestart", line_start_grammar(), {"a!\n  c\n!b", "ab\n  cd", "a\n\tb", "!", "\n  a", "a!!"}});
     return out;
   }
 
@@ -390,7 +401,7 @@ namespace {
       }
     }
     if (failures == 0) {
-      std::cout << "fuzz-check: " << cases << " cases (9 grammars x sample/truncations/adversarial, raise + token recovery, + 5 multi-mode grammars, + 4 scaling) — all invariants hold\n";
+      std::cout << "fuzz-check: " << cases << " cases (9 grammars x sample/truncations/adversarial, raise + token recovery, + 6 grammars with crafted inputs, + 4 scaling) — all invariants hold\n";
       return 0;
     }
     std::cerr << "fuzz-check: " << failures << " invariant violation(s)\n";

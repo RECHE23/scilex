@@ -35,6 +35,11 @@ fuzz oracle.
   advances to the next multiple of 8, and ambiguous tabs and spaces are refused. It counted a tab as one
   column, so `\t` and 8 spaces opened a block.
 
+- **An error run ends where a rule with no first byte matches.** Under `error_policy::token`, a run of
+  unlexable bytes ends at the first position where a rule matches with some length, but only the rules
+  filed by first byte were asked: `(?m)^[ \t]*` (skip) let the run `"!\n  "` swallow the next line's blanks.
+  The fuzz oracle matches in the whole text, as the lexer does since 2026.10.2.
+
 ### Fixed (`.lex` and CLI)
 - **A `push=` or `set=` into a mode no rule is active in is refused at its line and column**
   (`my.lex:2:5: no rule is active in mode 'strr' (give one in=strr)`). The lexer refused it when built,

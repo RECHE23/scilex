@@ -653,8 +653,8 @@ namespace scilex {
               if (probe.open && !gate.at_end()) {
                 return scan_status::pending;
               }
-              if (probe.have) {
-                break;
+              if (probe.have && probe.len > 0) {
+                break; // a match of no length (a general rule's) does not end the run
               }
             }
             advance(source, cursor, 1);
@@ -941,18 +941,17 @@ namespace scilex {
       return best;
     }
 
-    //! \brief O(1) pre-filter for error recovery: can a fixed-lead rule in \p mode begin with \p byte?
+    //! \brief O(1) pre-filter for error recovery: can a rule in \p mode begin with \p byte?
     //!        A false is conclusive (no rule can match, so the byte is error text); a true still needs a
     //!        full \ref munch_at to confirm a real match. This is what skips the bulk of noise cheaply.
     //!
-    //! Only the first-byte buckets are consulted, not the mode's general (nullable) rules: a nullable
-    //! rule matches the empty string at every position, so a mode that had one could never reach the
-    //! no-match case (#1) that starts a recovery run — it would report a zero-length error (#4) at the
-    //! very first byte instead. So during recovery the active mode provably has no general rule.
+    //! A mode's general rules (no first-byte set: nullable ones) can match anywhere: `(?m)^[ \t]*`
+    //! matches nothing in the middle of a line, so a run starts there, and the blanks that begin the
+    //! next line. A mode that has one is asked at every byte.
     bool may_start(std::size_t   mode,
                    unsigned char byte) const
     {
-      return !per_mode_[mode].first_byte_index[byte].empty();
+      return !per_mode_[mode].first_byte_index[byte].empty() || !per_mode_[mode].general.empty();
     }
 
     //! \brief Advances \p cursor by \p n bytes of \p source, maintaining the 1-based line/column
