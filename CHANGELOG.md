@@ -7,6 +7,8 @@ fuzz oracle.
 
 ## Unreleased
 
+## 2026.10.2 — 2026-10-10
+
 ### Changed
 - **Build requires `real-regex >= 2026.10.9`** (was `>= 2026.10.7`); the FetchContent tag and CI move with it.
   2026.10.9 gives each rule's left context (`real::regex::left_context`), which a stream now keeps.
