@@ -605,6 +605,25 @@ TEST(stream_columns_match_tokenize_inside_a_code_point)
     }
     scilex::token_stream held {lex.stream()};
     EXPECT_EQ(held.feed("a\xF0").size(), std::size_t {1}); // `a`; the lead waits for its sequence
-    EXPECT_EQ(held.buffered(), std::size_t {1});              // and counts as held
+    EXPECT_EQ(held.buffered(), std::size_t {1});           // and counts as held
   }
+  // `\x98\x80b?` may still grow when the text stops after U+1F600, so the stream waits at its 0x98, inside
+  // the code point; the next feed drops what was returned but the lead, which scores 0x98 and 0x80.
+  const scilex::lexer bytes_rule {{{.kind = 1, .pattern = real::regex {"\\C", real::flags::allow_raw_byte}},
+    {.kind = 2, .pattern = real::regex {"\\x98\\x80b?", real::flags::bytes}}},
+    {},
+    {},
+    scilex::error_policy::raise,
+    scilex::column_unit::codepoints};
+  scilex::token_stream     in {bytes_rule.stream()};
+  std::vector<std::size_t> got;
+  for (const std::string_view part : {std::string_view {"a\xF0\x9F\x98\x80"}, std::string_view {"bc"}}) {
+    for (const scilex::token& t : in.feed(part)) {
+      got.push_back(t.start.column);
+    }
+  }
+  for (const scilex::token& t : in.finish()) {
+    got.push_back(t.start.column);
+  }
+  EXPECT(got == (std::vector<std::size_t> {1, 2, 3, 3, 4})); // a, 0xF0, 0x9F, 0x98 0x80 b, c
 }
