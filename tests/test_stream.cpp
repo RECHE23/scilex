@@ -378,3 +378,30 @@ TEST(stream_keeps_the_tokens_before_an_error_whatever_the_cut)
     EXPECT(got == before);
   }
 }
+
+// A nullable rule is filed under no first byte, so the gate asks it wherever the scan stands: `(?:ab)+|x*`
+// at "ab" may still grow, and cutting the text there must not split "abab".
+TEST(stream_waits_on_a_nullable_rule_that_may_grow)
+{
+  const scilex::lexer      lex  {std::vector<scilex::rule> {{.kind = 0, .pattern = real::regex {"(?:ab)+|x*"}}}};
+  const std::string        text {"ababxx"};
+  std::vector<std::string> whole;
+  for (const scilex::token& t : lex.tokenize(text)) {
+    whole.emplace_back(t.lexeme);
+  }
+  EXPECT(whole == (std::vector<std::string> {"abab", "xx"}));
+  for (std::size_t cut {0}; cut <= text.size(); ++cut) {
+    scilex::token_stream     in {lex.stream()};
+    std::vector<std::string> got;
+    for (const scilex::token& t : in.feed(text.substr(0, cut))) {
+      got.emplace_back(t.lexeme);
+    }
+    for (const scilex::token& t : in.feed(text.substr(cut))) {
+      got.emplace_back(t.lexeme);
+    }
+    for (const scilex::token& t : in.finish()) {
+      got.emplace_back(t.lexeme);
+    }
+    EXPECT(got == whole);
+  }
+}

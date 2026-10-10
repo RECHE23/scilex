@@ -1487,20 +1487,17 @@ namespace scilex {
         if (final) {
           return true;
         }
-        // At the end of what was fed any rule may start with the next byte. Elsewhere a rule that cannot
-        // start with the byte there, and cannot match empty, cannot match there whatever follows: only the
-        // mode's rules filed under that byte, and its nullable ones, are asked.
+        // A rule that cannot start with the byte at offset (the scan asks only within the buffer), and
+        // cannot match empty, cannot match there whatever follows: only the mode's rules filed under that
+        // byte, and its nullable ones, are asked.
         const std::string& text {stream->buffer_};
-        if (offset >= text.size()) {
-          return false;
-        }
-        const lexer& lex     {*stream->owner_};
-        const auto&  by_byte {lex.per_mode_[mode]};
-        const auto   extends {[&](const std::vector<std::size_t>& rules) {
-                                return std::ranges::any_of(rules, [&](std::size_t idx) {
-                                                             return lex.rules_[idx].pattern.can_extend(text, offset);
-                                                           });
-                              }};
+        const lexer&       lex     {*stream->owner_};
+        const auto&        by_byte {lex.per_mode_[mode]};
+        const auto         extends {[&](const std::vector<std::size_t>& rules) {
+                                      return std::ranges::any_of(rules, [&](std::size_t idx) {
+                                                                   return lex.rules_[idx].pattern.can_extend(text, offset);
+                                                                 });
+                                    }};
         return !extends(by_byte.first_byte_index[static_cast<unsigned char>(text[offset])])
                && !extends(by_byte.general);
       }
