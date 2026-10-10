@@ -249,7 +249,7 @@ namespace {
     out.push_back({"mm.rootpop", root_pop_grammar(), {"ab", "a)", ")"}});
     out.push_back({"mm.set", set_grammar(), {"ab#xy\ncd", "ab#xy", "#\nab"}});
     out.push_back({"mm.raw", raw_grammar(), {"xy", "a<<bc>>d", "<<bc"}});
-    out.push_back({"mm.linestart", line_start_grammar(), {"a!\n  c\n!b", "ab\n  cd", "a\n\tb", "!", "\n  a", "a!!"}});
+    out.push_back({"mm.linestart", line_start_grammar(), {"a!\n  c\n!b", "ab\n  cd", "a\n\tb", "!", "\n  a", "a!!", "a! c"}});
     return out;
   }
 
