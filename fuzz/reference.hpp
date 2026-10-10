@@ -611,6 +611,93 @@ namespace scilex::fuzz {
     }
     return {true, nullptr};
   }
+
+  //! \brief A token holding its own lexeme: a stream's lexemes view a buffer its next call replaces.
+  struct held_token
+  {
+    int         kind;   //!< The kind.
+    std::string lexeme; //!< A copy of the lexeme.
+    std::size_t offset; //!< Its offset in the whole text.
+    std::size_t line;   //!< Its line.
+    std::size_t column; //!< Its column.
+
+    //! \brief Field-wise equality.
+    bool operator==(const held_token&) const = default;
+  };
+
+  //! \brief What one run over a text gives: its tokens, and where it threw.
+  struct run_outcome
+  {
+    std::vector<held_token> tokens;                                //!< The tokens, in order.
+    std::size_t             error_offset {std::string_view::npos}; //!< Where a lex_error stopped it, or npos.
+
+    //! \brief Field-wise equality.
+    bool operator==(const run_outcome&) const = default;
+  };
+
+  //! \brief Appends \p tokens to \p out, each holding its lexeme.
+  inline void hold(const std::vector<scilex::token>& tokens,
+                   run_outcome&                      out)
+  {
+    for (const scilex::token& tok : tokens) {
+      out.tokens.push_back({tok.kind, std::string(tok.lexeme), tok.start.offset, tok.start.line, tok.start.column});
+    }
+  }
+
+  //! \brief A stream over \p input fed in pieces that end at \p cuts (ascending offsets), then finished; on
+  //!        a lex_error, the tokens the failing call decided and where it threw.
+  inline run_outcome streamed(const scilex::lexer&            lex,
+                              std::string_view                input,
+                              const std::vector<std::size_t>& cuts)
+  {
+    run_outcome          out;
+    scilex::token_stream stream {lex.stream()};
+    try {
+      std::size_t from {0};
+      for (const std::size_t cut : cuts) {
+        hold(stream.feed(input.substr(from, cut - from)), out);
+        from = cut;
+      }
+      hold(stream.feed(input.substr(from)), out);
+      hold(stream.finish(), out);
+    }
+    catch (const scilex::lex_error& error) {
+      hold(error.decided(), out);
+      out.error_offset = error.where().offset;
+    }
+    return out;
+  }
+
+  //! \brief A stream gives what \ref scilex::lexer::scan gives — the same tokens at the same positions,
+  //!        and the same error with every token before it — fed byte by byte and cut in two anywhere.
+  //! \param[in] lex   The lexer (any policy, column unit and DFA policy).
+  //! \param[in] input The text.
+  inline result check_stream(const scilex::lexer& lex,
+                             std::string_view     input)
+  {
+    run_outcome whole;
+    try {
+      for (const scilex::token& tok : lex.scan(input)) {
+        hold({tok}, whole);
+      }
+    }
+    catch (const scilex::lex_error& error) {
+      whole.error_offset = error.where().offset;
+    }
+    std::vector<std::size_t> every_byte;
+    for (std::size_t cut {1}; cut < input.size(); ++cut) {
+      every_byte.push_back(cut);
+    }
+    if (streamed(lex, input, every_byte) != whole) {
+      return {false, "stream: fed byte by byte, it differs from scan"};
+    }
+    for (std::size_t cut {0}; cut <= input.size(); ++cut) {
+      if (streamed(lex, input, {cut}) != whole) {
+        return {false, "stream: cut in two, it differs from scan"};
+      }
+    }
+    return {true, nullptr};
+  }
 } // namespace scilex::fuzz
 
 #endif // SCILEX_FUZZ_REFERENCE_HPP

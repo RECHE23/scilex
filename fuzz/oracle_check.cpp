@@ -9,11 +9,22 @@
  * is the bounded, repeatable half of the property-based oracle — wired into `make fuzz-check` /
  * `full-local-gate`; the continuous explorer is `make fuzz`. On a violation it
  * prints the grammar, the offending input, and the invariant, and exits 1.
+ *
+ * Then grammars drawn at random (`oracle_check [seed [grammars]]`, by default seed 1 and 400
+ * grammars), each held to the reference under both error policies, in every column unit, with and
+ * without its DFAs, and its stream to its scan wherever the text is cut.
  */
+#include <array>
 #include <chrono>
+#include <cstdint>
+#include <cstdlib>
 #include <iostream>
+#include <optional>
+#include <random>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "reference.hpp"
@@ -253,7 +264,132 @@ namespace {
     return out;
   }
 
-  int run()
+  // --- random grammars ----------------------------------------------------------
+  // Patterns that reach every route: a lookbehind, anchors, a word boundary, Unicode classes, lazy and
+  // nullable rules; and raw-byte ones (flags::bytes) that end a token inside a code point.
+  constexpr std::array<const char*, 50> pattern_pool {
+    "a", "b", "x", "a+", "b*", "[ab]+", "ab", "a|ab", "ab|a", "a*?b", "(?<=a)b", "(?<=ab)x", "\\bx", "x\\b",
+    "a(?=b)", "a(?!b)", "^a", "a$", "(?m)^a", "(?m)b$", " +", "\\s+", "\\n", ".", "[^a]", "\\w+", "\xc3\xa9+",
+    "\xf0\x9f\x98\x80", "[^\\n]*", "x[^x]*x", "(?:ab)+", "a{2}", "a{1,3}", "b?", "\\t", "[ \\t]+", "\\Ax",
+    "(?<!a)b", "x(?=\\n)", "[a\xc3\xa9]+", "a\\z", "(?a)\\w+", "\\d+|x", "(?<=\\n)[ ]+", "(?i)A",
+    "(?s).", "[^ab]+", "\\X", "(?<=\xc3\xa9)a", "\\p{L}+"};
+  constexpr std::array<const char*, 6> byte_pattern_pool {".", "[\\x80-\\xbf]+", "\\xf0", "\\xc3", "[\\x00-\\x7f]",
+                                                          "\\xff+"};
+  // ASCII, line breaks, a 2-byte and a 4-byte code point, and malformed bytes.
+  constexpr std::array<std::string_view, 13> text_pool {"a", "b", "x", " ", "\n", "\t", "\xc3\xa9", "\xf0\x9f\x98\x80",
+                                                        "\xff", "\xc3", "\x9f", "1", "\r"};
+
+  //! \brief A grammar drawn at random, and how to print it.
+  struct drawn_grammar
+  {
+    std::vector<scilex::rule> rules;
+    std::string               description;
+  };
+
+  //! \brief A draw in [0, n): mt19937's output is fixed by the standard, a distribution's is not.
+  std::size_t draw(std::mt19937& rng,
+                   std::size_t   n)
+  {
+    return static_cast<std::size_t>(rng()) % n;
+  }
+
+  //! \brief One to five rules, in `default`, in a second mode `m` or in both, some skipped, some with a
+  //!        transition; nothing when a drawn pattern does not compile under its flags.
+  std::optional<drawn_grammar> draw_grammar(std::mt19937& rng)
+  {
+    drawn_grammar     out;
+    const std::size_t count {1 + draw(rng, 5)};
+    for (std::size_t i {0}; i < count; ++i) {
+      const bool        raw     {draw(rng, 3) == 0};
+      const std::string pattern {raw ? byte_pattern_pool[draw(rng, byte_pattern_pool.size())]
+                                     : pattern_pool[draw(rng, pattern_pool.size())]};
+      std::optional<real::regex> compiled;
+      try {
+        compiled.emplace(pattern, raw ? real::flags::bytes : real::flags {});
+      }
+      catch (const real::regex_error&) {
+        return std::nullopt;
+      }
+      scilex::rule rule {.kind = static_cast<int>(i), .pattern = std::move(*compiled)};
+      rule.skip = draw(rng, 4) == 0;
+      switch (draw(rng, 6)) {
+        case 1:  rule.in_mode = {"m"}; break;
+        case 2:  rule.in_mode = {"default", "m"}; break;
+        default: break;
+      }
+      switch (draw(rng, 7)) {
+        case 0:  rule.action = scilex::mode_action {.operation = scilex::mode_action::op::push, .target = "m"}; break;
+        case 1:  rule.action = scilex::mode_action {.operation = scilex::mode_action::op::pop}; break;
+        case 2:  rule.action = scilex::mode_action {.operation = scilex::mode_action::op::set, .target = "m"}; break;
+        case 3:  rule.action = scilex::mode_action {.operation = scilex::mode_action::op::set, .target = "default"}; break;
+        default: break;
+      }
+      out.description += "  " + std::to_string(i) + ": " + preview(pattern) + (raw ? " (bytes)" : "")
+                         + (rule.skip ? " skip" : "") + (rule.in_mode.empty() ? "" : " in=" + rule.in_mode.back())
+                         + (rule.action ? " action" : "") + '\n';
+      out.rules.push_back(std::move(rule));
+    }
+    return out;
+  }
+
+  //! \brief Holds \p count random grammars from \p seed to the reference and their streams to their scans.
+  void random_grammars(std::uint32_t seed,
+                       std::size_t   count,
+                       std::size_t&  cases,
+                       int&          failures)
+  {
+    std::mt19937 rng {seed};
+    for (std::size_t g {0}; g < count && failures < 10; ++g) {
+      const std::optional<drawn_grammar> gram {draw_grammar(rng)};
+      if (!gram) {
+        continue;
+      }
+      std::vector<std::string> texts;
+      for (std::size_t k {0}; k < 6; ++k) {
+        std::string       text;
+        const std::size_t length {draw(rng, 9)};
+        for (std::size_t j {0}; j < length; ++j) {
+          text += text_pool[draw(rng, text_pool.size())];
+        }
+        texts.push_back(std::move(text));
+      }
+      for (const scilex::error_policy policy : {scilex::error_policy::raise, scilex::error_policy::token}) {
+        for (const scilex::column_unit unit : {scilex::column_unit::bytes, scilex::column_unit::codepoints,
+                                               scilex::column_unit::utf16}) {
+          for (const scilex::dfa_policy dfa : {scilex::dfa_policy::automatic, scilex::dfa_policy::requested}) {
+            std::optional<scilex::lexer> lex;
+            try {
+              lex.emplace(gram->rules, std::vector<std::string> {}, std::vector<std::string> {}, policy, unit, dfa);
+            }
+            catch (const std::invalid_argument&) {
+              continue; // a transition into a mode no drawn rule is active in
+            }
+            for (const std::string& text : texts) {
+              cases += 2;
+              const scilex::fuzz::result lexed {policy == scilex::error_policy::raise
+                                                ? scilex::fuzz::check(gram->rules, *lex, text, false)
+                                                : scilex::fuzz::check_recover(gram->rules, *lex, text)};
+              const scilex::fuzz::result streamed {scilex::fuzz::check_stream(*lex, text)};
+              for (const scilex::fuzz::result& outcome : {lexed, streamed}) {
+                if (!outcome.ok) {
+                  std::cerr << "FAIL [random seed " << seed << " grammar " << g << ", errors="
+                            << (policy == scilex::error_policy::raise ? "raise" : "token") << ", columns="
+                            << static_cast<int>(unit) << ", dfa="
+                            << (dfa == scilex::dfa_policy::automatic ? "automatic" : "requested") << "] "
+                            << outcome.invariant << '\n'
+                            << gram->description << "  input (" << text.size() << " bytes): " << preview(text) << '\n';
+                  ++failures;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  int run(std::uint32_t seed,
+          std::size_t   random_count)
   {
     int         failures {0};
     std::size_t cases    {0};
@@ -400,8 +536,10 @@ namespace {
         }
       }
     }
+    random_grammars(seed, random_count, cases, failures);
     if (failures == 0) {
-      std::cout << "fuzz-check: " << cases << " cases (9 grammars x sample/truncations/adversarial, raise + token recovery, + 6 grammars with crafted inputs, + 4 scaling) — all invariants hold\n";
+      std::cout << "fuzz-check: " << cases << " cases (9 grammars x sample/truncations/adversarial, raise + token recovery, + 6 grammars with crafted inputs, + 4 scaling, + "
+                << random_count << " random grammars from seed " << seed << ") — all invariants hold\n";
       return 0;
     }
     std::cerr << "fuzz-check: " << failures << " invariant violation(s)\n";
@@ -409,7 +547,10 @@ namespace {
   }
 } // namespace
 
-int main()
+int main(int    argc,
+         char** argv)
 {
-  return run();
+  const auto seed         {static_cast<std::uint32_t>(argc > 1 ? std::strtoul(argv[1], nullptr, 10) : 1)};
+  const auto random_count {static_cast<std::size_t>(argc > 2 ? std::strtoul(argv[2], nullptr, 10) : 400)};
+  return run(seed, random_count);
 }
