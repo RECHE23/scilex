@@ -77,7 +77,8 @@ PyObject* error_subclass(const char* subclass)
 
 // Raises scilex.<subclass> (a subclass of scilex.error) carrying the byte position of the offending
 // input, as the instance attributes .offset/.line/.column (the wrapper turns them into .position).
-void set_positioned_error(const char* message, scilex::position where, const char* subclass)
+void set_positioned_error(const char* message, scilex::position where, const char* subclass,
+                          PyObject* tokens = nullptr)
 {
     PyObject* type = error_subclass(subclass);
     PyObject* exc  = PyObject_CallFunction(type, "s", message);
@@ -93,6 +94,9 @@ void set_positioned_error(const char* message, scilex::position where, const cha
         PyObject_SetAttrString(exc, "offset", offset);
         PyObject_SetAttrString(exc, "line", line);
         PyObject_SetAttrString(exc, "column", column);
+    }
+    if (tokens != nullptr) {
+        PyObject_SetAttrString(exc, "tokens", tokens); // a stream's: the tokens its call decided before the error
     }
     Py_XDECREF(offset);
     Py_XDECREF(line);
@@ -1045,7 +1049,12 @@ PyObject* scilex_stream_feed(PyObject* /*self*/, PyObject* args)
         return result;
     }
     catch (const scilex::lex_error& error) {
-        set_positioned_error(error.what(), error.where(), "LexError");
+        PyObject* decided = stream_token_list(*state, error.decided());
+        if (decided == nullptr) {
+            return nullptr; // building the list failed: that error stands
+        }
+        set_positioned_error(error.what(), error.where(), "LexError", decided);
+        Py_DECREF(decided);
         return nullptr;
     }
     catch (...) {
@@ -1080,7 +1089,12 @@ PyObject* scilex_stream_finish(PyObject* /*self*/, PyObject* args)
         return stream_token_list(*state, tokens);
     }
     catch (const scilex::lex_error& error) {
-        set_positioned_error(error.what(), error.where(), "LexError");
+        PyObject* decided = stream_token_list(*state, error.decided());
+        if (decided == nullptr) {
+            return nullptr; // building the list failed: that error stands
+        }
+        set_positioned_error(error.what(), error.where(), "LexError", decided);
+        Py_DECREF(decided);
         return nullptr;
     }
     catch (...) {

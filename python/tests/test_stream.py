@@ -50,6 +50,22 @@ class StreamTests(unittest.TestCase):
     def setUp(self):
         assert_real_pinned(self)  # can_extend, which the stream asks, needs the pinned REAL
 
+    def test_an_error_keeps_the_tokens_before_it_whatever_the_cut(self):
+        # What the calls returned, then .tokens of the error the failing call raised: every token before
+        # the error, wherever the text was cut.
+        lexer = scilex.Lexer([(0, r"[a-z]+"), (1, r"[0-9]+"), (2, r" +", True)])
+        text = "abc 12 de @ x"
+        for cut in range(len(text) + 1):
+            stream = lexer.stream()
+            got = []
+            with self.assertRaises(scilex.LexError) as caught:
+                got += stream.feed(text[:cut])
+                got += stream.feed(text[cut:])
+                got += stream.finish()
+            got += caught.exception.tokens
+            self.assertEqual([t.lexeme for t in got], ["abc", "12", "de"], cut)
+            self.assertEqual(caught.exception.offset, 10)
+
     def test_every_cut_in_two_gives_tokenize_tokens(self):
         cases = [
             (sample_lexer(), 'x = 41 + 1.5 # note\nname = "a b" <= (y, z)'),

@@ -111,7 +111,10 @@ LexerError = error
 class LexError(error):
     """Input no rule can lex: a byte no rule matches, a zero-length winning match, a pop at the root
     mode or a push past the mode stack's bound, or input ending inside a pushed mode. Carries
-    ``.position`` (and ``.context`` where the source is known). A subclass of :class:`error`."""
+    ``.position`` (and ``.context`` where the source is known). Raised by a stream's ``feed`` or
+    ``finish``, it also carries ``.tokens``: the tokens that call decided before the error, so the
+    tokens of every call before it and these are all the tokens before the error, wherever the text
+    was cut. A subclass of :class:`error`."""
 
 
 class GrammarError(error):
@@ -572,7 +575,8 @@ class TokenStream:
 
         Raises:
             LexError: Where :meth:`Lexer.tokenize` would raise on the whole text, once the text
-                decides it (with ``.position`` and ``.context``); the stream is then finished.
+                decides it (with ``.position`` and ``.context``, and ``.tokens``: those this call
+                decided before the error); the stream is then finished.
             error: After :meth:`finish`.
             TypeError: If ``chunk`` is not ``str`` or ``bytes``, or not the first chunk's type.
             RuntimeError: If another thread is feeding or finishing this stream.
@@ -590,7 +594,8 @@ class TokenStream:
             list[Token]: The tokens, in source order (skip matches omitted).
 
         Raises:
-            LexError: Where :meth:`Lexer.tokenize` would raise on the whole text.
+            LexError: Where :meth:`Lexer.tokenize` would raise on the whole text (with ``.tokens``:
+                those this call decided before the error).
             error: When called twice.
             RuntimeError: If another thread is feeding or finishing this stream.
         """

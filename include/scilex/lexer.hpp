@@ -144,6 +144,20 @@ namespace scilex {
     {}
 
     /*!
+     * \brief Builds the error a stream raises after deciding tokens in the same call.
+     * \param[in] message Human-readable cause.
+     * \param[in] where   Position of the byte that no rule could match.
+     * \param[in] decided The tokens the call decided before it, in order.
+     */
+    lex_error(const std::string& message,
+              position           where,
+              std::vector<token> decided)
+      : std::runtime_error(message),
+        where_(where),
+        decided_(std::move(decided))
+    {}
+
+    /*!
      * \brief Returns the position of the unmatched byte.
      */
     [[nodiscard]] position where() const noexcept
@@ -151,9 +165,21 @@ namespace scilex {
       return where_;
     }
 
+    /*!
+     * \brief The tokens a \ref token_stream call decided before the error, in order: with the tokens its
+     *        earlier calls returned, every token before the error, wherever the text was cut. Empty from
+     *        \ref lexer::tokenize.
+     * \return The tokens; a lexeme views the stream's buffer, valid until its next call.
+     */
+    [[nodiscard]] const std::vector<token>& decided() const noexcept
+    {
+      return decided_;
+    }
+
   private:
 
-    position where_; //!< Where tokenization failed.
+    position           where_;   //!< Where tokenization failed.
+    std::vector<token> decided_; //!< Tokens a stream call decided before the error.
   };
 
   /*!
@@ -1405,7 +1431,8 @@ namespace scilex {
      * \brief Appends \p chunk and returns the tokens no text still to come can change.
      * \param[in] chunk The next piece of the text.
      * \return The tokens, in order; their lexemes are valid until the next call.
-     * \throws lex_error Where \ref lexer::tokenize would throw on the whole text, once the text decides it.
+     * \throws lex_error Where \ref lexer::tokenize would throw on the whole text, once the text decides it,
+     *         carrying the tokens this call decided before it (\ref lex_error::decided).
      * \throws std::logic_error After \ref finish.
      */
     [[nodiscard]] std::vector<token> feed(std::string_view chunk)
@@ -1421,7 +1448,8 @@ namespace scilex {
     /*!
      * \brief Ends the text and returns the tokens that remain.
      * \return The tokens, in order; their lexemes are valid until the stream is destroyed.
-     * \throws lex_error Where \ref lexer::tokenize would throw on the whole text.
+     * \throws lex_error Where \ref lexer::tokenize would throw on the whole text, carrying the tokens this
+     *         call decided before it (\ref lex_error::decided).
      * \throws std::logic_error When called twice.
      */
     [[nodiscard]] std::vector<token> finish()
@@ -1459,13 +1487,22 @@ namespace scilex {
         if (final) {
           return true;
         }
-        const lexer& lex {*stream->owner_};
-        for (std::size_t idx {0}; idx < lex.rules_.size(); ++idx) {
-          if (lex.rule_active_in_mode(idx, mode) && lex.rules_[idx].pattern.can_extend(stream->buffer_, offset)) {
-            return false;
-          }
+        // At the end of what was fed any rule may start with the next byte. Elsewhere a rule that cannot
+        // start with the byte there, and cannot match empty, cannot match there whatever follows: only the
+        // mode's rules filed under that byte, and its nullable ones, are asked.
+        const std::string& text {stream->buffer_};
+        if (offset >= text.size()) {
+          return false;
         }
-        return true;
+        const lexer& lex     {*stream->owner_};
+        const auto&  by_byte {lex.per_mode_[mode]};
+        const auto   extends {[&](const std::vector<std::size_t>& rules) {
+                                return std::ranges::any_of(rules, [&](std::size_t idx) {
+                                                             return lex.rules_[idx].pattern.can_extend(text, offset);
+                                                           });
+                              }};
+        return !extends(by_byte.first_byte_index[static_cast<unsigned char>(text[offset])])
+               && !extends(by_byte.general);
       }
 
       //! \brief Whether the end of the buffer is the end of the text.
@@ -1494,10 +1531,10 @@ namespace scilex {
         }
         catch (const lex_error& e) {
           finished_ = true;
-          throw lex_error(e.what(), in_text(e.where()));
+          throw lex_error(e.what(), in_text(e.where()), std::move(out)); // the tokens before it, too
         }
         if (status == lexer::scan_status::pending) {
-          cursor_ = saved_cursor; // undo any skipped matches the step went over
+          cursor_ = saved_cursor;                                        // undo any skipped matches the step went over
           stack_  = saved_stack;
           return out;
         }

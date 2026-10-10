@@ -341,3 +341,40 @@ TEST(stream_recovers_an_unterminated_mode_as_tokenize_does)
     EXPECT(streamed(lex, text, {cut}) == whole);
   }
 }
+
+// An error does not take the tokens before it: what the calls returned, then what the failing call decided
+// (lex_error::decided), is every token before the error, wherever the text was cut.
+TEST(stream_keeps_the_tokens_before_an_error_whatever_the_cut)
+{
+  const scilex::lexer lex {
+    std::vector<scilex::rule> {{.kind = 0, .pattern = real::regex {"[a-z]+"}},
+      {.kind                          = 1, .pattern = real::regex {"[0-9]+"}},
+      {.kind                          = 2, .pattern = real::regex {" +"}, .skip = true}}};
+  const std::string              text   {"abc 12 de @ x"};
+  const std::vector<std::string> before {"abc", "12", "de"}; // every token before the `@`
+  for (std::size_t cut {0}; cut <= text.size(); ++cut) {
+    scilex::token_stream     in     {lex.stream()};
+    std::vector<std::string> got;
+    bool                     raised {false};
+    try {
+      for (const scilex::token& t : in.feed(text.substr(0, cut))) {
+        got.emplace_back(t.lexeme);
+      }
+      for (const scilex::token& t : in.feed(text.substr(cut))) {
+        got.emplace_back(t.lexeme);
+      }
+      for (const scilex::token& t : in.finish()) {
+        got.emplace_back(t.lexeme);
+      }
+    }
+    catch (const scilex::lex_error& e) {
+      raised = true;
+      for (const scilex::token& t : e.decided()) {
+        got.emplace_back(t.lexeme);
+      }
+      EXPECT_EQ(e.where().offset, std::size_t {10}); // the `@`
+    }
+    EXPECT(raised);
+    EXPECT(got == before);
+  }
+}
