@@ -2,7 +2,7 @@
 
 A grammar file holds one rule per line: a name, a tab, the pattern, then optionally a tab and
 space-separated options. Blank lines and lines whose first non-blank character is `#` are ignored,
-and a trailing `\r` is dropped, so CRLF files read the same. The spaces and tabs that end a line are
+a byte order mark that starts the file is dropped, and a trailing `\r` too, so CRLF files read the same. The spaces and tabs that end a line are
 dropped too, so a pattern never ends in a blank: write a final space `[ ]` or `\x20`.
 
 | option | effect |
@@ -13,7 +13,8 @@ dropped too, so a pattern never ends in a blank: write a final space `[ ]` or `\
 | `set=m` | when the rule wins, replace the current mode with `m` |
 | `pop` | when the rule wins, return to the mode below |
 
-A rule fires at most one of `push=`, `set=` and `pop`. Its kind is its position among the rules,
+A rule fires at most one of `push=`, `set=` and `pop`, and a mode that `push=` or `set=` enters must
+have a rule active in it (`in=`; the rules without `in=` are in `default`). Its kind is its position among the rules,
 counting from 0, and its name labels that kind.
 
 ```text
@@ -72,5 +73,5 @@ in the line:
 my.lex:2:6: invalid regex: missing ), unterminated subpattern
 ```
 
-An unknown option, an empty mode name, a second transition, a line without a tab and a grammar with
-no rules are refused the same way.
+An unknown option, an empty mode name, a second transition, a `push=` or `set=` into a mode no rule is
+active in, a line without a tab and a grammar with no rules are refused the same way.

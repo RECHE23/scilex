@@ -313,10 +313,24 @@ example: cli
 	  block=s[i:].split('\n\n',2)[1]; sys.stdout.write(''.join(l[4:]+'\n' for l in block.split('\n')))" \
 	  > $(BUILD)/cli-errors/readme_modal.lex
 	@out="$$(printf 'say "a \\"b\\" c" now' | $(BUILD)/bin/scilex $(BUILD)/cli-errors/readme_modal.lex - 2>&1)"; \
-	 printf '%s\n' "$$out" | grep -q '^ESCAPE	\\"	1:8' && printf '%s\n' "$$out" | grep -q '^END	"	1:15' \
+	 printf '%s\n' "$$out" | grep -q '^ESCAPE	\\\\"	1:8' && printf '%s\n' "$$out" | grep -q '^END	"	1:15' \
 	 && printf '%s\n' "$$out" | grep -q '^IDENT	now	1:17' \
 	  && echo "  the README's modal .lex grammar enters and leaves its string mode, escapes included" \
 	  || { echo "FAIL: the README's modal grammar lexed: $$out"; exit 1; }
+	@printf 'S\t"[^"]*"\nW\t\\s+\n' > $(BUILD)/cli-errors/escape.lex
+	@out="$$(printf '"a\tb\\c"\n\001' | $(BUILD)/bin/scilex $(BUILD)/cli-errors/escape.lex --errors=token - 2>&1)"; \
+	 test "$$out" = "$$(printf '# columns: bytes\nS\t"a\\tb\\\\c"\t1:1\nW\t\\n\t1:8\nERROR\t\\x01\t2:1')" \
+	  && echo "  a lexeme's tab, line feed, backslash and control byte are escaped: one token per line" \
+	  || { echo "FAIL: escaped output was: $$out"; exit 1; }
+	@out="$$(printf 'if x:\n\tif y:\n        z\n' | $(BUILD)/bin/scilex --example python - 2>&1)"; code=$$?; \
+	 test $$code -ne 0 && printf '%s\n' "$$out" | grep -q '^layout error at 3:9: inconsistent use of tabs and spaces' \
+	  && echo "  --example python measures indentation as CPython does, and a layout error names its position" \
+	  || { echo "FAIL: python tab/space report was: $$out (exit $$code)"; exit 1; }
+	@printf 'A\ta\tpush=zz\n' > $(BUILD)/cli-errors/typo.lex
+	@out="$$($(BUILD)/bin/scilex $(BUILD)/cli-errors/typo.lex - </dev/null 2>&1)"; code=$$?; \
+	 test $$code -ne 0 && printf '%s\n' "$$out" | grep -q "typo.lex:1:5: no rule is active in mode 'zz'" \
+	  && echo "  a push= into a mode with no rule is reported at its line and column" \
+	  || { echo "FAIL: push-typo report was: $$out (exit $$code)"; exit 1; }
 	@$(BUILD)/bin/scilex --version | grep -qE '^scilex [0-9]+\.[0-9]+\.[0-9]+ \(REAL [0-9]+\.[0-9]+\.[0-9]+\)$$' \
 	  && echo "  --version names SciLex's version and the REAL it was built with" \
 	  || { echo "FAIL: scilex --version printed: $$($(BUILD)/bin/scilex --version)"; exit 1; }

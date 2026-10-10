@@ -12,7 +12,8 @@
  *   scilex --check                     run every example self-check (dev gate)
  *
  * Option `--layout` runs the indentation pass (emitting NEWLINE / INDENT /
- * DEDENT). Output is one token per line: KIND<TAB>lexeme<TAB>line:col.
+ * DEDENT). Output is one token per line: KIND<TAB>lexeme<TAB>line:col, the
+ * lexeme escaped so that a line is a token (`\\`, `\t`, `\n`, `\r`, `\xHH`).
  *
  * Grammar files (see `examples/sample.lex`) use the `.lex` format of the optional
  * `scilex/grammar.hpp` — one rule per line:
@@ -62,43 +63,44 @@ namespace {
     std::string_view          sample;                                   //!< The built-in sample document.
     bool                      (*          self_check)();                //!< Invariant self-check (true = ok).
     bool                      uses_layout;                              //!< Run the indentation layout pass.
+    scilex::tab_policy        tabs;                                     //!< How the layout pass measures indentation.
   };
 
   // The registry. Each new language: include its header above, add one line here.
   const std::vector<example> registry {
     {"json",
      &scilex::examples::json::make_lexer_with, &scilex::examples::json::kind_name,
-     scilex::examples::json::sample, &scilex::examples::json::self_check, false},
+     scilex::examples::json::sample, &scilex::examples::json::self_check, false, scilex::tab_policy::columns},
     {"python",
      &scilex::examples::python::make_lexer_with, &scilex::examples::python::kind_name,
-     scilex::examples::python::sample, &scilex::examples::python::self_check, true},
+     scilex::examples::python::sample, &scilex::examples::python::self_check, true, scilex::tab_policy::python},
     // The Unicode-identifier variant: the SAME grammar (kind names and sample reused), only the
     // identifier rule differs — it reads café / 変数. Its self-check pins that and the DFA demote.
     {"python-unicode",
      &scilex::examples::python::make_lexer_unicode_with,
      &scilex::examples::python::kind_name, scilex::examples::python::sample,
-     &scilex::examples::python::self_check_unicode, true},
+     &scilex::examples::python::self_check_unicode, true, scilex::tab_policy::python},
     {"cpp",
      &scilex::examples::cpp::make_lexer_with, &scilex::examples::cpp::kind_name,
-     scilex::examples::cpp::sample, &scilex::examples::cpp::self_check, false},
+     scilex::examples::cpp::sample, &scilex::examples::cpp::self_check, false, scilex::tab_policy::columns},
     {"sql",
      &scilex::examples::sql::make_lexer_with, &scilex::examples::sql::kind_name,
-     scilex::examples::sql::sample, &scilex::examples::sql::self_check, false},
+     scilex::examples::sql::sample, &scilex::examples::sql::self_check, false, scilex::tab_policy::columns},
     {"css",
      &scilex::examples::css::make_lexer_with, &scilex::examples::css::kind_name,
-     scilex::examples::css::sample, &scilex::examples::css::self_check, false},
+     scilex::examples::css::sample, &scilex::examples::css::self_check, false, scilex::tab_policy::columns},
     {"lisp",
      &scilex::examples::lisp::make_lexer_with, &scilex::examples::lisp::kind_name,
-     scilex::examples::lisp::sample, &scilex::examples::lisp::self_check, false},
+     scilex::examples::lisp::sample, &scilex::examples::lisp::self_check, false, scilex::tab_policy::columns},
     {"math",
      &scilex::examples::math::make_lexer_with, &scilex::examples::math::kind_name,
-     scilex::examples::math::sample, &scilex::examples::math::self_check, false},
+     scilex::examples::math::sample, &scilex::examples::math::self_check, false, scilex::tab_policy::columns},
     {"xml",
      &scilex::examples::xml::make_lexer_with, &scilex::examples::xml::kind_name,
-     scilex::examples::xml::sample, &scilex::examples::xml::self_check, false},
+     scilex::examples::xml::sample, &scilex::examples::xml::self_check, false, scilex::tab_policy::columns},
     {"yaml",
      &scilex::examples::yaml::make_lexer_with, &scilex::examples::yaml::kind_name,
-     scilex::examples::yaml::sample, &scilex::examples::yaml::self_check, true},
+     scilex::examples::yaml::sample, &scilex::examples::yaml::self_check, true, scilex::tab_policy::columns},
   };
 
   //! \brief Names a layout / end-of-input kind, or nullptr when \p kind is an
@@ -126,28 +128,60 @@ namespace {
     return "bytes";
   }
 
+  //! \brief Writes \p lexeme so that it holds no tab or line break: a backslash, a tab, a line feed and a
+  //!        carriage return as `\\`, `\t`, `\n`, `\r`, any other control byte as `\xHH`, every other byte
+  //!        (UTF-8 included) as it is.
+  void write_escaped(std::ostream&    out,
+                     std::string_view lexeme)
+  {
+    constexpr std::string_view hex {"0123456789abcdef"};
+    for (const char c : lexeme) {
+      const auto byte {static_cast<unsigned char>(c)};
+      if (c == '\\') {
+        out << "\\\\";
+      }
+      else if (c == '\t') {
+        out << "\\t";
+      }
+      else if (c == '\n') {
+        out << "\\n";
+      }
+      else if (c == '\r') {
+        out << "\\r";
+      }
+      else if (byte < 0x20 || byte == 0x7f) {
+        out << "\\x" << hex[byte >> 4U] << hex[byte & 0xfU];
+      }
+      else {
+        out << c;
+      }
+    }
+  }
+
   //! \brief Tokenizes \p source with \p lex and prints each token as
-  //!        KIND<TAB>lexeme<TAB>line:col. \p name_of names ordinary kinds; layout
-  //!        and EOF kinds are named directly. With \p layout, runs the indentation
-  //!        pass (NEWLINE / INDENT / DEDENT) over an EOF-terminated stream.
+  //!        KIND<TAB>lexeme<TAB>line:col, the lexeme escaped (\ref write_escaped). \p name_of names
+  //!        ordinary kinds; layout and EOF kinds are named directly. With \p layout, runs the
+  //!        indentation pass (NEWLINE / INDENT / DEDENT), measuring indentation under \p tabs, over an
+  //!        EOF-terminated stream.
   void dump(const scilex::lexer&                    lex,
             std::string_view                        source,
             const std::function<const char* (int)>& name_of,
-            bool                                    layout)
+            bool                                    layout,
+            scilex::tab_policy                      tabs)
   {
     // Header: positions do not carry their column unit, so the tool declares it (KIND<TAB>lexeme<TAB>
     // line:col, columns counted in the named unit).
     std::cout << "# columns: " << column_unit_name(lex.columns()) << '\n';
     const auto print = [&](const scilex::token& tok) {
                          const char* const special {layout_name(tok.kind)};
-                         std::cout << (special != nullptr ? special : name_of(tok.kind)) << '\t'
-                                   << tok.lexeme << '\t' << tok.start.line << ':' << tok.start.column
-                                   << '\n';
+                         std::cout << (special != nullptr ? special : name_of(tok.kind)) << '\t';
+                         write_escaped(std::cout, tok.lexeme);
+                         std::cout << '\t' << tok.start.line << ':' << tok.start.column << '\n';
                        };
     if (layout) {
       const std::vector<scilex::token> flat {lex.tokenize(source, scilex::eof_policy::append)};
       // Policy-aware: an insignificant mode (e.g. YAML flow) adds no layout structure.
-      for (const scilex::token& tok : scilex::layout(flat, lex.mode_significant())) {
+      for (const scilex::token& tok : scilex::layout(flat, source, tabs, lex.mode_significant())) {
         print(tok);
       }
     }
@@ -221,8 +255,10 @@ namespace {
         << "  --layout                          emit indentation tokens (NEWLINE / INDENT / DEDENT)\n"
         << "  --errors=token                    recover from unlexable bytes (emit ERROR tokens; default: raise)\n"
         << "  --columns=bytes|codepoints|utf16  unit for token columns (default: bytes)\n"
-        << "grammar file: one rule per line   name<TAB>regex[<TAB>skip]   ('#' comments, blank lines ok)\n"
-        << "output: one token per line        KIND<TAB>lexeme<TAB>line:col\n";
+        << "grammar file: one rule per line   name<TAB>regex[<TAB>options]   ('#' comments, blank lines ok)\n"
+        << "  options (space-separated):      skip, in=m1,m2, and one of push=m, set=m, pop\n"
+        << "output: one token per line        KIND<TAB>lexeme<TAB>line:col\n"
+        << "  the lexeme escaped:             \\\\ \\t \\n \\r, other control bytes as \\xHH\n";
   }
 
   //! \brief Lexes with a built-in grammar (`--example <lang> [file|-]`).
@@ -245,7 +281,7 @@ namespace {
     const std::string   source {args.size() >= 3 ? read_input(args[2]) : std::string {lang->sample}};
     dump(lex, source, [lang](int kind) {
            return lang->kind_name(kind);
-         }, layout || lang->uses_layout);
+         }, layout || lang->uses_layout, lang->tabs);
     return 0;
   }
 
@@ -274,7 +310,7 @@ namespace {
            return (kind >= 0 && static_cast<std::size_t>(kind) < names.size())
                   ? names[static_cast<std::size_t>(kind)].c_str()
                   : "?";
-         }, layout);
+         }, layout, scilex::tab_policy::columns);
     return 0;
   }
 } // namespace
@@ -338,6 +374,11 @@ int main(int    argc,
   }
   catch (const scilex::lex_error& error) {
     std::cerr << "lex error at " << error.where().line << ':' << error.where().column << ": " << error.what()
+              << '\n';
+    return 1;
+  }
+  catch (const scilex::layout_error& error) {
+    std::cerr << "layout error at " << error.where().line << ':' << error.where().column << ": " << error.what()
               << '\n';
     return 1;
   }

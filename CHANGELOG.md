@@ -28,6 +28,20 @@ fuzz oracle.
 - **A stream's cost no longer grows with the depth of the mode stack.** Each step copied the whole stack, to
   restore it if the step had to wait for more text; it now notes what each transition changes and undoes that.
   32 000 nested pushes then pops (64 001 tokens): 572 ms → 2.2 ms, as `tokenize` (2.3 ms).
+- **The `scilex` CLI escapes lexemes**, so that each output line is one token: a backslash, tab, line feed
+  and carriage return print as `\\`, `\t`, `\n`, `\r`, any other control byte as `\xHH`. A lexeme holding a
+  line break or a tab used to break the line-per-token format.
+- **`scilex --example python` measures indentation as CPython does** (`tab_policy::python`): a tab
+  advances to the next multiple of 8, and ambiguous tabs and spaces are refused. It counted a tab as one
+  column, so `\t` and 8 spaces opened a block.
+
+### Fixed (`.lex` and CLI)
+- **A `push=` or `set=` into a mode no rule is active in is refused at its line and column**
+  (`my.lex:2:5: no rule is active in mode 'strr' (give one in=strr)`). The lexer refused it when built,
+  with no line, so a typo in a mode name surfaced as a bare `scilex.error`.
+- **A byte order mark that starts a `.lex` file is dropped**; it became part of the first rule's name.
+- **The CLI reports an indentation error at its position** (`layout error at 3:9: …`), and its usage
+  lists the `.lex` options (`in=`, `push=`, `set=`, `pop`), not only `skip`.
 
 ## 2026.10.3 — 2026-10-10
 

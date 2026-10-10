@@ -900,6 +900,13 @@ class GrammarTests(unittest.TestCase):
         with self.assertRaises(scilex.GrammarError) as caught:
             scilex.parse_grammar("# nothing\n")
         self.assertEqual(caught.exception.line, 0)
+        with self.assertRaises(scilex.GrammarError) as caught:
+            scilex.parse_grammar("A\ta\nS\t\"\tpush=strr\nT\t[^\"]+\tin=str\n")
+        self.assertEqual((caught.exception.line, caught.exception.column), (2, 5))
+        self.assertEqual(caught.exception.cause, "no rule is active in mode 'strr' (give one in=strr)")
+
+    def test_a_byte_order_mark_is_not_part_of_a_name(self):
+        self.assertEqual(scilex.parse_grammar("\ufeffWS\t\\s+\tskip\nID\t[a-z]+\n").names, ["WS", "ID"])
 
     def test_load_grammar_names_its_file(self):
         import tempfile

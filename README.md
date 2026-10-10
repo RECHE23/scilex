@@ -290,9 +290,10 @@ OP	+	1:8
 NUMBER	1	1:10
 ```
 
-Output is one token per line — the kind, a tab, the lexeme, a tab, then `line:col`;
+Output is one token per line — the kind, a tab, the lexeme, a tab, then `line:col` —
+the lexeme escaped (`\\`, `\t`, `\n`, `\r`, `\xHH`) so that a line is a token;
 `--layout` adds the indentation tokens. A malformed grammar is reported with a
-clear, positioned error (`my.lex:3: invalid regex: …`) — never a crash. See
+clear, positioned error (`my.lex:3:6: invalid regex: …`) — never a crash. See
 `examples/sample.lex` for a worked file.
 
 A modal grammar reads the same way — a string mode entered by a double quote and

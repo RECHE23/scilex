@@ -7,13 +7,14 @@
  * CLI's input, a user-supplied grammar, a Python caller's text — goes through one tested parser.
  *
  * One rule per line: a name, a tab, the pattern, then optionally a tab and space-separated options.
- * Blank lines and lines whose first non-blank character is `#` are ignored; a trailing `\r` is
- * dropped, and so are the spaces and tabs that end a line, so a pattern never ends in one: write a
- * final space `[ ]` or `\x20`. The options are:
+ * Blank lines and lines whose first non-blank character is `#` are ignored; a UTF-8 byte order mark
+ * that starts the text is dropped, a trailing `\r` too, and so are the spaces and tabs that end a
+ * line, so a pattern never ends in one: write a final space `[ ]` or `\x20`. The options are:
  *
  * - `skip` — matches are consumed but not emitted;
  * - `in=m1,m2` — the modes the rule is active in (default: `default` only);
- * - `push=m`, `set=m`, `pop` — the mode transition fired when the rule wins (at most one).
+ * - `push=m`, `set=m`, `pop` — the mode transition fired when the rule wins (at most one); a mode
+ *   that `push=` or `set=` enters must have a rule active in it.
  *
  * A rule's kind is its 0-based position among the rules; \ref scilex::grammar::names maps it back.
  *
@@ -265,15 +266,17 @@ namespace scilex {
      * \param[in]     origin  For errors: where the grammar came from.
      * \param[in]     line    For errors: the 1-based line.
      * \param[in,out] out     The rule being built.
+     * \return The 1-based column of its `push=` or `set=` option, or 0 when it has none.
      * \throws grammar_error On an unknown option, an empty mode name, or a second transition.
      */
-    inline void apply_grammar_options(std::string_view   options,
-                                      std::size_t        column,
-                                      const std::string& origin,
-                                      std::size_t        line,
-                                      rule&              out)
+    inline std::size_t apply_grammar_options(std::string_view   options,
+                                             std::size_t        column,
+                                             const std::string& origin,
+                                             std::size_t        line,
+                                             rule&              out)
     {
-      std::size_t at {0};
+      std::size_t transition_column {0};
+      std::size_t at                {0};
       while (at < options.size()) {
         if (options[at] == ' ') {
           ++at;
@@ -290,9 +293,11 @@ namespace scilex {
         }
         else if (word.starts_with("push=")) {
           set_transition(out, mode_action::op::push, checked_mode(word.substr(5), word, origin, line, col), origin, line, col);
+          transition_column = col;
         }
         else if (word.starts_with("set=")) {
           set_transition(out, mode_action::op::set, checked_mode(word.substr(4), word, origin, line, col), origin, line, col);
+          transition_column = col;
         }
         else if (word.starts_with("in=")) {
           std::string_view modes {word.substr(3)};
@@ -311,6 +316,42 @@ namespace scilex {
         }
         at = end;
       }
+      return transition_column;
+    }
+
+    //! \brief Where a rule's `push=` or `set=` option is written.
+    struct transition_site
+    {
+      std::size_t rule;   //!< The rule's index.
+      std::size_t line;   //!< Its 1-based line.
+      std::size_t column; //!< The 1-based column of the option.
+    };
+
+    /*!
+     * \brief Refuses a `push=` or `set=` whose mode no rule is active in, at the option.
+     * \param[in] parsed The grammar.
+     * \param[in] sites  Where each `push=` and `set=` is written.
+     * \param[in] origin For errors: where the grammar came from.
+     * \throws grammar_error For the first such transition.
+     */
+    inline void check_transition_targets(const grammar&                      parsed,
+                                         const std::vector<transition_site>& sites,
+                                         const std::string&                  origin)
+    {
+      const auto active_in = [&](std::string_view mode) {
+                               return std::ranges::any_of(parsed.rules, [&](const rule& r) {
+                                                            return r.in_mode.empty()
+                                                                   ? mode == "default"
+                                                                   : std::ranges::find(r.in_mode, mode) != r.in_mode.end();
+                                                          });
+                             };
+      for (const transition_site& site : sites) {
+        const std::string& target {parsed.rules[site.rule].action->target};
+        if (!active_in(target)) {
+          throw grammar_error(origin, site.line, site.column,
+                              quoting("no rule is active in mode ", target, " (give one in=") + target + ")");
+        }
+      }
     }
   } // namespace detail
 
@@ -328,9 +369,11 @@ namespace scilex {
   [[nodiscard]] inline grammar parse_grammar(std::string_view   text,
                                              const std::string& origin = "<string>")
   {
-    grammar     parsed;
-    std::size_t line_no {0};
-    std::size_t at      {0};
+    constexpr std::string_view           byte_order_mark {"\xEF\xBB\xBF"};
+    grammar                              parsed;
+    std::vector<detail::transition_site> transitions;
+    std::size_t                          line_no {0};
+    std::size_t                          at      {text.starts_with(byte_order_mark) ? byte_order_mark.size() : 0};
     while (at <= text.size()) {
       const std::size_t newline {text.find('\n', at)};
       std::string_view  line    {text.substr(at, (newline == std::string_view::npos ? text.size() : newline) - at)};
@@ -365,13 +408,18 @@ namespace scilex {
         throw grammar_error(origin, line_no, fields.column[1] + invalid.position(), "invalid regex: " + invalid.cause());
       }
       if (fields.text.size() == 3) {
-        detail::apply_grammar_options(fields.text[2], fields.column[2], origin, line_no, parsed.rules.back());
+        const std::size_t column {detail::apply_grammar_options(fields.text[2], fields.column[2], origin, line_no,
+                                                                parsed.rules.back())};
+        if (column != 0) {
+          transitions.push_back({.rule = parsed.rules.size() - 1, .line = line_no, .column = column});
+        }
       }
       parsed.names.emplace_back(fields.text[0]);
     }
     if (parsed.rules.empty()) {
       throw grammar_error(origin, 0, 0, "no rules (the grammar is empty)");
     }
+    detail::check_transition_targets(parsed, transitions, origin);
     return parsed;
   }
 

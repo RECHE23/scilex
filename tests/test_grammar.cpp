@@ -48,7 +48,8 @@ namespace {
   TEST(grammar_options_set_modes_and_transitions)
   {
     const scilex::grammar g {scilex::parse_grammar("STR\t\"\tpush=str\nTXT\t[^\"]+\tin=str\n"
-                                                   "END\t\"\tin=str  pop\nMID\tx\tin=default,str set=other skip\n")};
+                                                   "END\t\"\tin=str  pop\nMID\tx\tin=default,str set=other skip\n"
+                                                   "OTHER\ty\tin=other\n")};
     EXPECT(g.rules[0].action.has_value());
     EXPECT(g.rules[0].action->operation == scilex::mode_action::op::push);
     EXPECT_EQ(g.rules[0].action->target, "str");
@@ -119,6 +120,26 @@ namespace {
     const scilex::grammar_error none {refusal("# only a comment\n\n")};
     EXPECT_EQ(none.line(), 0U);
     EXPECT_EQ(std::string(none.what()), "g.lex: no rules (the grammar is empty)");
+  }
+
+  // A mode that push= or set= enters must have a rule active in it, or the lexer refuses the grammar with
+  // no line; the parse refuses it at the option. A byte order mark is not part of the first rule's name.
+  TEST(grammar_a_transition_enters_a_mode_with_rules)
+  {
+    const scilex::grammar_error push {refusal("A\ta\nS\t\"\tpush=strr\nT\t[^\"]+\tin=str\n")};
+    EXPECT_EQ(push.line(), 2U);
+    EXPECT_EQ(push.column(), 5U);
+    EXPECT_EQ(push.cause(), "no rule is active in mode 'strr' (give one in=strr)");
+    const scilex::grammar_error set {refusal("A\ta\tskip set=b\n")};
+    EXPECT_EQ(set.line(), 1U);
+    EXPECT_EQ(set.column(), 10U);
+    EXPECT_EQ(set.cause(), "no rule is active in mode 'b' (give one in=b)");
+    // `default` holds the rules with no in=; a mode named in in= holds its rules.
+    EXPECT_EQ(scilex::parse_grammar("A\ta\tin=x set=default\nB\tb\tset=x\n").rules.size(), 2U);
+
+    const scilex::grammar bom {scilex::parse_grammar("\xEF\xBB\xBFWS\t\\s+\tskip\nID\t[a-z]+\n")};
+    EXPECT_EQ(bom.names[0], "WS");
+    EXPECT_EQ(refusal("\xEF\xBB\xBF" "A\ta(\n").column(), 4U); // columns count from after the mark
   }
 
   TEST(grammar_loads_a_file_and_names_a_missing_one)
