@@ -621,6 +621,9 @@ namespace scilex {
           return scan_status::pending;
         }
         const munch_result m {munch_at(mode, source, cursor.offset, memos)};
+        if (m.open && !gate.at_end()) {
+          return scan_status::pending; // the DFA rules' munch may still change with what comes next
+        }
 
         if (!m.have) {
           if (errors_ == error_policy::raise) {
@@ -638,8 +641,14 @@ namespace scilex {
             if (!gate.ready(mode, cursor.offset)) {
               return scan_status::pending;
             }
-            if (starts_a_match(mode, source, cursor.offset, memos)) {
-              break;
+            if (may_start(mode, static_cast<unsigned char>(source[cursor.offset]))) {
+              const munch_result probe {munch_at(mode, source, cursor.offset, memos)};
+              if (probe.open && !gate.at_end()) {
+                return scan_status::pending;
+              }
+              if (probe.have) {
+                break;
+              }
             }
             advance(source, cursor, 1);
           }
@@ -838,6 +847,7 @@ namespace scilex {
       bool        have {false};
       std::size_t idx  {0};
       std::size_t len  {0};
+      bool        open {false}; //!< The mode's DFA was alive at the end of the source: text after it may change its share.
     };
 
     //! \brief The winning munch in \p mode at \p offset of \p source (\p memos: see \ref munch_memos),
@@ -878,13 +888,15 @@ namespace scilex {
       // linear in the source rather than quadratic. Each rule's match() is its longest, so the DFA's
       // longest is theirs; a DFA rule's empty match, which the DFA never reports, competes through
       // empty_winner.
-      if (const std::optional<real::dfa_match> matched {hybrid.dfa.match(source, offset, memo)}) {
-        return munch_result {.have = true, .idx = hybrid.to_global[matched->rule_index], .len = matched->length};
+      const real::dfa_munch munch {hybrid.dfa.munch(source, offset, memo)};
+      if (munch.match) {
+        return munch_result {.have = true, .idx = hybrid.to_global[munch.match->rule_index], .len = munch.match->length,
+                             .open = munch.more_text_may_change};
       }
       if (hybrid.empty_winner) {
-        return munch_result {.have = true, .idx = *hybrid.empty_winner, .len = 0};
+        return munch_result {.have = true, .idx = *hybrid.empty_winner, .len = 0, .open = munch.more_text_may_change};
       }
-      return munch_result {};
+      return munch_result {.open = munch.more_text_may_change};
     }
 
     //! \brief \ref munch_at for a mode with rules on Pike: all of them when it has no DFA (\p hybrid
@@ -910,12 +922,14 @@ namespace scilex {
         return pike_munch_in_mode(mode, source, offset, first, nullptr);
       }
       munch_result       best         {dfa_munch(*hybrid, source, offset, memos[mode])};
+      const bool         dfa_open     {best.open};
       const munch_result rest_of_mode {pike_munch_in_mode(mode, source, offset, first, &hybrid->on_pike)};
       if (rest_of_mode.have
           && (!best.have || rest_of_mode.len > best.len
               || (rest_of_mode.len == best.len && rest_of_mode.idx < best.idx))) {
         best = rest_of_mode;
       }
+      best.open = dfa_open; // the Pike rules answer to the gate (can_extend), the DFA's through this
       return best;
     }
 
@@ -931,21 +945,6 @@ namespace scilex {
                    unsigned char byte) const
     {
       return !per_mode_[mode].first_byte_index[byte].empty();
-    }
-
-    //! \brief Does a rule in \p mode match at \p offset in \p source? The error-recovery loop's stop
-    //!        test — the smallest such offset ends an error run. Since recovery never runs in a mode
-    //!        with a nullable rule (see \ref may_start), any match here has positive length, so
-    //!        `have` alone is the stop condition (a zero-length win is impossible in this context).
-    bool starts_a_match(std::size_t      mode,
-                        std::string_view source,
-                        std::size_t      offset,
-                        munch_memos&     memos) const
-    {
-      if (!may_start(mode, static_cast<unsigned char>(source[offset]))) {
-        return false;
-      }
-      return munch_at(mode, source, offset, memos).have;
     }
 
     //! \brief Advances \p cursor by \p n bytes of \p source, maintaining the 1-based line/column
@@ -1493,11 +1492,15 @@ namespace scilex {
         const std::string& text {stream->buffer_};
         const lexer&       lex     {*stream->owner_};
         const auto&        by_byte {lex.per_mode_[mode]};
-        const auto         extends {[&](const std::vector<std::size_t>& rules) {
-                                      return std::ranges::any_of(rules, [&](std::size_t idx) {
-                                                                   return lex.rules_[idx].pattern.can_extend(text, offset);
-                                                                 });
-                                    }};
+        // A rule on the mode's DFA answers through the munch (munch_result::open), at no further cost;
+        // can_extend is for the rules the DFA cannot take.
+        const auto* const hybrid  {lex.per_mode_dfa_[mode].get()};
+        const auto        extends {[&](const std::vector<std::size_t>& rules) {
+                                     return std::ranges::any_of(rules, [&](std::size_t idx) {
+                                                                  return (hybrid == nullptr || hybrid->on_pike[idx])
+                                                                         && lex.rules_[idx].pattern.can_extend(text, offset);
+                                                                });
+                                   }};
         return !extends(by_byte.first_byte_index[static_cast<unsigned char>(text[offset])])
                && !extends(by_byte.general);
       }

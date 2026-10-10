@@ -15,9 +15,11 @@ fuzz oracle.
   token before the error, wherever the text was cut.
 
 ### Changed
-- **A stream is 3–13× faster** (1 MiB, 4 KiB chunks, arm64: `json` 2.2 → 7.2 MB/s, `python` 0.5 → 6.8,
-  `cpp` 0.6 → 7.0). Before each munch it asked every rule of the mode whether more text could change its
-  match; it now asks only the rules that can start with the byte there, and the mode's nullable ones.
+- **A stream runs at 1.4–1.6× `tokenize`'s time** (1 MiB, 4 KiB chunks, arm64: `json` 2.2 → 76 MB/s,
+  `python` 0.5 → 78, `cpp` 0.6 → 76; it was 55–264× slower). Before each munch it asked every rule of the
+  mode whether more text could change its match (`real::regex::can_extend`, a Pike run). The mode's DFA now
+  tells it from the munch it walks anyway (`real::dfa::munch`, real-regex 2026.10.10), and `can_extend` is
+  asked only of the rules left on Pike that can start with the byte there.
 
 ## 2026.10.3 — 2026-10-10
 
