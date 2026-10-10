@@ -7,6 +7,18 @@ fuzz oracle.
 
 ## Unreleased
 
+### Fixed
+- **A stream no longer loses the tokens before an error.** An error found in a `feed` or `finish` that had
+  decided tokens before it dropped them, so what a stream gave depended on where the text was cut
+  (`"abc 12 de @ x"` in one piece: nothing, then the error). The `lex_error` now carries them
+  (`lex_error::decided()`; Python: `LexError.tokens`): the tokens of the earlier calls and these are every
+  token before the error, wherever the text was cut.
+
+### Changed
+- **A stream is 3–13× faster** (1 MiB, 4 KiB chunks, arm64: `json` 2.2 → 7.2 MB/s, `python` 0.5 → 6.8,
+  `cpp` 0.6 → 7.0). Before each munch it asked every rule of the mode whether more text could change its
+  match; it now asks only the rules that can start with the byte there, and the mode's nullable ones.
+
 ## 2026.10.3 — 2026-10-10
 
 ### Fixed
