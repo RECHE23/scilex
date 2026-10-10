@@ -25,6 +25,9 @@ fuzz oracle.
   mode whether more text could change its match (`real::regex::can_extend`, a Pike run). The mode's DFA now
   tells it from the munch it walks anyway (`real::dfa::munch`, real-regex 2026.10.10), and `can_extend` is
   asked only of the rules left on Pike that can start with the byte there.
+- **A stream's cost no longer grows with the depth of the mode stack.** Each step copied the whole stack, to
+  restore it if the step had to wait for more text; it now notes what each transition changes and undoes that.
+  32 000 nested pushes then pops (64 001 tokens): 572 ms → 2.2 ms, as `tokenize` (2.3 ms).
 
 ## 2026.10.3 — 2026-10-10
 
