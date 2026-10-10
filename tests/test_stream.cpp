@@ -405,3 +405,33 @@ TEST(stream_waits_on_a_nullable_rule_that_may_grow)
     EXPECT(got == whole);
   }
 }
+
+// A mode with rules on both sides: the Pike rule `(?<=x)aa` has its match at "xaa", but the DFA's `a+b` is
+// still alive there and wins "aab" once the `b` comes -- the munch stays open while the DFA's share may grow,
+// whichever side holds the best match so far.
+TEST(stream_waits_on_the_dfa_while_a_pike_rule_leads)
+{
+  const scilex::lexer lex {std::vector<scilex::rule> {{.kind = 0, .pattern = real::regex {"(?<=x)aa"}},
+                             {.kind = 1, .pattern = real::regex {"a+b"}},
+                             {.kind = 2, .pattern = real::regex {"x"}}}};
+  const std::string        text {"xaab"};
+  std::vector<std::string> whole;
+  for (const scilex::token& t : lex.tokenize(text)) {
+    whole.emplace_back(t.lexeme);
+  }
+  EXPECT(whole == (std::vector<std::string> {"x", "aab"}));
+  for (std::size_t cut {0}; cut <= text.size(); ++cut) {
+    scilex::token_stream     in {lex.stream()};
+    std::vector<std::string> got;
+    for (const scilex::token& t : in.feed(text.substr(0, cut))) {
+      got.emplace_back(t.lexeme);
+    }
+    for (const scilex::token& t : in.feed(text.substr(cut))) {
+      got.emplace_back(t.lexeme);
+    }
+    for (const scilex::token& t : in.finish()) {
+      got.emplace_back(t.lexeme);
+    }
+    EXPECT(got == whole);
+  }
+}
