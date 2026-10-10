@@ -435,3 +435,90 @@ TEST(stream_waits_on_the_dfa_while_a_pike_rule_leads)
     EXPECT(got == whole);
   }
 }
+
+namespace {
+  //! The lexemes a stream gives for \p text fed in two pieces at \p cut, then finished.
+  std::vector<std::string> streamed_lexemes(const scilex::lexer& lex,
+                                            std::string_view     text,
+                                            std::size_t          cut)
+  {
+    scilex::token_stream     in {lex.stream()};
+    std::vector<std::string> got;
+    for (const scilex::token& t : in.feed(text.substr(0, cut))) {
+      got.emplace_back(t.lexeme);
+    }
+    for (const scilex::token& t : in.feed(text.substr(cut))) {
+      got.emplace_back(t.lexeme);
+    }
+    for (const scilex::token& t : in.finish()) {
+      got.emplace_back(t.lexeme);
+    }
+    return got;
+  }
+} // namespace
+
+// A rule the DFA cannot take (a lookbehind) answers through can_extend: `(?<=[x@])a[^z]*z` may still swallow what
+// follows "xabc de", in a mode whose other rules are on its DFA, and in an error run (`@`) that reaches the cut.
+TEST(stream_waits_on_a_pike_rule_that_may_still_grow)
+{
+  const std::vector<scilex::rule> rules {
+    {.kind = 0, .pattern = real::regex {"x"}},
+    {.kind = 1, .pattern = real::regex {"(?<=[x@])a[^z]*z"}},
+    {.kind = 2, .pattern = real::regex {"[b-y]+"}},
+    {.kind = 3, .pattern = real::regex {" "}, .skip = true}};
+  for (const scilex::error_policy policy : {scilex::error_policy::raise, scilex::error_policy::token}) {
+    const scilex::lexer lex {rules, {}, {}, policy};
+    for (const std::string_view text : {std::string_view {"xabc dez"}, std::string_view {"x@abc dez"}}) {
+      if (policy == scilex::error_policy::raise && text.find('@') != std::string_view::npos) {
+        continue; // an error run needs the token policy
+      }
+      std::vector<std::string> whole;
+      for (const scilex::token& t : lex.tokenize(text)) {
+        whole.emplace_back(t.lexeme);
+      }
+      EXPECT_EQ(whole.back(), std::string {text.substr(text.find('a'))}); // the lookbehind rule took the rest
+      for (std::size_t cut {0}; cut <= text.size(); ++cut) {
+        EXPECT(streamed_lexemes(lex, text, cut) == whole);
+      }
+    }
+  }
+}
+
+// Each case is streamed at every cut, under both policies, with the rules on their DFAs and all on Pike (no DFA
+// for the mode): a nullable lookbehind rule that may still grow (`(?<=x)b*`), an error run that ends on a byte
+// a rule may start but does not match (`!a!ab`), and one that ends on a munch still open at the end (`!!aa`).
+TEST(stream_matches_tokenize_with_and_without_a_dfa)
+{
+  struct stream_case
+  {
+    std::vector<scilex::rule>     rules;
+    std::vector<std::string_view> texts;
+  };
+  const std::vector<stream_case> cases {
+    {.rules   = {{.kind = 0, .pattern = real::regex {"x"}},
+       {.kind = 1, .pattern = real::regex {"(?<=x)b*"}},
+       {.kind = 2, .pattern = real::regex {" "}, .skip = true}},
+     .texts   = {"xbb", "x xb"}},
+    {.rules   = {{.kind = 0, .pattern = real::regex {"ab"}}, {.kind = 1, .pattern = real::regex {"a+"}}},
+     .texts   = {"!a!ab", "!!aa", "ab!"}},
+    {.rules   = {{.kind = 0, .pattern = real::regex {"ab"}}}, .texts = {"!a!ab"}}};
+  for (const stream_case& c : cases) {
+    for (const scilex::error_policy policy : {scilex::error_policy::raise, scilex::error_policy::token}) {
+      for (const scilex::dfa_policy dfa : {scilex::dfa_policy::automatic, scilex::dfa_policy::requested}) {
+        const scilex::lexer lex {c.rules, {}, {}, policy, scilex::column_unit::bytes, dfa};
+        for (const std::string_view text : c.texts) {
+          if (policy == scilex::error_policy::raise && text.find('!') != std::string_view::npos) {
+            continue; // an error run needs the token policy
+          }
+          std::vector<std::string> whole;
+          for (const scilex::token& t : lex.tokenize(text)) {
+            whole.emplace_back(t.lexeme);
+          }
+          for (std::size_t cut {0}; cut <= text.size(); ++cut) {
+            EXPECT(streamed_lexemes(lex, text, cut) == whole);
+          }
+        }
+      }
+    }
+  }
+}
