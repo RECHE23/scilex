@@ -1460,7 +1460,10 @@ namespace scilex {
         throw std::logic_error("token_stream::feed after finish");
       }
       drop_returned();
+      buffer_.append(tail_);
+      tail_.clear();
       buffer_.append(chunk);
+      hold_incomplete_tail();
       return collect(false);
     }
 
@@ -1477,6 +1480,8 @@ namespace scilex {
         throw std::logic_error("token_stream::finish called twice");
       }
       drop_returned();
+      buffer_.append(tail_);
+      tail_.clear();
       finished_ = true;
       return collect(true);
     }
@@ -1485,7 +1490,7 @@ namespace scilex {
     //! \return The count.
     [[nodiscard]] std::size_t buffered() const noexcept
     {
-      return buffer_.size() - cursor_.offset;
+      return buffer_.size() - cursor_.offset + tail_.size();
     }
 
   private:
@@ -1591,12 +1596,38 @@ namespace scilex {
     //!        answers as on the whole text (`real::regex::left_context`).
     void drop_returned()
     {
-      const std::size_t k {cursor_.offset - std::min(cursor_.offset, owner_->left_context_)};
+      // A column in code points or UTF-16 units reads up to 3 bytes back to find a code point's lead.
+      const std::size_t keep {owner_->columns_ == column_unit::bytes ? owner_->left_context_
+                                                                     : std::max<std::size_t>(owner_->left_context_, 3)};
+      const std::size_t k    {cursor_.offset - std::min(cursor_.offset, keep)};
       buffer_.erase(0, k);
       base_          += k;
       cursor_.offset -= k;
       for (frame& f : stack_) {
         f.entry_pos.offset -= k; // modular: a mode entered before the dropped text keeps a consistent offset
+      }
+    }
+
+    //! \brief Holds back the bytes that end the buffer when they begin a UTF-8 code point the text has
+    //!        not finished: a column in code points or UTF-16 units scores a lead and its continuations
+    //!        by the whole sequence, so none of them is lexed until it is all there (or the text ends).
+    void hold_incomplete_tail()
+    {
+      if (owner_->columns_ == column_unit::bytes) {
+        return;
+      }
+      const std::size_t end {buffer_.size()};
+      for (std::size_t back {1}; back <= std::min<std::size_t>(3, end - cursor_.offset); ++back) {
+        const auto byte {static_cast<unsigned char>(buffer_[end - back])};
+        if ((byte & 0xC0U) == 0x80U) {
+          continue; // a continuation: its lead is further back
+        }
+        const std::size_t length {byte >= 0xF0U ? 4U : byte >= 0xE0U ? 3U : byte >= 0xC0U ? 2U : 1U};
+        if (length > back) {
+          tail_.assign(buffer_, end - back);
+          buffer_.resize(end - back);
+        }
+        return;
       }
     }
 
@@ -1615,6 +1646,7 @@ namespace scilex {
     position                cursor_   {0, 1, 1}; //!< Where lexing resumes, in the buffer (line and column in the text).
     std::vector<frame>      stack_;              //!< The mode stack.
     std::vector<undo_entry> undo_;               //!< The transitions of the step under way (see \ref gate::undo).
+    std::string             tail_;               //!< Fed bytes held back: a code point not yet complete.
     bool                    finished_ {false};   //!< \ref finish was called, or a lex_error ended the text.
   };
 

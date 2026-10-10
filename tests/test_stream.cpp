@@ -567,3 +567,44 @@ TEST(stream_undoes_the_transitions_of_a_step_that_waits)
     EXPECT(got == whole);
   }
 }
+
+// A rule that takes one raw byte (`\C`) ends a token inside a code point. A column in code points or UTF-16
+// units scores a lead by its whole sequence and a continuation by its lead, so the stream holds back a code
+// point it has not finished and keeps its lead once returned: fed byte by byte or cut anywhere, the columns
+// are tokenize's. The text holds a 4-byte and a 2-byte code point, orphan continuations and a byte no
+// sequence starts with.
+TEST(stream_columns_match_tokenize_inside_a_code_point)
+{
+  const std::vector<scilex::rule> rules {{.kind = 1, .pattern = real::regex {"\\C", real::flags::allow_raw_byte}}};
+  const std::string               text  {"a\xF0\x9F\x98\x80"
+                                         "b\xC3\xA9"
+                                         "c\x80\x80\x80\x80\xF8"
+                                         "d\xE2\x82"};
+  for (const scilex::column_unit unit : {scilex::column_unit::codepoints, scilex::column_unit::utf16}) {
+    const scilex::lexer      lex {rules, {}, {}, scilex::error_policy::raise, unit};
+    std::vector<std::size_t> whole;
+    for (const scilex::token& t : lex.tokenize(text)) {
+      whole.push_back(t.start.column);
+    }
+    for (std::size_t cut {0}; cut <= text.size(); ++cut) {
+      for (const std::size_t chunk : {std::size_t {1}, text.size()}) {
+        scilex::token_stream     in {lex.stream()};
+        std::vector<std::size_t> got;
+        for (const std::string_view part : {std::string_view {text}.substr(0, cut), std::string_view {text}.substr(cut)}) {
+          for (std::size_t at {0}; at < part.size(); at += chunk) {
+            for (const scilex::token& t : in.feed(part.substr(at, chunk))) {
+              got.push_back(t.start.column);
+            }
+          }
+        }
+        for (const scilex::token& t : in.finish()) {
+          got.push_back(t.start.column);
+        }
+        EXPECT(got == whole);
+      }
+    }
+    scilex::token_stream held {lex.stream()};
+    EXPECT_EQ(held.feed("a\xF0").size(), std::size_t {1}); // `a`; the lead waits for its sequence
+    EXPECT_EQ(held.buffered(), std::size_t {1});              // and counts as held
+  }
+}

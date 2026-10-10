@@ -34,6 +34,11 @@ fuzz oracle.
 - **`scilex.Token` checks its arguments**: a lexeme that is not `str` or `bytes`, or a position that is not
   a `Position`, is a `TypeError` when the token is made. `Token(1, 'x', 'notpos')` was accepted, then its
   `repr` raised `SystemError`, and a token with an unhashable lexeme raised `scilex.error` from `hash`.
+- **A stream counts columns as `tokenize` does when a token ends inside a code point** (a byte rule such
+  as `\C`, under `column_unit::codepoints` or `utf16`). A continuation byte is scored by its lead and a lead
+  by its whole sequence, and the stream scored them with the sequence not yet fed or its lead already
+  dropped. It now holds back a code point it has not finished (`buffered()` counts it) and keeps 3 bytes
+  before the next token.
 - **A stream no longer loses the tokens before an error.** An error found in a `feed` or `finish` that had
   decided tokens before it dropped them, so what a stream gave depended on where the text was cut
   (`"abc 12 de @ x"` in one piece: nothing, then the error). The `lex_error` now carries them
