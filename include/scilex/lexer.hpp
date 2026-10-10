@@ -592,7 +592,9 @@ namespace scilex {
       }
 
       //! \brief Nothing: a scan over the whole text never takes a step back.
-      static constexpr void before_transition(const std::vector<frame>& /*stack*/) noexcept {}
+      static constexpr void before_transition(const std::vector<frame>& /*stack*/) noexcept
+      {
+      }
     };
 
     /*!
@@ -1556,7 +1558,8 @@ namespace scilex {
           throw lex_error(e.what(), in_text(e.where()), std::move(out)); // the tokens before it, too
         }
         if (status == lexer::scan_status::pending) {
-          cursor_ = saved_cursor; // undo any skipped matches the step went over, and their transitions
+          // Undo any skipped matches the step went over, and their transitions.
+          cursor_ = saved_cursor;
           for (const undo_entry& e : std::views::reverse(undo_)) {
             stack_.resize(e.depth - 1);
             stack_.push_back(e.top);
@@ -1594,13 +1597,13 @@ namespace scilex {
       return where;
     }
 
-    const lexer*       owner_;              //!< The lexer.
-    std::string        buffer_;             //!< The text from the first token not yet returned.
-    std::size_t        base_     {0};       //!< Offset of the buffer's first byte in the whole text.
-    position           cursor_   {0, 1, 1}; //!< Where lexing resumes, in the buffer (line and column in the text).
-    std::vector<frame> stack_;              //!< The mode stack.
-    std::vector<undo_entry> undo_;          //!< The transitions of the step under way (see \ref gate::undo).
-    bool               finished_ {false};   //!< \ref finish was called, or a lex_error ended the text.
+    const lexer     *       owner_;              //!< The lexer.
+    std::string             buffer_;             //!< The text from the first token not yet returned.
+    std::size_t             base_     {0};       //!< Offset of the buffer's first byte in the whole text.
+    position                cursor_   {0, 1, 1}; //!< Where lexing resumes, in the buffer (line and column in the text).
+    std::vector<frame>      stack_;              //!< The mode stack.
+    std::vector<undo_entry> undo_;               //!< The transitions of the step under way (see \ref gate::undo).
+    bool                    finished_ {false};   //!< \ref finish was called, or a lex_error ended the text.
   };
 
   inline token_stream lexer::stream() const&

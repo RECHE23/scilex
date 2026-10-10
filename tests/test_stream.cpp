@@ -544,10 +544,10 @@ TEST(stream_undoes_the_transitions_of_a_step_that_waits)
      .skip    = true,
      .in_mode = {"inner"},
      .action  = mode_action {.operation = mode_action::op::set, .target = "digits"}},
-    {.kind = 1, .pattern = real::regex {"[a-z]+"}, .in_mode = {"default", "inner"}},
-    {.kind = 2, .pattern = real::regex {"[0-9]+"}, .in_mode = {"digits"}}};
-  const scilex::lexer lex {rules};
-  const std::string   text {"ab((#)(cd#12)e)fg"};
+    {.kind    = 1, .pattern = real::regex {"[a-z]+"}, .in_mode = {"default", "inner"}},
+    {.kind    = 2, .pattern = real::regex {"[0-9]+"}, .in_mode = {"digits"}}};
+  const scilex::lexer                      lex  {rules};
+  const std::string                        text {"ab((#)(cd#12)e)fg"};
   std::vector<std::pair<int, std::string>> whole;
   for (const scilex::token& t : lex.tokenize(text)) {
     whole.emplace_back(t.kind, t.lexeme);
