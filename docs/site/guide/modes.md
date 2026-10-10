@@ -50,5 +50,5 @@ open.action  = scilex::mode_action {.operation = op::push, .target = "fstr"};
   an error, so an input made only of openers cannot grow the stack without end.
 
 Under {doc}`error recovery <errors>` the first becomes a zero-width error token at the end of input;
-the other two stay fatal. The examples `examples/python.hpp` (f-strings, five modes), `examples/xml.hpp`
+the other two stay fatal. The examples `examples/python.hpp` (f-strings and explicit line joining, six modes), `examples/xml.hpp`
 (content and tag) and `examples/yaml.hpp` (block and flow) are complete modal grammars.

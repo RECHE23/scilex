@@ -11,13 +11,15 @@
  *   - realistic code: a full keyword set, identifiers, operators (augmented and
  *     walrus/arrow/ellipsis), `@` decorators, and `(` `)` `[` `]` `{` `}` as
  *     brackets / dict / set;
- *   - implicit line continuation: code wrapped across lines inside `()` `[]` `{}`
- *     adds no INDENT/DEDENT (Layout Awareness Level A — `bracket` is insignificant);
+ *   - line continuation: code wrapped across lines inside `()` `[]` `{}`, or after a
+ *     `\` that ends a line, adds no INDENT/DEDENT (Layout Awareness Level A — `bracket`
+ *     and `joined` are insignificant);
  *   - numbers: decimal/float/exponent, `_` separators, `0x`/`0o`/`0b` bases, and
  *     the `j` imaginary suffix;
  *   - strings: single/double quoted with escapes, and triple-quoted `"""…"""` /
- *     `'''…'''` (one token, spanning newlines, via a dotall lazy regex);
- *   - f-strings `f"…"` / `f'…'` with `{…}` interpolations — nested f-strings and
+ *     `'''…'''` (one token, spanning newlines), each with an optional `r`, `b`, `u`,
+ *     `br` or `rb` prefix;
+ *   - f-strings `f"…"` / `f'…'` (and `rf` / `fr`) with `{…}` interpolations — nested f-strings and
  *     nested dict/set literals inside an interpolation, tracked by the stack;
  *   - INDENT / DEDENT / NEWLINE via the layout pass.
  *
@@ -25,13 +27,13 @@
  * — none of these is excluded in principle, they are just beyond this sample):
  *   - triple-quoted / multi-line f-strings;
  *   - f-string format specs: the `:fmt` tail of `{value:fmt}` lexes as code
- *     (colon + tokens), not as a literal spec;
- *   - raw / byte string prefixes (`r"…"`, `b"…"`, `rf"…"`).
+ *     (colon + tokens), not as a literal spec.
  *
  * The modes and the brace-depth insight
- *   Five modes: `default` (top-level code), `fstr_dq` / `fstr_sq` (an f-string
- *   body), `interp` (an f-string interpolation), and `bracket` (inside `()` `[]`
- *   `{}`). The decisive design point is that an interpolation and a bracket are both
+ *   Six modes: `default` (top-level code), `fstr_dq` / `fstr_sq` (an f-string
+ *   body), `interp` (an f-string interpolation), `bracket` (inside `()` `[]`
+ *   `{}`), and `joined` (the rest of a logical line after a `\` that ends a physical
+ *   one: entered and left by `set`, so a text may end in it). The decisive design point is that an interpolation and a bracket are both
  *   *code*: every code rule is active in `default`, `interp` and `bracket`, so they
  *   reuse the exact same rules with no duplication. `{` opens an interpolation from
  *   an f-string body (push `interp`) but a dict/set elsewhere (push `bracket`); a
@@ -156,15 +158,23 @@ namespace scilex::examples::python {
     using op_t = scilex::mode_action::op;
     // Code runs at the top level, inside an interpolation, and inside a bracket
     // (the layout-insignificant continuation mode — see make_lexer).
-    const std::vector<std::string> code     {"default", "interp", "bracket"};
-    const std::vector<std::string> bodies   {"fstr_dq", "fstr_sq"};           // a `{` here opens an interpolation
-    const std::vector<std::string> brackets {"default", "interp", "bracket"}; // ( [ { open a bracket here
+    const std::vector<std::string> code      {"default", "interp", "bracket", "joined"};
+    const std::vector<std::string> multiline {"default", "interp", "bracket"};           // a line break is blank here
+    const std::vector<std::string> bodies    {"fstr_dq", "fstr_sq"};                     // a `{` here opens an interpolation
+    const std::vector<std::string> brackets  {"default", "interp", "bracket", "joined"}; // ( [ { open a bracket here
 
     std::vector<scilex::rule> rules;
     // --- trivia (shared by code and interpolations) --------------------------
     // ascii-pinned so `\s` is a byte class (DFA-representable): Python whitespace is ASCII, so the token
     // stream is unchanged and the default (ASCII-identifier) grammar becomes DFA-eligible.
-    rules.push_back(rule(ws, R"re(\s+)re", code, /*skip=*/ true, std::nullopt, real::flags::ascii));
+    rules.push_back(rule(ws, R"re(\s+)re", multiline, /*skip=*/ true, std::nullopt, real::flags::ascii));
+    // --- explicit line joining: a `\` that ends a line continues the logical line. From the top level it
+    //     enters `joined` (layout-insignificant), whose line break returns to `default`; elsewhere the
+    //     line is already continued and the pair is only skipped. ----------------------------------------
+    rules.push_back(rule(ws, R"re(\\\r?\n)re", {"default"}, true, go(op_t::set, "joined")));
+    rules.push_back(rule(ws, R"re(\\\r?\n)re", {"interp", "bracket", "joined"}, true));
+    rules.push_back(rule(ws, R"re([ \t\f]+)re", {"joined"}, true));
+    rules.push_back(rule(ws, R"re(\r?\n)re", {"joined"}, true, go(op_t::set, "default")));
     rules.push_back(rule(comment, R"re(#[^\n]*)re", code, /*skip=*/ true));
     // --- triple-quoted strings (dotall + lazy: up to the closing triple) ------
     // Greedy DFA-safe form of the lazy `(?s)""".*?"""`: match up to the FIRST closing triple-quote via
@@ -172,7 +182,7 @@ namespace scilex::examples::python {
     // (verified by the oracle), and — with `\s`/`.` gone and ascii-pinned so `[^"]` is a byte class — it
     // carries no lazy op and no Unicode cp-class, so the mode stays DFA-eligible (the scilex lazy audit
     // no longer trips). `[^"]`/`[^']` already span newlines, so the old `(?s)` dotall is not needed.
-    rules.push_back(rule(tstr, R"re("""(?:[^"]|"[^"]|""[^"])*"""|'''(?:[^']|'[^']|''[^'])*''')re", code,
+    rules.push_back(rule(tstr, R"re((?:[rRuUbB]|[bB][rR]|[rR][bB])?(?:"""(?:[^"]|"[^"]|""[^"])*"""|'''(?:[^']|'[^']|''[^'])*'''))re", code,
                          false, std::nullopt, real::flags::ascii));
     // --- keywords (full set; before ident so an exact keyword wins the tie) ---
     for (const char* word : {"False", "None", "True", "and", "as", "assert", "async", "await",
@@ -194,10 +204,10 @@ namespace scilex::examples::python {
     rules.push_back(rule(number, R"re([0-9][0-9_]*(\.[0-9_]*)?([eE][+-]?[0-9_]+)?[jJ]?)re", code));
     rules.push_back(rule(number, R"re(\.[0-9_]+([eE][+-]?[0-9_]+)?[jJ]?)re", code));
     // --- plain strings (single / double quoted, with escapes) -----------------
-    rules.push_back(rule(str, R"re("(\\.|[^"\\\n])*"|'(\\.|[^'\\\n])*')re", code));
+    rules.push_back(rule(str, R"re((?:[rRuUbB]|[bB][rR]|[rR][bB])?(?:"(\\.|[^"\\\n])*"|'(\\.|[^'\\\n])*'))re", code));
     // --- f-string openers (code rules, so f-strings nest inside interpolations) -
-    rules.push_back(rule(fstr_open, R"re([fF]")re", code, false, go(op_t::push, "fstr_dq")));
-    rules.push_back(rule(fstr_open, R"re([fF]')re", code, false, go(op_t::push, "fstr_sq")));
+    rules.push_back(rule(fstr_open, R"re((?:[fF][rR]?|[rR][fF])")re", code, false, go(op_t::push, "fstr_dq")));
+    rules.push_back(rule(fstr_open, R"re((?:[fF][rR]?|[rR][fF])')re", code, false, go(op_t::push, "fstr_sq")));
     // --- operators (longest first: REAL alternation is leftmost) and @ --------
     rules.push_back(rule(op, R"re(//=|>>=|<<=|\*\*=|:=|==|!=|<=|>=|->|//|\*\*|<<|>>|\+=|-=|\*=|/=|%=|&=|\|=|\^=|@=|[-+*/%<>=&|^~])re", code));
     rules.push_back(rule(at, R"re(@)re", code));
@@ -243,6 +253,10 @@ namespace scilex::examples::python {
     return build_rules(true);
   }
 
+  //! \brief The modes that take a DFA: all but `joined`, which holds the code rules again for the rare
+  //!        continued line, and whose DFA would cost as much to build as `default`'s.
+  inline const std::vector<std::string> dfa_modes {"default", "interp", "bracket", "fstr_dq", "fstr_sq"};
+
   //! \brief make_lexer() under the error policy and column unit given, its modes and DFA unchanged.
   //! \param[in] errors  What to do at a byte no rule can lex (see \ref scilex::lexer).
   //! \param[in] columns The unit token columns are counted in (see \ref scilex::lexer).
@@ -250,9 +264,9 @@ namespace scilex::examples::python {
   inline scilex::lexer make_lexer_with(scilex::error_policy errors,
                                        scilex::column_unit  columns)
   {
-    // "bracket" is layout-insignificant (Layout Awareness Level A): code spanning
-    // several lines inside ( ) [ ] { } is implicit line continuation — no INDENT.
-    return scilex::lexer(make_rules(), {"bracket"}, {}, errors, columns);
+    // "bracket" and "joined" are layout-insignificant (Layout Awareness Level A): code spanning several
+    // lines inside ( ) [ ] { }, or after a `\` that ends a line, continues its line — no INDENT.
+    return scilex::lexer(make_rules(), {"bracket", "joined"}, dfa_modes, errors, columns, scilex::dfa_policy::requested);
   }
 
   //! \brief Builds the lexer from its rule list (see \ref make_rules).
@@ -268,7 +282,8 @@ namespace scilex::examples::python {
   inline scilex::lexer make_lexer_unicode_with(scilex::error_policy errors,
                                                scilex::column_unit  columns)
   {
-    return scilex::lexer(make_rules_unicode(), {"bracket"}, {}, errors, columns);
+    return scilex::lexer(make_rules_unicode(), {"bracket", "joined"}, dfa_modes, errors, columns,
+                         scilex::dfa_policy::requested);
   }
 
   //! \brief The Unicode-identifier variant lexer — same grammar, Unicode identifiers.
@@ -374,6 +389,42 @@ def stats(values, base=0x1F):
                        lex.mode_significant())};
       for (const scilex::token& tok : laid) {
         if (tok.kind == scilex::indent || tok.kind == scilex::dedent) {
+          return false;
+        }
+      }
+    }
+    // (6c) Explicit line joining: a `\` that ends a line continues the logical line, which adds no
+    //      INDENT and one NEWLINE, even when the text ends inside the joined line.
+    struct joined_case
+    {
+      std::string_view text;
+      int              indents;
+      int              newlines;
+    };
+    for (const joined_case& joined : {joined_case {"if x:\n    y = 1 + \\\n  2\n    z\n", 1, 3},
+                                      joined_case {"y = 1 + \\\n        2", 0, 1}}) {
+      const std::vector<scilex::token> laid {
+        scilex::layout(lex.tokenize(joined.text, scilex::eof_policy::append), lex.mode_significant())};
+      int indents                           {0};
+      int newlines                          {0};
+      for (const scilex::token& tok : laid) {
+        indents  += static_cast<int>(tok.kind == scilex::indent);
+        newlines += static_cast<int>(tok.kind == scilex::newline);
+      }
+      if (indents != joined.indents || newlines != joined.newlines) {
+        return false;
+      }
+    }
+    // (6d) String prefixes: a raw, byte, raw-byte or unicode string is one token, and rf"…" an f-string.
+    {
+      const std::vector<scilex::token> toks {lex.tokenize(R"py(r"\d" b'x' Rb"y" u'z' rb'''q''' rf"{a}")py")};
+      const std::vector<int>           want {str, str, str, str, tstr, fstr_open, interp_open, ident, interp_close,
+                                             fstr_close};
+      if (toks.size() != want.size()) {
+        return false;
+      }
+      for (std::size_t i {0}; i < want.size(); ++i) {
+        if (toks[i].kind != want[i]) {
           return false;
         }
       }

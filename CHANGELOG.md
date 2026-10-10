@@ -26,6 +26,12 @@ fuzz oracle.
   advances to the next multiple of 8, and ambiguous tabs and spaces are refused. It counted a tab as one
   column, so `\t` and 8 spaces opened a block.
 
+- **The `python` example grammar reads string prefixes and explicit line joining.** `r"…"`, `b'…'`, `u"…"`,
+  `br`/`rb` (triple-quoted too) are one string token, `rf"…"`/`fr"…"` open an f-string, and a `\` that ends
+  a line continues the logical line (a sixth mode, `joined`, layout-insignificant like `bracket`), where it
+  was a lexical error. `joined` stays off the DFA, as the line it serves is rare: building the lexer takes
+  16.3 ms instead of 13.1 (arm64, Apple clang 16, `-O2`, best of 9), lexing the sample the same.
+
 ### Fixed
 - **A rule's kind must be an int that SciLex does not reserve.** A kind from `scilex::end_of_input` to
   `scilex::error` is refused when the lexer is built (`std::invalid_argument`; Python: `scilex.error`): its
