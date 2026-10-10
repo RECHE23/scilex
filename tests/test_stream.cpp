@@ -522,3 +522,48 @@ TEST(stream_matches_tokenize_with_and_without_a_dfa)
     }
   }
 }
+
+// A step that pushes, sets and pops through skip rules, then waits on an open munch, leaves the mode stack as it
+// found it: every cut gives the kinds and lexemes tokenize gives.
+TEST(stream_undoes_the_transitions_of_a_step_that_waits)
+{
+  using scilex::mode_action;
+  const std::vector<scilex::rule> rules {
+    {.kind    = 0,
+     .pattern = real::regex {"\\("},
+     .skip    = true,
+     .in_mode = {"default", "inner"},
+     .action  = mode_action {.operation = mode_action::op::push, .target = "inner"}},
+    {.kind    = 0,
+     .pattern = real::regex {"\\)"},
+     .skip    = true,
+     .in_mode = {"inner", "digits"},
+     .action  = mode_action {.operation = mode_action::op::pop}},
+    {.kind    = 0,
+     .pattern = real::regex {"#"},
+     .skip    = true,
+     .in_mode = {"inner"},
+     .action  = mode_action {.operation = mode_action::op::set, .target = "digits"}},
+    {.kind = 1, .pattern = real::regex {"[a-z]+"}, .in_mode = {"default", "inner"}},
+    {.kind = 2, .pattern = real::regex {"[0-9]+"}, .in_mode = {"digits"}}};
+  const scilex::lexer lex {rules};
+  const std::string   text {"ab((#)(cd#12)e)fg"};
+  std::vector<std::pair<int, std::string>> whole;
+  for (const scilex::token& t : lex.tokenize(text)) {
+    whole.emplace_back(t.kind, t.lexeme);
+  }
+  EXPECT_EQ(whole.size(), std::size_t {5}); // ab cd 12 e fg
+  for (std::size_t cut {0}; cut <= text.size(); ++cut) {
+    scilex::token_stream                     in {lex.stream()};
+    std::vector<std::pair<int, std::string>> got;
+    for (const std::string_view piece : {std::string_view {text}.substr(0, cut), std::string_view {text}.substr(cut)}) {
+      for (const scilex::token& t : in.feed(piece)) {
+        got.emplace_back(t.kind, t.lexeme);
+      }
+    }
+    for (const scilex::token& t : in.finish()) {
+      got.emplace_back(t.kind, t.lexeme);
+    }
+    EXPECT(got == whole);
+  }
+}

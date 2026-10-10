@@ -30,6 +30,7 @@
 #include <numeric>
 #include <memory>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -589,13 +590,17 @@ namespace scilex {
       {
         return true;
       }
+
+      //! \brief Nothing: a scan over the whole text never takes a step back.
+      static constexpr void before_transition(const std::vector<frame>& /*stack*/) noexcept {}
     };
 
     /*!
      * \brief \ref scan_next with a gate asked before each munch: `gate.ready(mode, offset)` is false where
      *        text not yet seen could change the munch there, and `gate.at_end()` whether the end of
-     *        \p source is the end of the input. A scan over a whole text passes \ref whole_text; a stream
-     *        (\ref token_stream) passes one that stops at the first munch still open.
+     *        \p source is the end of the input; `gate.before_transition(stack)` sees the stack before each
+     *        mode transition. A scan over a whole text passes \ref whole_text; a stream (\ref token_stream)
+     *        passes one that stops at the first munch still open, and undoes the step's transitions.
      * \tparam Gate The gate's type.
      * \param[in]     source The text available.
      * \param[in,out] cursor Current position; on \ref scan_status::pending it may have moved over skipped
@@ -676,6 +681,7 @@ namespace scilex {
         // Most tokens carry no action: testing it here keeps the out-of-line transition, and the
         // frame it sets up for its throws, off their path.
         if (rules_[best_idx].action) {
+          gate.before_transition(stack);
           apply_transition(rules_[best_idx], start, stack); // advances, then transitions (#2 on a bad pop)
         }
 
@@ -1470,11 +1476,20 @@ namespace scilex {
 
   private:
 
+    //! \brief The stack as a transition found it: its depth and its top frame. A transition changes the
+    //!        top frame only (push and pop at the top, set in place), so these two undo it.
+    struct undo_entry
+    {
+      std::size_t depth; //!< The stack's size before the transition.
+      frame       top;   //!< Its top frame before the transition.
+    };
+
     //! \brief The gate a stream scans with: a munch goes ahead only where no rule of the mode can extend.
     struct gate
     {
-      const token_stream* stream; //!< The stream (its lexer and buffer).
-      bool                final;  //!< The end of the buffer is the end of the text.
+      const token_stream*      stream; //!< The stream (its lexer and buffer).
+      bool                     final;  //!< The end of the buffer is the end of the text.
+      std::vector<undo_entry>* undo;   //!< The step's transitions, latest last.
 
       //! \brief Whether the munch at \p offset in mode \p mode is final.
       //! \param[in] mode   The active mode.
@@ -1511,6 +1526,13 @@ namespace scilex {
       {
         return final;
       }
+
+      //! \brief Records what a transition is about to change, for \ref collect to undo if the step waits.
+      //! \param[in] stack The mode stack before the transition.
+      void before_transition(const std::vector<frame>& stack) const
+      {
+        undo->push_back(undo_entry {.depth = stack.size(), .top = stack.back()});
+      }
     };
 
     //! \brief Lexes the buffer from the cursor as far as the gate allows.
@@ -1520,12 +1542,12 @@ namespace scilex {
     {
       std::vector<token>  out;
       lexer::munch_memos  memos {owner_->memos_for(buffer_)};
-      const gate          g {.stream = this, .final = final};
+      const gate          g {.stream = this, .final = final, .undo = &undo_};
       token               next {};
       while (true) {
-        const position           saved_cursor {cursor_};
-        const std::vector<frame> saved_stack  {stack_};
-        lexer::scan_status       status       {lexer::scan_status::end};
+        const position     saved_cursor {cursor_};
+        lexer::scan_status status       {lexer::scan_status::end};
+        undo_.clear();
         try {
           status = owner_->scan_step(buffer_, cursor_, stack_, next, memos, g);
         }
@@ -1534,8 +1556,11 @@ namespace scilex {
           throw lex_error(e.what(), in_text(e.where()), std::move(out)); // the tokens before it, too
         }
         if (status == lexer::scan_status::pending) {
-          cursor_ = saved_cursor;                                        // undo any skipped matches the step went over
-          stack_  = saved_stack;
+          cursor_ = saved_cursor; // undo any skipped matches the step went over, and their transitions
+          for (const undo_entry& e : std::views::reverse(undo_)) {
+            stack_.resize(e.depth - 1);
+            stack_.push_back(e.top);
+          }
           return out;
         }
         if (status == lexer::scan_status::end) {
@@ -1574,6 +1599,7 @@ namespace scilex {
     std::size_t        base_     {0};       //!< Offset of the buffer's first byte in the whole text.
     position           cursor_   {0, 1, 1}; //!< Where lexing resumes, in the buffer (line and column in the text).
     std::vector<frame> stack_;              //!< The mode stack.
+    std::vector<undo_entry> undo_;          //!< The transitions of the step under way (see \ref gate::undo).
     bool               finished_ {false};   //!< \ref finish was called, or a lex_error ended the text.
   };
 
