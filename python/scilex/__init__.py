@@ -132,19 +132,24 @@ class Grammar:
 
     Build one with :func:`parse_grammar` or :func:`load_grammar`; the format is the CLI's (one rule
     per line, ``name<TAB>pattern[<TAB>options]``, options ``skip``, ``in=m1,m2`` and one of
-    ``push=m``, ``set=m``, ``pop``).
+    ``push=m``, ``set=m``, ``pop``; a line ``%insignificant m1,m2`` names the modes whose tokens carry
+    no layout structure, kept in :attr:`insignificant_modes`).
     """
 
-    def __init__(self, rules, names):
+    def __init__(self, rules, names, insignificant_modes=()):
         self.rules = rules
         self.names = names
+        self.insignificant_modes = list(insignificant_modes)
 
     def name(self, kind):
         """The name of ``kind``, or ``"?"`` for a kind no rule of this grammar has (a reserved kind)."""
         return self.names[kind] if 0 <= kind < len(self.names) else "?"
 
-    def lexer(self, insignificant_modes=(), dfa_modes=(), errors="raise", columns="bytes", dfa="auto"):
-        """A :class:`Lexer` over these rules, with :class:`Lexer`'s options."""
+    def lexer(self, insignificant_modes=None, dfa_modes=(), errors="raise", columns="bytes", dfa="auto"):
+        """A :class:`Lexer` over these rules, with :class:`Lexer`'s options; `insignificant_modes` defaults
+        to the grammar's own (its ``%insignificant`` lines)."""
+        if insignificant_modes is None:
+            insignificant_modes = self.insignificant_modes
         return Lexer(self.rules, insignificant_modes, dfa_modes, errors, columns, dfa)
 
     def __repr__(self):
@@ -164,8 +169,8 @@ def parse_grammar(text, origin="<string>"):
     Raises:
         GrammarError: On a malformed line, an invalid pattern (at its column), or no rules.
     """
-    rules, names = _parse_grammar(text, origin)
-    return Grammar(rules, names)
+    rules, names, insignificant_modes = _parse_grammar(text, origin)
+    return Grammar(rules, names, insignificant_modes)
 
 
 def load_grammar(path):

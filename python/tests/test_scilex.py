@@ -897,6 +897,17 @@ class GrammarTests(unittest.TestCase):
         self.assertEqual([(g.name(t.kind), t.lexeme) for t in tokens],
                          [("ID", "ab"), ("STR", '"'), ("TXT", "hi there"), ("END", '"'), ("ID", "cd")])
 
+    def test_insignificant_directive_reaches_the_lexer(self):
+        g = scilex.parse_grammar(self.TEXT.replace("WS", "%insignificant str\nWS", 1))
+        self.assertEqual(g.insignificant_modes, ["str"])
+        self.assertEqual(g.names, ["WS", "STR", "TXT", "END", "ID"])  # the directive is not a rule
+        self.assertEqual(g.lexer().insignificant_modes, ["str"])
+        self.assertEqual(g.lexer(insignificant_modes=()).insignificant_modes, [])  # an explicit choice wins
+        self.assertEqual(scilex.parse_grammar(self.TEXT).insignificant_modes, [])
+        with self.assertRaises(scilex.GrammarError) as caught:
+            scilex.parse_grammar("A\ta\n%insignificant nope\n")
+        self.assertEqual((caught.exception.line, caught.exception.column), (2, 16))
+
     def test_lexer_options_pass_through(self):
         lexer = scilex.parse_grammar("A\t[a-z]+\n").lexer(errors="token", columns="codepoints")
         self.assertEqual(lexer.column_unit, "codepoints")

@@ -41,11 +41,12 @@ class GrammarError(error):
 class Grammar:
     rules: list[_NormRule]
     names: list[str]
-    def __init__(self, rules: list[_NormRule], names: list[str]) -> None: ...
+    insignificant_modes: list[str]
+    def __init__(self, rules: list[_NormRule], names: list[str], insignificant_modes: Iterable[str] = ...) -> None: ...
     def name(self, kind: int) -> str: ...
     def lexer(
         self,
-        insignificant_modes: Iterable[str] = ...,
+        insignificant_modes: Iterable[str] | None = ...,
         dfa_modes: Iterable[str] = ...,
         errors: Literal["raise", "token"] = ...,
         columns: Literal["bytes", "codepoints", "utf16"] = ...,

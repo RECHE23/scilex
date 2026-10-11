@@ -689,7 +689,8 @@ std::string column_unit(scilex::lexer* lexer)
     return "bytes";
 }
 
-// _scilex.parse_grammar(text, origin) -> (rules, names): the .lex grammar parsed by scilex/grammar.hpp,
+// _scilex.parse_grammar(text, origin) -> (rules, names, insignificant_modes): the .lex grammar parsed by
+// scilex/grammar.hpp,
 // each rule as the (kind, pattern, skip, in_mode, action) tuple compile() takes, so the Python and CLI
 // grammars go through one parser. A malformed grammar raises scilex.GrammarError carrying .line,
 // .column and .cause.
@@ -743,14 +744,24 @@ PyObject* scilex_parse_grammar(PyObject* /*self*/, PyObject* args)
             ok = name != nullptr && PyList_Append(names, name) == 0;
             Py_XDECREF(name);
         }
+        PyObject* quiet = ok ? PyList_New(0) : nullptr;
+        ok = quiet != nullptr;
+        for (std::size_t m = 0; ok && m < parsed.insignificant_modes.size(); ++m) {
+            const std::string& mode {parsed.insignificant_modes[m]};
+            PyObject*          name = PyUnicode_FromStringAndSize(mode.data(), static_cast<Py_ssize_t>(mode.size()));
+            ok = name != nullptr && PyList_Append(quiet, name) == 0;
+            Py_XDECREF(name);
+        }
         if (!ok) {
             Py_XDECREF(rules);
             Py_XDECREF(names);
+            Py_XDECREF(quiet);
             return nullptr;
         }
-        PyObject* result = PyTuple_Pack(2, rules, names);
+        PyObject* result = PyTuple_Pack(3, rules, names, quiet);
         Py_DECREF(rules);
         Py_DECREF(names);
+        Py_DECREF(quiet);
         return result;
     }
     catch (const scilex::grammar_error& error) {
@@ -1321,7 +1332,7 @@ SCIFORGE_MODULE(_scilex, "scilex.error", m)
           "The REAL version this compiled extension was built against (real/version.hpp), so a stale\n"
           "build or install can be detected by comparing it to the pinned real-regex version.");
     m.raw("parse_grammar", scilex_parse_grammar, METH_VARARGS,
-          "parse_grammar(text, origin='<string>') -> (rules, names)\n"
+          "parse_grammar(text, origin='<string>') -> (rules, names, insignificant_modes)\n"
           "Parse a .lex grammar (scilex/grammar.hpp) into compile()-ready rule tuples and their names.\n\n"
           "Raises:\n"
           "    GrammarError: On a malformed line or an invalid pattern (.line, .column, .cause).");

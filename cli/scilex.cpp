@@ -20,7 +20,8 @@
  *
  *   name<TAB>regex[<TAB>options]       (`#` comments and blank lines ignored)
  *
- * where the options are `skip`, `in=m1,m2`, and one of `push=m`, `set=m`, `pop`.
+ * where the options are `skip`, `in=m1,m2`, and one of `push=m`, `set=m`, `pop`; a line
+ * `%insignificant m1,m2` names the modes whose tokens carry no layout (for `--layout`).
  * The lexer itself takes plain C++ rule lists; `scilex.hpp` does not include the
  * format. Built-in grammars reuse the `examples/<lang>.hpp` registry, so the
  * showcase languages are defined exactly once.
@@ -269,6 +270,7 @@ namespace {
         << "  --columns=bytes|codepoints|utf16  unit for token columns (default: bytes)\n"
         << "grammar file: one rule per line   name<TAB>regex[<TAB>options]   ('#' comments, blank lines ok)\n"
         << "  options (space-separated):      skip, in=m1,m2, and one of push=m, set=m, pop\n"
+        << "  directive line:                 %insignificant m1,m2   (modes without layout, for --layout)\n"
         << "output: one token per line        KIND<TAB>lexeme<TAB>line:col\n"
         << "  the lexeme escaped:             \\\\ \\t \\n \\r, other control bytes as \\xHH\n";
   }
@@ -316,7 +318,7 @@ namespace {
       throw;
     }
     const std::vector<std::string> names  {std::move(parsed.names)};
-    const scilex::lexer            lex    {std::move(parsed.rules), {}, {}, errors, columns};
+    const scilex::lexer            lex    {std::move(parsed.rules), std::move(parsed.insignificant_modes), {}, errors, columns};
     const std::string              source {read_input(args.size() >= 2 ? args[1] : std::string_view {"-"})};
     dump(lex, source, [&names](int kind) {
            return (kind >= 0 && static_cast<std::size_t>(kind) < names.size())

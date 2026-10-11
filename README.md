@@ -273,7 +273,8 @@ $ scilex --example python --layout    # … or its bundled sample, with INDENT/D
 **Your own grammar** — the universal mode: bring a `.lex` file and lex anything.
 A grammar is one rule per line — `name`, a tab, `regex`, then an optional tab and
 space-separated options: `skip`, `in=m1,m2` (the modes the rule is active in), and
-one of `push=m`, `set=m`, `pop` (`#` comments and blank lines are ignored):
+one of `push=m`, `set=m`, `pop` (`#` comments and blank lines are ignored; a line
+`%insignificant m1,m2` names the modes whose tokens carry no layout):
 
 ```console
 $ cat my.lex

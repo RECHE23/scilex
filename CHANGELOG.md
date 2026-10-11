@@ -8,6 +8,11 @@ fuzz oracle.
 ## Unreleased
 
 ### Added
+- **`%insignificant m1,m2` in a `.lex` grammar** names the modes whose tokens carry no layout structure, which
+  the lexer built from it takes as its `insignificant_modes` (the CLI's `--layout` too). C++:
+  `grammar::insignificant_modes`; Python: `Grammar.insignificant_modes`, which `Grammar.lexer()` uses unless
+  given its own. Refused at its line and column: an unknown directive, an empty or malformed mode list, a mode
+  no rule is active in.
 - **Example grammars for three scientific languages**, built in (`scilex --example fortran|julia|matlab`),
   checked by the oracle fuzzer and the stream tests like the nine others, and each on the DFA in every mode:
   - **MATLAB / Octave**: an apostrophe is the transpose after an operand and opens a character array
@@ -19,6 +24,10 @@ fuzz oracle.
   - **Julia**: `#= … =#` comments nest; `$name` and `$(expr)` interpolate, the expression holding
     parentheses and strings of its own (a mode per parenthesis tells the closing one apart); Unicode
     identifiers and operators; the adjoint `'` beside character literals, the range `:` beside symbols.
+
+### Changed
+- **A `.lex` line whose first non-blank character is `%` is a directive**, so a rule can no longer be named
+  with a leading `%` (an unknown directive is refused, naming the line).
 
 ## 2026.10.4 — 2026-10-11
 

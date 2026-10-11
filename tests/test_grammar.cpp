@@ -163,4 +163,46 @@ namespace {
     }
     EXPECT(refused);
   }
+
+  // %insignificant names the modes whose tokens carry no layout structure; it is not a rule, so the kinds
+  // after it keep their positions among the rules, and the lexer built from it marks those modes.
+  TEST(grammar_insignificant_directive_names_layout_free_modes)
+  {
+    const scilex::grammar g {scilex::parse_grammar("%insignificant br\nOPEN\t\\(\tpush=br\nCLOSE\t\\)\tin=br pop\n"
+                                                   "  %insignificant\tdefault,br\nX\t[a-z]+\tin=default,br\n")};
+    EXPECT_EQ(g.rules.size(), 3U);
+    EXPECT_EQ(g.names[2], "X");
+    EXPECT_EQ(g.rules[2].kind, 2);
+    EXPECT_EQ(g.insignificant_modes.size(), 3U);
+    EXPECT_EQ(g.insignificant_modes[0], "br");
+    EXPECT_EQ(g.insignificant_modes[1], "default");
+    const scilex::lexer              lex    {g.rules, g.insignificant_modes};
+    const std::vector<scilex::token> tokens {lex.tokenize("f(x)")};
+    EXPECT(!lex.mode_significant().empty());
+    for (const scilex::token& token : tokens) {
+      if (token.kind == 2) {
+        EXPECT(!lex.mode_significant()[token.mode_id]);
+      }
+    }
+    EXPECT(scilex::parse_grammar("X\tx\n").insignificant_modes.empty());
+  }
+
+  TEST(grammar_directive_refusals_name_their_line_and_column)
+  {
+    const scilex::grammar_error unknown {refusal("A\ta\n%insignifcant x\n")};
+    EXPECT_EQ(unknown.line(), 2U);
+    EXPECT_EQ(unknown.column(), 1U);
+    EXPECT_EQ(unknown.cause(), "unknown directive '%insignifcant' (expected %insignificant)");
+    const scilex::grammar_error empty {refusal("A\ta\n%insignificant   \n")};
+    EXPECT_EQ(empty.column(), 15U);
+    EXPECT_EQ(empty.cause(), "%insignificant names at least one mode");
+    const scilex::grammar_error malformed {refusal("A\ta\tin=a,b\n%insignificant a,,b\n")};
+    EXPECT_EQ(malformed.column(), 18U);
+    EXPECT_EQ(malformed.cause(), "malformed mode list 'a,,b' (write m1,m2)");
+    EXPECT_EQ(refusal("A\ta\n%insignificant a b\n").cause(), "malformed mode list 'a b' (write m1,m2)");
+    const scilex::grammar_error inactive {refusal("A\ta\tin=a\n%insignificant a,nope\n")};
+    EXPECT_EQ(inactive.line(), 2U);
+    EXPECT_EQ(inactive.column(), 18U);
+    EXPECT_EQ(inactive.cause(), "no rule is active in mode 'nope' (give one in=nope)");
+  }
 } // namespace

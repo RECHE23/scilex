@@ -16,10 +16,16 @@
  * - `push=m`, `set=m`, `pop` — the mode transition fired when the rule wins (at most one); a mode
  *   that `push=` or `set=` enters must have a rule active in it.
  *
+ * A line whose first non-blank character is `%` is a directive, not a rule; the one directive is
+ *
+ * - `%insignificant m1,m2` — the modes whose tokens carry no layout structure (the lexer's
+ *   `insignificant_modes`); each must have a rule active in it, and the directive may repeat.
+ *
  * A rule's kind is its 0-based position among the rules; \ref scilex::grammar::names maps it back.
  *
  * \code
  * WS       \s+        skip
+ * %insignificant str
  * STRING   "          push=str
  * TEXT     [^"\\]+    in=str
  * ESCAPE   \\.        in=str
@@ -140,8 +146,9 @@ namespace scilex {
    */
   struct grammar
   {
-    std::vector<rule>        rules; //!< The rules, kind i at index i.
-    std::vector<std::string> names; //!< The name of kind i.
+    std::vector<rule>        rules;               //!< The rules, kind i at index i.
+    std::vector<std::string> names;               //!< The name of kind i.
+    std::vector<std::string> insignificant_modes; //!< The modes `%insignificant` names, in order.
 
     /*!
      * \brief The name of \p kind, or `"?"` for a kind no rule of this grammar has (a reserved kind such
@@ -353,6 +360,78 @@ namespace scilex {
         }
       }
     }
+
+    //! \brief Where a `%insignificant` directive names a mode.
+    struct directive_site
+    {
+      std::string mode;   //!< The mode.
+      std::size_t line;   //!< The 1-based line.
+      std::size_t column; //!< The 1-based column of the mode list.
+    };
+
+    /*!
+     * \brief Parses the directive \p line (its `%` at 0-based \p first): `%insignificant m1,m2`.
+     * \param[in]     line   The line, trailing blanks already removed.
+     * \param[in]     first  Where the `%` is.
+     * \param[in]     origin For errors: where the grammar came from.
+     * \param[in]     number For errors: the 1-based line.
+     * \param[in,out] sites  Each named mode is appended, with where it is written.
+     * \throws grammar_error On another directive, or an empty or malformed mode list.
+     */
+    inline void parse_directive(std::string_view             line,
+                                std::size_t                  first,
+                                const std::string&           origin,
+                                std::size_t                  number,
+                                std::vector<directive_site>& sites)
+    {
+      constexpr std::string_view insignificant {"%insignificant"};
+      const std::size_t          end           {std::min(line.find_first_of(" \t", first), line.size())};
+      const std::string_view     word          {line.substr(first, end - first)};
+      if (word != insignificant) {
+        throw grammar_error(origin, number, first + 1, quoting("unknown directive ", word, " (expected %insignificant)"));
+      }
+      const std::size_t list {line.find_first_not_of(" \t", end)};
+      if (list == std::string_view::npos) {
+        throw grammar_error(origin, number, line.size() + 1, "%insignificant names at least one mode");
+      }
+      std::string_view modes  {line.substr(list)};
+      std::size_t      column {list + 1};
+      while (true) {
+        const std::size_t      comma {modes.find(',')};
+        const std::string_view name  {modes.substr(0, comma)};
+        if (name.empty() || name.find_first_of(" \t") != std::string_view::npos) {
+          throw grammar_error(origin, number, column, quoting("malformed mode list ", line.substr(list), " (write m1,m2)"));
+        }
+        sites.push_back({.mode = std::string(name), .line = number, .column = column});
+        if (comma == std::string_view::npos) {
+          return;
+        }
+        column += comma + 1;
+        modes.remove_prefix(comma + 1);
+      }
+    }
+
+    /*!
+     * \brief Records the modes of \p sites in \p parsed, refusing one no rule is active in, at its column.
+     * \throws grammar_error For the first such mode.
+     */
+    inline void apply_directives(grammar&                           parsed,
+                                 const std::vector<directive_site>& sites,
+                                 const std::string&                 origin)
+    {
+      for (const directive_site& site : sites) {
+        const bool active {std::ranges::any_of(parsed.rules, [&](const rule& r) {
+                                                 return r.in_mode.empty()
+                                                        ? site.mode == "default"
+                                                        : std::ranges::find(r.in_mode, site.mode) != r.in_mode.end();
+                                               })};
+        if (!active) {
+          throw grammar_error(origin, site.line, site.column,
+                              quoting("no rule is active in mode ", site.mode, " (give one in=") + site.mode + ")");
+        }
+        parsed.insignificant_modes.push_back(site.mode);
+      }
+    }
   } // namespace detail
 
   /*!
@@ -363,8 +442,8 @@ namespace scilex {
    * \param[in] text   The grammar.
    * \param[in] origin What errors name as the grammar's origin (a path, or a label).
    * \return The rules and their names.
-   * \throws grammar_error On a malformed line, an invalid pattern (at its column in the line), or a
-   *         grammar with no rules.
+   * \throws grammar_error On a malformed line or directive, an invalid pattern (at its column in the
+   *         line), a mode no rule is active in, or a grammar with no rules.
    */
   [[nodiscard]] inline grammar parse_grammar(std::string_view   text,
                                              const std::string& origin = "<string>")
@@ -372,6 +451,7 @@ namespace scilex {
     constexpr std::string_view           byte_order_mark {"\xEF\xBB\xBF"};
     grammar                              parsed;
     std::vector<detail::transition_site> transitions;
+    std::vector<detail::directive_site>  directives;
     std::size_t                          line_no {0};
     std::size_t                          at      {text.starts_with(byte_order_mark) ? byte_order_mark.size() : 0};
     while (at <= text.size()) {
@@ -388,6 +468,10 @@ namespace scilex {
       }
       const std::string_view untrimmed {line};
       line = line.substr(0, line.find_last_not_of(" \t") + 1);
+      if (line[first] == '%') {
+        detail::parse_directive(line, first, origin, line_no, directives);
+        continue;
+      }
 
       const detail::grammar_fields fields {detail::split_grammar_line(line, first)};
       if (fields.text.size() < 2 && untrimmed.find('\t', first) != std::string_view::npos) {
@@ -420,6 +504,7 @@ namespace scilex {
       throw grammar_error(origin, 0, 0, "no rules (the grammar is empty)");
     }
     detail::check_transition_targets(parsed, transitions, origin);
+    detail::apply_directives(parsed, directives, origin);
     return parsed;
   }
 

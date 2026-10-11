@@ -29,6 +29,25 @@ IDENT   [A-Za-z_]\w*
 
 (The separators are tabs; the columns above are aligned for reading.)
 
+## Directives
+
+A line whose first non-blank character is `%` is a directive, not a rule, so it takes no kind and
+leaves the rules' positions alone. The one directive is `%insignificant m1,m2`: the modes whose tokens
+carry no layout structure, which the lexer built from the grammar takes as its `insignificant_modes`
+(a bracketed region that a line break inside does not end, say). Each mode it names must have a rule
+active in it, and it may repeat. A rule therefore cannot be named with a leading `%`.
+
+```text
+%insignificant bracket
+OPEN    \(          push=bracket
+CLOSE   \)          in=bracket pop
+NEWLINE \n          in=default,bracket
+NAME    [a-z]+      in=default,bracket
+```
+
+`grammar::insignificant_modes` (Python: `Grammar.insignificant_modes`) holds them; `Grammar.lexer()` uses
+them unless it is given its own.
+
 ## Loading a grammar
 
 The format has one parser, in the optional header `scilex/grammar.hpp`, which `scilex.hpp` does not
@@ -74,4 +93,5 @@ my.lex:2:6: invalid regex: missing ), unterminated subpattern
 ```
 
 An unknown option, an empty mode name, a second transition, a `push=` or `set=` into a mode no rule is
-active in, a line without a tab and a grammar with no rules are refused the same way.
+active in, an unknown directive, an `%insignificant` with no mode or a mode no rule is active in, a line
+without a tab and a grammar with no rules are refused the same way.
