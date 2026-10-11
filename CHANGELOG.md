@@ -23,7 +23,8 @@ fuzz oracle.
   given its own. Refused at its line and column: an unknown directive, an empty or malformed mode list, a mode
   no rule is active in.
 - **Example grammars for three scientific languages**, built in (`scilex --example fortran|julia|matlab`),
-  checked by the oracle fuzzer and the stream tests like the nine others, and each on the DFA in every mode:
+  checked by the oracle fuzzer and the stream tests like the nine others, each with a DFA in every mode (a rule
+  that needs a lookaround or a Unicode class stays on Pike beside it):
   - **MATLAB / Octave**: an apostrophe is the transpose after an operand and opens a character array
     anywhere else (a one-byte lookbehind, as MATLAB's lexer decides it); `%{ … %}` block comments nest;
     `...` continues a line; `2.^x` is `2 .^ x`.

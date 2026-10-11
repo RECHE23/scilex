@@ -20,6 +20,8 @@
 #ifndef SCILEX_EXAMPLE_FORTRAN_HPP
 #define SCILEX_EXAMPLE_FORTRAN_HPP
 
+#include <algorithm>
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -73,6 +75,16 @@ namespace scilex::examples::fortran {
     }
   }
 
+  //! \brief The keywords. An alternation takes its first alternative that matches, so a keyword precedes
+  //!        every shorter one it begins with (`inout` before `in`), or the longer one would lose to IDENT.
+  constexpr const char* keywords {
+    "program|module|submodule|contains|subroutine|function|use|only|implicit|none|integer|real|double"
+    "|precision|complex|logical|character|type|class|intent|inout|out|parameter|allocatable|dimension"
+    "|pointer|target|optional|save|if|then|elseif|else|endif|enddo|end|do|while|select|case|default|where"
+    "|forall|call|return|stop|exit|cycle|allocate|deallocate|print|write|read|open|close|interface"
+    "|procedure|pure|elemental|recursive|result|associate|block|concurrent|public|private|abstract|extends"
+    "|go|to|in"};
+
   //! \brief Builds the Fortran rule list. KEYWORD precedes IDENT (an equal-length match is a keyword, a
   //!        longer name an identifier) and LOGICAL precedes DOT_OP (`.true.` is a constant, not an operator).
   inline std::vector<scilex::rule> make_rules()
@@ -86,13 +98,7 @@ namespace scilex::examples::fortran {
     rules.push_back(r(comment, R"re(![^\n]*)re", true));
     rules.push_back(r(preprocessor, R"re((?m)^#[^\n]*)re"));
     rules.push_back(r(newline, R"re(\r?\n)re"));
-    rules.push_back(r(keyword,
-                      "(?i)program|end|module|submodule|contains|subroutine|function|use|only|implicit|none|integer"
-                      "|real|double|precision|complex|logical|character|type|class|intent|in|out|inout|parameter"
-                      "|allocatable|dimension|pointer|target|optional|save|if|then|else|elseif|endif|do|enddo|while"
-                      "|select|case|default|where|forall|call|return|stop|exit|cycle|allocate|deallocate|print"
-                      "|write|read|open|close|interface|procedure|pure|elemental|recursive|result|associate|block"
-                      "|concurrent|public|private|abstract|extends|go|to"));
+    rules.push_back(r(keyword, (std::string {"(?i)"} + keywords).c_str()));
     rules.push_back(r(ident, R"re([A-Za-z][A-Za-z0-9_]*)re"));
     // The decimal point stops before a dotted word: `1.eq.2` is a number, an operator and a number.
     rules.push_back(r(number,
@@ -155,7 +161,7 @@ end module dynamics
 
   //! \brief Self-check (so `make example` gates): `1.eq.2` is a number, an operator and a number while
   //!        `1.e5` is one number, dotted operators and keywords match in any case, and the continued
-  //!        statement holds no NEWLINE. \return `true` on success.
+  //!        statement holds no NEWLINE, and every keyword alone is one KEYWORD. \return `true` on success.
   inline bool self_check()
   {
     const scilex::lexer              lex       {make_lexer()};
@@ -174,7 +180,11 @@ end module dynamics
       // `* &` continues the statement: the `sum` after it follows the `*` with no NEWLINE between.
       joined = joined || (tok.lexeme == "*" && toks[i + 1].lexeme == "sum");
     }
-    return eq_split && exponent && mixed_ops && mixed_kw && joined;
+    std::string words                      {keywords};
+    std::replace(words.begin(), words.end(), '|', ' ');
+    const std::vector<scilex::token> alone {lex.tokenize(words)};
+    const bool                       whole {std::all_of(alone.begin(), alone.end(), [](const scilex::token& t) { return t.kind == keyword; })};
+    return eq_split && exponent && mixed_ops && mixed_kw && joined && whole;
   }
 } // namespace scilex::examples::fortran
 

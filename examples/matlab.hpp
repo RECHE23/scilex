@@ -22,6 +22,7 @@
 #ifndef SCILEX_EXAMPLE_MATLAB_HPP
 #define SCILEX_EXAMPLE_MATLAB_HPP
 
+#include <algorithm>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -92,6 +93,13 @@ namespace scilex::examples::matlab {
     return r;
   }
 
+  //! \brief The keywords. An alternation takes its first alternative that matches, so a keyword precedes
+  //!        every shorter one it begins with (`endif` before `end`), or the longer one would lose to IDENT.
+  constexpr const char* keywords {
+    "function|endfunction|if|elseif|else|endif|for|parfor|endfor|while|endwhile|do|until|switch|case"
+    "|otherwise|endswitch|try|catch|end_try_catch|end|return|break|continue|global|persistent|classdef"
+    "|properties|methods|events|enumeration|spmd"};
+
   //! \brief Builds the MATLAB rule list. A keyword precedes IDENT, so it wins an equal-length match and a
   //!        longer identifier (`endx`) stays an identifier; the block-comment opener precedes the line
   //!        comment for the same reason.
@@ -109,11 +117,7 @@ namespace scilex::examples::matlab {
     rules.push_back(rule(comment, R"re((?m)^[ \t]*%\{[ \t]*\r?$)re", code, true, scilex::mode_action {.operation = op_t::push, .target = "block"}));
     rules.push_back(rule(comment, R"re([%#][^\n]*)re", code, true));
     rules.push_back(rule(newline, R"re(\r?\n)re", code));
-    rules.push_back(rule(keyword,
-                         "function|endfunction|end|if|elseif|else|endif|for|parfor|endfor|while|endwhile|do|until|switch"
-                         "|case|otherwise|endswitch|try|catch|end_try_catch|return|break|continue|global|persistent"
-                         "|classdef|properties|methods|events|enumeration|spmd",
-                         code));
+    rules.push_back(rule(keyword, keywords, code));
     rules.push_back(rule(ident, R"re([A-Za-z][A-Za-z0-9_]*)re", code));
     // `2.^x` is `2 .^ x`: a dot before an element-wise operator belongs to the operator, not the number.
     rules.push_back(rule(number, R"re(0[xX][0-9A-Fa-f]+|(?:[0-9]+(?:\.(?![*/\\^'])[0-9]*)?|\.[0-9]+)(?:[eEdD][+-]?[0-9]+)?[ij]?)re", code));
@@ -176,7 +180,8 @@ end
 )matlab"};
 
   //! \brief Self-check (so `make example` gates): the transposes and the character arrays are told apart,
-  //!        the nested block comment hides its code, and `2.^` is a number then an element-wise operator.
+  //!        the nested block comment hides its code, `2.^` is a number then an element-wise operator, and
+  //!        every keyword alone is one KEYWORD.
   //!        \return `true` on success.
   inline bool self_check()
   {
@@ -204,7 +209,11 @@ end
       }
     }
     // A' · (…)' · (0:3)' · V(:,1)' · x.' is `.'` (an operator) · {…}'' is two
-    return transposes == 6 && chars == 3 && escaped && power && hidden;
+    std::string words                      {keywords};
+    std::replace(words.begin(), words.end(), '|', ' ');
+    const std::vector<scilex::token> alone {lex.tokenize(words)};
+    const bool                       whole {std::all_of(alone.begin(), alone.end(), [](const scilex::token& t) { return t.kind == keyword; })};
+    return transposes == 6 && chars == 3 && escaped && power && hidden && whole;
   }
 } // namespace scilex::examples::matlab
 
