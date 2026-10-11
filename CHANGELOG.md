@@ -34,6 +34,12 @@ fuzz oracle.
     parentheses and strings of its own (a mode per parenthesis tells the closing one apart); Unicode
     identifiers and operators; the adjoint `'` beside character literals, the range `:` beside symbols.
 
+### Fixed
+- **Lexing a whole text on the DFA is 5–11 % faster again** (`tokenize`, `scan`; arm64, Apple clang 16, `-O2`:
+  `json` 130 → 143 MB/s, `css` 127 → 142, `math` 75 → 81). Since 2026.10.4 every munch also asked the DFA
+  whether more text could change it, which only a stream needs; a scan over a whole text now asks REAL for the
+  match alone, and the stream keeps its question.
+
 ### Changed
 - **A `.lex` line whose first non-blank character is `%` is a directive**, so a rule can no longer be named
   with a leading `%` (an unknown directive is refused, naming the line).

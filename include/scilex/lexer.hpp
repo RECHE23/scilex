@@ -36,6 +36,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -657,7 +658,7 @@ namespace scilex {
         if (!gate.ready(unit, cursor.offset)) {
           return scan_status::pending;
         }
-        const munch_result m {munch_at(unit, source, cursor.offset, memos)};
+        const munch_result m {munch_at<may_wait<Gate>>(unit, source, cursor.offset, memos)};
         if (m.open && !gate.at_end()) {
           return scan_status::pending; // the DFA rules' munch may still change with what comes next
         }
@@ -679,7 +680,7 @@ namespace scilex {
               return scan_status::pending;
             }
             if (may_start(unit, static_cast<unsigned char>(source[cursor.offset]))) {
-              const munch_result probe {munch_at(unit, source, cursor.offset, memos)};
+              const munch_result probe {munch_at<may_wait<Gate>>(unit, source, cursor.offset, memos)};
               if (probe.open && !gate.at_end()) {
                 return scan_status::pending;
               }
@@ -1002,6 +1003,9 @@ namespace scilex {
     //!        dispatching to the mode's DFA when it has one, else the Pike + first-byte munch. The
     //!        single match primitive both the forward scan and the error-recovery probe call, so the
     //!        two never diverge on which rule wins.
+    //! \tparam Wait `std::true_type` when a scan may wait for more text (a stream), so the munch must tell
+    //!        whether more text may change it (munch_result::open); `std::false_type` over a whole text.
+    template <typename Wait>
     munch_result munch_at(std::size_t      mode,
                           std::string_view source,
                           std::size_t      offset,
@@ -1011,10 +1015,14 @@ namespace scilex {
       // A mode wholly on its DFA is the per-token case: it stays free of the Pike path's frame, which
       // an out-of-line call keeps for the modes that need it.
       if (hybrid == nullptr || hybrid->any_on_pike) [[unlikely]] {
-        return munch_with_pike(mode, source, offset, memos, hybrid);
+        return munch_with_pike(mode, source, offset, memos, hybrid, Wait {});
       }
-      return dfa_munch(*hybrid, source, offset, memos[mode]);
+      return dfa_munch(*hybrid, source, offset, memos[mode], Wait {});
     }
+
+    //! \brief Whether a scan through \p Gate may stop to wait for more text: every gate but a whole text's.
+    template <typename Gate>
+    using may_wait = std::bool_constant<!std::is_same_v<Gate, whole_text>>;
 
     //! \brief The DFA's share of \ref munch_at: its rules' longest non-empty match, else the empty
     //!        match of a nullable DFA rule (\ref mode_dfa::empty_winner), else nothing.
@@ -1022,14 +1030,15 @@ namespace scilex {
     //! \param[in]     source The whole source.
     //! \param[in]     offset Where the munch starts.
     //! \param[in,out] memo   The mode's walk memo over \p source.
-    //! \return The DFA rules' winning munch, as a global rule index.
+    //! \return The DFA rules' winning munch, as a global rule index, and whether more text may change it.
 #if defined(__GNUC__) || defined(__clang__)
     __attribute__((always_inline))
 #endif
     static munch_result dfa_munch(const mode_dfa&       hybrid,
                                   std::string_view      source,
                                   std::size_t           offset,
-                                  real::dfa_munch_memo& memo)
+                                  real::dfa_munch_memo& memo,
+                                  std::true_type /*may_wait*/)
     {
       // The walk is memoized over the whole source (real::dfa_munch_memo): a state a walk proved leads
       // to no accept stops every later walk that reaches it, so the DFA's share of a tokenization is
@@ -1047,6 +1056,26 @@ namespace scilex {
       return munch_result {.open = munch.more_text_may_change};
     }
 
+    //! \brief \ref dfa_munch over a whole text, where no text follows: REAL's `match`, which skips telling
+    //!        whether more text may change the answer (that costs 5–17 % of a scan on the DFA).
+#if defined(__GNUC__) || defined(__clang__)
+    __attribute__((always_inline))
+#endif
+    static munch_result dfa_munch(const mode_dfa&       hybrid,
+                                  std::string_view      source,
+                                  std::size_t           offset,
+                                  real::dfa_munch_memo& memo,
+                                  std::false_type /*may_wait*/)
+    {
+      if (const std::optional<real::dfa_match> matched {hybrid.dfa.match(source, offset, memo)}) {
+        return munch_result {.have = true, .idx = hybrid.to_global[matched->rule_index], .len = matched->length};
+      }
+      if (hybrid.empty_winner) {
+        return munch_result {.have = true, .idx = *hybrid.empty_winner, .len = 0};
+      }
+      return munch_result {};
+    }
+
     //! \brief \ref munch_at for a mode with rules on Pike: all of them when it has no DFA (\p hybrid
     //!        null), else the DFA's share merged with the rest — the longest match wins and the lowest
     //!        index breaks a tie, as in the per-rule munch over the whole mode.
@@ -1055,7 +1084,9 @@ namespace scilex {
     //! \param[in]     offset Where the munch starts.
     //! \param[in,out] memos  The walk memos over \p source.
     //! \param[in]     hybrid The mode's DFA, or null.
+    //! \param[in]     wait   Whether the scan may wait for more text (see \ref munch_at).
     //! \return The winning munch.
+    template <typename Wait>
 #if defined(__GNUC__) || defined(__clang__)
     __attribute__((noinline))
 #endif
@@ -1063,13 +1094,14 @@ namespace scilex {
                                  std::string_view source,
                                  std::size_t      offset,
                                  munch_memos&     memos,
-                                 const mode_dfa*  hybrid) const
+                                 const mode_dfa*  hybrid,
+                                 Wait             wait) const
     {
       const unsigned char first {static_cast<unsigned char>(source[offset])};
       if (hybrid == nullptr) {
         return pike_munch_in_mode(mode, source, offset, first, nullptr);
       }
-      munch_result       best         {dfa_munch(*hybrid, source, offset, memos[mode])};
+      munch_result       best         {dfa_munch(*hybrid, source, offset, memos[mode], wait)};
       const bool         dfa_open     {best.open};
       const munch_result rest_of_mode {pike_munch_in_mode(mode, source, offset, first, &hybrid->on_pike)};
       if (rest_of_mode.have
