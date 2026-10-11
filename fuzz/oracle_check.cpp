@@ -32,6 +32,9 @@
 #include "cpp.hpp"
 #include "css.hpp"
 #include "json.hpp"
+#include "fortran.hpp"
+#include "julia.hpp"
+#include "matlab.hpp"
 #include "lisp.hpp"
 #include "math.hpp"
 #include "python.hpp"
@@ -64,6 +67,12 @@ namespace {
      scilex::examples::css::sample, false},
     {"lisp", &scilex::examples::lisp::make_rules, &scilex::examples::lisp::make_lexer,
      scilex::examples::lisp::sample, false},
+    {"fortran", &scilex::examples::fortran::make_rules, &scilex::examples::fortran::make_lexer,
+     scilex::examples::fortran::sample, false},
+    {"julia", &scilex::examples::julia::make_rules, &scilex::examples::julia::make_lexer,
+     scilex::examples::julia::sample, false},
+    {"matlab", &scilex::examples::matlab::make_rules, &scilex::examples::matlab::make_lexer,
+     scilex::examples::matlab::sample, false},
     {"math", &scilex::examples::math::make_rules, &scilex::examples::math::make_lexer,
      scilex::examples::math::sample, false},
     {"xml", &scilex::examples::xml::make_rules, &scilex::examples::xml::make_lexer,
@@ -538,7 +547,7 @@ namespace {
     }
     random_grammars(seed, random_count, cases, failures);
     if (failures == 0) {
-      std::cout << "fuzz-check: " << cases << " cases (9 grammars x sample/truncations/adversarial, raise + token recovery, + 6 grammars with crafted inputs, + 4 scaling, + "
+      std::cout << "fuzz-check: " << cases << " cases (" << grammars.size() << " grammars x sample/truncations/adversarial, raise + token recovery, + 6 grammars with crafted inputs, + 4 scaling, + "
                 << random_count << " random grammars from seed " << seed << ") — all invariants hold\n";
       return 0;
     }

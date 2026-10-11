@@ -3,7 +3,7 @@
  * \brief Per-grammar C++ throughput baseline for the SciLex engine (raw collector).
  *
  * Complements \c benchmarks/bench.py (which times the Python binding against
- * \c re): this measures the pure C++ lexer directly, on each of the nine
+ * \c re): this measures the pure C++ lexer directly, on each of the
  * example grammars, over realistic steady-state inputs built by scaling the
  * grammar's own sample. It collects four sections:
  *
@@ -35,6 +35,9 @@
 #include "cpp.hpp"
 #include "css.hpp"
 #include "json.hpp"
+#include "fortran.hpp"
+#include "julia.hpp"
+#include "matlab.hpp"
 #include "lisp.hpp"
 #include "math.hpp"
 #include "python.hpp"
@@ -94,7 +97,7 @@ namespace {
   }
 
   //! \brief Emits the eager + lazy cases for one grammar (the Pike engine, built from
-  //!        \p make_rules — apples-to-apples across all nine grammars).
+  //!        \p make_rules — apples-to-apples across every grammar).
   // What each row measured before DFA acceleration became automatic: the per-rule path, or a DFA in
   // exactly the modes named. Rows keep their meaning, so the published tables stay comparable.
   scilex::lexer pike_lexer(std::vector<scilex::rule> rules,
@@ -259,13 +262,16 @@ namespace {
 
 int main()
 {
-  // --- grammar: eager vs lazy across the nine grammars (Pike engine). ---
+  // --- grammar: eager vs lazy across the twelve grammars (Pike engine). ---
   grammar_case("json", &scilex::examples::json::make_rules, scilex::examples::json::sample);
   grammar_case("python", &scilex::examples::python::make_rules, scilex::examples::python::sample);
   grammar_case("cpp", &scilex::examples::cpp::make_rules, scilex::examples::cpp::sample);
   grammar_case("sql", &scilex::examples::sql::make_rules, scilex::examples::sql::sample);
   grammar_case("css", &scilex::examples::css::make_rules, scilex::examples::css::sample);
   grammar_case("lisp", &scilex::examples::lisp::make_rules, scilex::examples::lisp::sample);
+  grammar_case("fortran", &scilex::examples::fortran::make_rules, scilex::examples::fortran::sample);
+  grammar_case("julia", &scilex::examples::julia::make_rules, scilex::examples::julia::sample);
+  grammar_case("matlab", &scilex::examples::matlab::make_rules, scilex::examples::matlab::sample);
   grammar_case("math", &scilex::examples::math::make_rules, scilex::examples::math::sample);
   grammar_case("xml", &scilex::examples::xml::make_rules, scilex::examples::xml::sample);
   grammar_case("yaml", &scilex::examples::yaml::make_rules, scilex::examples::yaml::sample);
@@ -321,6 +327,9 @@ int main()
     {.name = "sql", .rules = &scilex::examples::sql::make_rules, .sample = scilex::examples::sql::sample},
     {.name = "css", .rules = &scilex::examples::css::make_rules, .sample = scilex::examples::css::sample},
     {.name = "lisp", .rules = &scilex::examples::lisp::make_rules, .sample = scilex::examples::lisp::sample},
+    {.name = "fortran", .rules = &scilex::examples::fortran::make_rules, .sample = scilex::examples::fortran::sample},
+    {.name = "julia", .rules = &scilex::examples::julia::make_rules, .sample = scilex::examples::julia::sample},
+    {.name = "matlab", .rules = &scilex::examples::matlab::make_rules, .sample = scilex::examples::matlab::sample},
     {.name = "math", .rules = &scilex::examples::math::make_rules, .sample = scilex::examples::math::sample},
     {.name = "python", .rules = &py::make_rules, .sample = py::sample},
     {.name = "xml", .rules = &scilex::examples::xml::make_rules, .sample = scilex::examples::xml::sample},

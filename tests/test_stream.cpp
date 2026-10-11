@@ -14,6 +14,9 @@
 #include "cpp.hpp"
 #include "css.hpp"
 #include "json.hpp"
+#include "fortran.hpp"
+#include "julia.hpp"
+#include "matlab.hpp"
 #include "lisp.hpp"
 #include "math.hpp"
 #include "python.hpp"
@@ -86,6 +89,9 @@ TEST(stream_equals_tokenize_for_every_cut)
     {.name = "cpp", .make = ex::cpp::make_lexer, .sample = ex::cpp::sample},
     {.name = "css", .make = ex::css::make_lexer, .sample = ex::css::sample},
     {.name = "lisp", .make = ex::lisp::make_lexer, .sample = ex::lisp::sample},
+    {.name = "fortran", .make = ex::fortran::make_lexer, .sample = ex::fortran::sample},
+    {.name = "julia", .make = ex::julia::make_lexer, .sample = ex::julia::sample},
+    {.name = "matlab", .make = ex::matlab::make_lexer, .sample = ex::matlab::sample},
     {.name = "math", .make = ex::math::make_lexer, .sample = ex::math::sample},
     {.name = "sql", .make = ex::sql::make_lexer, .sample = ex::sql::sample},
   };

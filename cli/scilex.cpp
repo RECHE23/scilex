@@ -23,7 +23,7 @@
  * where the options are `skip`, `in=m1,m2`, and one of `push=m`, `set=m`, `pop`.
  * The lexer itself takes plain C++ rule lists; `scilex.hpp` does not include the
  * format. Built-in grammars reuse the `examples/<lang>.hpp` registry, so the
- * nine showcase languages are defined exactly once.
+ * showcase languages are defined exactly once.
  */
 #include <cstddef>
 #include <fstream>
@@ -44,6 +44,9 @@
 #include "cpp.hpp"
 #include "css.hpp"
 #include "json.hpp"
+#include "fortran.hpp"
+#include "julia.hpp"
+#include "matlab.hpp"
 #include "lisp.hpp"
 #include "math.hpp"
 #include "python.hpp"
@@ -92,6 +95,15 @@ namespace {
     {"lisp",
      &scilex::examples::lisp::make_lexer_with, &scilex::examples::lisp::kind_name,
      scilex::examples::lisp::sample, &scilex::examples::lisp::self_check, false, scilex::tab_policy::columns},
+    {"fortran",
+     &scilex::examples::fortran::make_lexer_with, &scilex::examples::fortran::kind_name,
+     scilex::examples::fortran::sample, &scilex::examples::fortran::self_check, false, scilex::tab_policy::columns},
+    {"julia",
+     &scilex::examples::julia::make_lexer_with, &scilex::examples::julia::kind_name,
+     scilex::examples::julia::sample, &scilex::examples::julia::self_check, false, scilex::tab_policy::columns},
+    {"matlab",
+     &scilex::examples::matlab::make_lexer_with, &scilex::examples::matlab::kind_name,
+     scilex::examples::matlab::sample, &scilex::examples::matlab::self_check, false, scilex::tab_policy::columns},
     {"math",
      &scilex::examples::math::make_lexer_with, &scilex::examples::math::kind_name,
      scilex::examples::math::sample, &scilex::examples::math::self_check, false, scilex::tab_policy::columns},

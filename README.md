@@ -260,8 +260,8 @@ scalars** (`|` / `>`) and heredocs need a reference indent carried in the mode f
 `scilex` is a command-line lexer — `make cli` builds it, `make install` puts it on
 your `PATH` (`PREFIX=`/`BINDIR=` to choose where). It has two input modes.
 
-**Built-in grammars** — a showcase over the nine example languages (JSON, Python,
-C++, SQL, CSS, Lisp, math, XML, YAML):
+**Built-in grammars** — a showcase over the twelve example languages (JSON, Python,
+C++, SQL, CSS, Lisp, math, XML, YAML, and the scientific Fortran, Julia and MATLAB):
 
 ```console
 $ scilex --list                       # the built-in grammars

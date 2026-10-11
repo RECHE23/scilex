@@ -9,13 +9,14 @@
  * (not just crashing) tokenization is a finding. Three modes per input:
  *
  *   (a) every real example grammar (JSON, Python, C++, SQL, CSS, Lisp, math, XML,
- *       YAML) — all applicable invariants including indentation layout, and (for
- *       Python's f-strings, XML's content/tag, and YAML's block/flow) the per-mode
- *       dispatch over real multi-mode grammars;
+ *       YAML, Fortran, Julia, MATLAB) — all applicable invariants including
+ *       indentation layout, and (for Python's f-strings, XML's content/tag, YAML's
+ *       block/flow, Julia's interpolations and MATLAB's and Julia's nested block
+ *       comments) the per-mode dispatch over real multi-mode grammars;
  *   (b) a rule-set assembled from a palette of REAL patterns, seeded by the
  *       input itself — structural invariants only (no layout). This is where
  *       the first-byte dispatch meets rule orderings and bucket splits the
- *       nine fixed grammars never produce — exactly the dispatch's blind spots;
+ *       fixed grammars never produce — exactly the dispatch's blind spots;
  *   (c) a multi-mode rule-set seeded by the input (push/pop/set, nesting,
  *       skip-transitions) — exercises the per-mode dispatch and the mode stack,
  *       which the mono-mode grammars (a)/(b) never reach.
@@ -40,6 +41,9 @@
 #include "cpp.hpp"
 #include "css.hpp"
 #include "json.hpp"
+#include "fortran.hpp"
+#include "julia.hpp"
+#include "matlab.hpp"
 #include "lisp.hpp"
 #include "math.hpp"
 #include "python.hpp"
@@ -65,6 +69,9 @@ namespace {
     {"sql", &scilex::examples::sql::make_rules, &scilex::examples::sql::make_lexer, false},
     {"css", &scilex::examples::css::make_rules, &scilex::examples::css::make_lexer, false},
     {"lisp", &scilex::examples::lisp::make_rules, &scilex::examples::lisp::make_lexer, false},
+    {"fortran", &scilex::examples::fortran::make_rules, &scilex::examples::fortran::make_lexer, false},
+    {"julia", &scilex::examples::julia::make_rules, &scilex::examples::julia::make_lexer, false},
+    {"matlab", &scilex::examples::matlab::make_rules, &scilex::examples::matlab::make_lexer, false},
     {"math", &scilex::examples::math::make_rules, &scilex::examples::math::make_lexer, false},
     {"xml", &scilex::examples::xml::make_rules, &scilex::examples::xml::make_lexer, false},
     {"yaml", &scilex::examples::yaml::make_rules, &scilex::examples::yaml::make_lexer, true},
@@ -248,7 +255,7 @@ namespace {
   }
 
   //! \brief A fixed grammar, built ONCE. A lexer is immutable and shareable (scan state lives in the
-  //!        scan), so rebuilding the nine grammars -- each with a DFA-accelerated recovery lexer whose
+  //!        scan), so rebuilding the grammars -- each with a DFA-accelerated recovery lexer whose
   //!        construction decides every rule -- for every input only spent the budget on construction:
   //!        the target ran at a fraction of an execution per second.
   struct prepared_grammar
@@ -324,9 +331,9 @@ extern "C" int LLVMFuzzerTestOneInput(const std::uint8_t* data,
   const std::string_view input {reinterpret_cast<const char*>(data), size};
 
   // Mode (a): real grammars, all applicable invariants (incl. layout). The independent reference costs a
-  // match call per rule per position, so checking all nine grammars on every input left the target near
+  // match call per rule per position, so checking every grammar on every input left the target near
   // one execution per second; each input checks grammars_per_input of them, in a rotation its hash picks,
-  // and `make fuzz-check` still runs all nine over its fixed inputs on every gate.
+  // and `make fuzz-check` still runs them all over its fixed inputs on every gate.
   const std::uint64_t                         hash  {fnv1a(input)};
   const std::vector<prepared_grammar>&        all   {prepared_grammars()};
   const std::size_t                           first {static_cast<std::size_t>(hash % all.size())};

@@ -7,6 +7,19 @@ fuzz oracle.
 
 ## Unreleased
 
+### Added
+- **Example grammars for three scientific languages**, built in (`scilex --example fortran|julia|matlab`),
+  checked by the oracle fuzzer and the stream tests like the nine others, and each on the DFA in every mode:
+  - **MATLAB / Octave**: an apostrophe is the transpose after an operand and opens a character array
+    anywhere else (a one-byte lookbehind, as MATLAB's lexer decides it); `%{ … %}` block comments nest;
+    `...` continues a line; `2.^x` is `2 .^ x`.
+  - **Fortran** (free form): `1.eq.2` is a number, an operator and a number while `1.e5` is one number;
+    keywords, dotted operators and `.TRUE.` in any case; `&` continuations with a comment after the `&`;
+    kind suffixes and BOZ literals.
+  - **Julia**: `#= … =#` comments nest; `$name` and `$(expr)` interpolate, the expression holding
+    parentheses and strings of its own (a mode per parenthesis tells the closing one apart); Unicode
+    identifiers and operators; the adjoint `'` beside character literals, the range `:` beside symbols.
+
 ## 2026.10.4 — 2026-10-11
 
 ### Changed

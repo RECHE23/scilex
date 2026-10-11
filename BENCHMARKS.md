@@ -29,6 +29,9 @@ battery: the same `json` grammar against the same real-regex once read **7.00 MB
 published a regression that did not exist. An A/B is immune (both sides throttle together); an
 ABSOLUTE table is not.
 
+The Fortran, Julia and MATLAB example grammars were added after this stamp and have no row yet; the next
+stamp measures them with the others.
+
 ## The honest headline
 
 SciLex was **not** built to beat `re` on raw throughput, and on the benign case measured below it
@@ -57,7 +60,7 @@ machine-generated input.
 
 `bench.py` (below) measures the **Python binding**; this section measures the **C++ engine
 directly** — the speed a C++ embedder or a SciParse parser sees, with no interpreter in the path.
-`make bench-lex` lexes each of the nine example grammars (`examples/<lang>.hpp`) over its own sample
+`make bench-lex` lexes each example grammar (`examples/<lang>.hpp`) over its own sample
 scaled to a ~256 KiB steady-state input, reporting MB/s for `tokenize()` (eager, full token vector)
 and `scan()` (lazy — the parser path). The rows here are the **Pike engine** alone (the per-rule scan
 + first-byte dispatch, `dfa_policy::requested` with no mode): what a rule the DFA cannot take costs,
