@@ -7,6 +7,8 @@ fuzz oracle.
 
 ## Unreleased
 
+## 2026.10.5 — 2026-10-11
+
 ### Added
 - **A rule can depend on the token before it** (`rule::after`, `rule::not_after`): active only right after a
   token of the kinds listed, or everywhere else — a `/` that divides after an operand and opens a regular
