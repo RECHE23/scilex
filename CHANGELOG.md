@@ -41,6 +41,8 @@ fuzz oracle.
   match alone, and the stream keeps its question.
 
 ### Changed
+- **Requires real-regex 2026.10.11** (was 2026.10.10): its fixed-width and case-insensitive prefilters, and the
+  `left_context` it gives every binding. Lexing throughput is unchanged by it (every row within 3 %, alternated).
 - **A `.lex` line whose first non-blank character is `%` is a directive**, so a rule can no longer be named
   with a leading `%` (an unknown directive is refused, naming the line).
 
