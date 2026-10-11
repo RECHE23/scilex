@@ -112,6 +112,8 @@ jobs:
           python-version: '3.14'
       - name: CLI self-checks, CLI reports and policies, README code
         run: make -C scilex example
+      - name: The python grammars against CPython's tokenize over the standard library
+        run: make -C scilex python-oracle
       - name: Shipped-header hygiene and version agreement
         run: make -C scilex symbol-hygiene version-check
 

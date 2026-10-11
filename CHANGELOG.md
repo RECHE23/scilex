@@ -7,6 +7,17 @@ fuzz oracle.
 
 ## Unreleased
 
+### Fixed
+- **The Python example grammar lexes as CPython's tokenizer does.** Over the 1 849 files of the standard
+  library it agreed with `tokenize` on 825 (audit, 2026-10-11): `obj._x` lexed `._` as a number, `!` and `;`
+  were no tokens (so `f"{x!r}"` stopped the lexer), triple-quoted and raw f-strings were not read, a format
+  spec (`f"{x:>{w}}"`) lexed as code, and `\N{…}`, a backslash-newline inside a string and a byte-order mark
+  stopped it. It now agrees on 1 848 with Unicode identifiers (the last file is deliberately invalid) and
+  1 842 with the default ASCII ones. Thirteen modes; building the lexer still takes ~17 ms. Also new: t-strings
+  (3.14), and Python's identifier definition (`XID_Start`, `XID_Continue`) in the Unicode variant.
+- **`make python-oracle` checks it**, in the gate and in CI: both variants against `tokenize` over the
+  running interpreter's standard library, with a floor one file below today's count.
+
 ## 2026.10.5 — 2026-10-11
 
 ### Added

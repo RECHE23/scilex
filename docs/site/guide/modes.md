@@ -82,5 +82,7 @@ token leaves active, so the choice costs nothing per token. In C++ the fields ar
   an error, so an input made only of openers cannot grow the stack without end.
 
 Under {doc}`error recovery <errors>` the first becomes a zero-width error token at the end of input;
-the other two stay fatal. The examples `examples/python.hpp` (f-strings and explicit line joining, six modes), `examples/xml.hpp`
-(content and tag) and `examples/yaml.hpp` (block and flow) are complete modal grammars.
+the other two stay fatal. The examples `examples/python.hpp` (f-strings in every form with their format specs, brackets and explicit line
+joining, thirteen modes), `examples/xml.hpp` (content and tag), `examples/yaml.hpp` (block and flow),
+`examples/matlab.hpp` (nested block comments) and `examples/julia.hpp` (interpolation, nested comments) are
+complete modal grammars.

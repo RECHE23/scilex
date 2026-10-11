@@ -41,9 +41,10 @@ measured optimality.
 - Optional `END_OF_INPUT` token
 - Positioned errors with a context snippet
 - ReDoS-safe (via REAL); linear wherever the rules run on the DFA, quadratic in the worst case only through a rule left on Pike
-- Nine example grammars — three of them modal (f-strings, XML, YAML)
+- Thirteen example grammars — five of them modal (Python f-strings, XML, YAML, MATLAB block comments, Julia
+  interpolation and nested comments); the Python one lexes the standard library as CPython's tokenizer does
 
-The three modal grammars differ in shape and each documents its own scope; modes
+The modal grammars differ in shape and each documents its own scope; modes
 resolve the contexts above, but the one contextual case still outside the model —
 lexing steered by *indentation* (block scalars, heredocs) — is Level B.
 
@@ -162,8 +163,8 @@ fstr = scilex.Lexer([
 
 An action is `None` | `("push", mode)` | `("set", mode)` | `("pop",)`; a plain
 `(kind, pattern, skip)` rule needs neither field, so existing grammars are
-unaffected. See `examples/python.hpp`, `examples/xml.hpp`, `examples/yaml.hpp` for
-the three modal profiles in full. The stack is bounded: a push past
+unaffected. See `examples/python.hpp`, `examples/xml.hpp`, `examples/yaml.hpp`, `examples/matlab.hpp` and
+`examples/julia.hpp` for the five modal profiles in full. The stack is bounded: a push past
 `scilex::max_mode_depth` (65 536 frames, ~2 MiB) is a lexical error under either error
 policy, so an input made only of openers cannot grow it without end.
 

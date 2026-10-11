@@ -52,7 +52,7 @@ SCIFORGE_LINT ?= ../sciforge/lint
 SCIFORGE_TOOLS ?= ../sciforge/tools
 FORMAT_FILES := $(shell find include tests examples fuzz benchmarks cli -name '*.hpp' -o -name '*.cpp')
 
-.PHONY: all build test sanitize coverage coverage-build coverage-html python-stubtest \
+.PHONY: all build test python-oracle sanitize coverage coverage-build coverage-html python-stubtest \
         lint misra doc doc-no-coverage doc-check format format-check full-local-gate \
         python python-test bench bench-lex cli example coverage-gate doc-xml docs-venv docs-site docs-site-gate sabotage-help check-sabotage fuzz-check tsan exhaustive-lex check-pins fuzz version-check install install-smoke uninstall install-cli uninstall-cli release clean help
 
@@ -340,6 +340,11 @@ example: cli
 # (munch equivalence vs an independent reference scanner, coverage, lazy==eager, layout
 # balance, positioned errors, determinism) over the example grammars x a fixed adversarial
 # input set, compiled -Werror. The continuous libFuzzer explorer is `make fuzz`.
+# The python example grammars against CPython's tokenize over the interpreter's whole standard library
+# (Python 3.12 or later; an earlier one skips): a file that lexes differently counts against a floor.
+python-oracle: cli
+	$(PYRUN) tests/oracle/python_tokenize.py $(BUILD)/bin/scilex
+
 fuzz-check:
 	@mkdir -p $(BUILD)/fuzz
 	c++ $(CXXSTD) -O2 -Wall -Wextra -Wpedantic -Werror $(INCLUDES) -Iexamples -Ifuzz fuzz/oracle_check.cpp -o $(BUILD)/fuzz/oracle_check
@@ -429,6 +434,7 @@ full-local-gate:
 	@$(MAKE) misra
 	@$(MAKE) test
 	@$(MAKE) example
+	@$(MAKE) python-oracle
 	@$(MAKE) fuzz-check
 	@$(MAKE) exhaustive-lex
 	@$(MAKE) python-test
