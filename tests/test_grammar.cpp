@@ -173,14 +173,12 @@ namespace {
     EXPECT_EQ(g.rules.size(), 3U);
     EXPECT_EQ(g.names[2], "X");
     EXPECT_EQ(g.rules[2].kind, 2);
-    EXPECT_EQ(g.insignificant_modes.size(), 3U);
-    EXPECT_EQ(g.insignificant_modes[0], "br");
-    EXPECT_EQ(g.insignificant_modes[1], "default");
+    EXPECT(g.insignificant_modes == (std::vector<std::string> {"br", "default", "br"}));
     const scilex::lexer              lex    {g.rules, g.insignificant_modes};
     const std::vector<scilex::token> tokens {lex.tokenize("f(x)")};
     EXPECT(!lex.mode_significant().empty());
     for (const scilex::token& token : tokens) {
-      if (token.kind == 2) {
+      if (token.kind == 2 && !lex.mode_significant().empty()) {
         EXPECT(!lex.mode_significant()[token.mode_id]);
       }
     }
