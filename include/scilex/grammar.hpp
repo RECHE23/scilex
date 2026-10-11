@@ -14,7 +14,10 @@
  * - `skip` — matches are consumed but not emitted;
  * - `in=m1,m2` — the modes the rule is active in (default: `default` only);
  * - `push=m`, `set=m`, `pop` — the mode transition fired when the rule wins (at most one); a mode
- *   that `push=` or `set=` enters must have a rule active in it.
+ *   that `push=` or `set=` enters must have a rule active in it;
+ * - `after=A,B` or `not_after=A,B` — the rule is active only right after (or except right after) a token
+ *   of the rules named `A` or `B` (\ref scilex::rule::after): a name stands for every rule that bears
+ *   it, earlier or later in the file, and `^` for the start of the input.
  *
  * A line whose first non-blank character is `%` is a directive, not a rule; the one directive is
  *
@@ -242,6 +245,16 @@ namespace scilex {
       return name;
     }
 
+    //! \brief An `after=` or `not_after=` option, its names resolved once every rule is read.
+    struct predicate_site
+    {
+      std::size_t                   rule;   //!< The rule's index.
+      bool                          after;  //!< `after=` (else `not_after=`).
+      std::vector<std::string_view> names;  //!< The names it lists (views into the grammar text).
+      std::size_t                   line;   //!< Its 1-based line.
+      std::size_t                   column; //!< The 1-based column of the option.
+    };
+
     /*!
      * \brief Gives \p out its transition, refusing a second one.
      * \param[in,out] out       The rule being built.
@@ -273,14 +286,18 @@ namespace scilex {
      * \param[in]     origin  For errors: where the grammar came from.
      * \param[in]     line    For errors: the 1-based line.
      * \param[in,out] out     The rule being built.
+     * \param[in]     index   The rule's index (for its `after=` / `not_after=` entry).
+     * \param[in,out] predicates Each `after=` / `not_after=` option, appended with its names unresolved.
      * \return The 1-based column of its `push=` or `set=` option, or 0 when it has none.
      * \throws grammar_error On an unknown option, an empty mode name, or a second transition.
      */
-    inline std::size_t apply_grammar_options(std::string_view   options,
-                                             std::size_t        column,
-                                             const std::string& origin,
-                                             std::size_t        line,
-                                             rule&              out)
+    inline std::size_t apply_grammar_options(std::string_view             options,
+                                             std::size_t                  column,
+                                             const std::string&           origin,
+                                             std::size_t                  line,
+                                             rule&                        out,
+                                             std::size_t                  index,
+                                             std::vector<predicate_site>& predicates)
     {
       std::size_t transition_column {0};
       std::size_t at                {0};
@@ -317,9 +334,30 @@ namespace scilex {
             modes.remove_prefix(comma + 1);
           }
         }
+        else if (word.starts_with("after=") || word.starts_with("not_after=")) {
+          const bool after {word.starts_with("after=")};
+          if (std::ranges::any_of(predicates, [&](const predicate_site& p) { return p.rule == index; })) {
+            throw grammar_error(origin, line, col, "a rule takes one of after= and not_after=, once");
+          }
+          predicate_site   site  {.rule = index, .after = after, .names = {}, .line = line, .column = col};
+          std::string_view names {word.substr(after ? 6 : 10)};
+          while (true) {
+            const std::size_t      comma {names.find(',')};
+            const std::string_view name  {names.substr(0, comma)};
+            if (name.empty()) {
+              throw grammar_error(origin, line, col, quoting("empty rule name in ", word, ""));
+            }
+            site.names.push_back(name);
+            if (comma == std::string_view::npos) {
+              break;
+            }
+            names.remove_prefix(comma + 1);
+          }
+          predicates.push_back(std::move(site));
+        }
         else {
           throw grammar_error(origin, line, col,
-                              quoting("unknown option ", word, " (expected skip, in=, push=, set= or pop)"));
+                              quoting("unknown option ", word, " (expected skip, in=, push=, set=, pop, after= or not_after=)"));
         }
         at = end;
       }
@@ -358,6 +396,38 @@ namespace scilex {
           throw grammar_error(origin, site.line, site.column,
                               quoting("no rule is active in mode ", target, " (give one in=") + target + ")");
         }
+      }
+    }
+
+    /*!
+     * \brief Gives each rule of \p sites the kinds its names stand for: every rule bearing the name, and
+     *        \ref scilex::end_of_input for `^`.
+     * \throws grammar_error At the option, for a name no rule bears.
+     */
+    inline void resolve_predicates(grammar&                           parsed,
+                                   const std::vector<predicate_site>& sites,
+                                   const std::string&                 origin)
+    {
+      for (const predicate_site& site : sites) {
+        std::vector<int> kinds;
+        for (const std::string_view name : site.names) {
+          if (name == "^") {
+            kinds.push_back(end_of_input);
+            continue;
+          }
+          bool found {false};
+          for (std::size_t k {0}; k < parsed.names.size(); ++k) {
+            if (parsed.names[k] == name) {
+              kinds.push_back(static_cast<int>(k));
+              found = true;
+            }
+          }
+          if (!found) {
+            throw grammar_error(origin, site.line, site.column,
+                                quoting("no rule is named ", name, " (after= and not_after= name rules, or ^)"));
+          }
+        }
+        (site.after ? parsed.rules[site.rule].after : parsed.rules[site.rule].not_after) = std::move(kinds);
       }
     }
 
@@ -452,6 +522,7 @@ namespace scilex {
     grammar                              parsed;
     std::vector<detail::transition_site> transitions;
     std::vector<detail::directive_site>  directives;
+    std::vector<detail::predicate_site>  predicates;
     std::size_t                          line_no {0};
     std::size_t                          at      {text.starts_with(byte_order_mark) ? byte_order_mark.size() : 0};
     while (at <= text.size()) {
@@ -493,7 +564,7 @@ namespace scilex {
       }
       if (fields.text.size() == 3) {
         const std::size_t column {detail::apply_grammar_options(fields.text[2], fields.column[2], origin, line_no,
-                                                                parsed.rules.back())};
+                                                                parsed.rules.back(), parsed.rules.size() - 1, predicates)};
         if (column != 0) {
           transitions.push_back({.rule = parsed.rules.size() - 1, .line = line_no, .column = column});
         }
@@ -504,6 +575,7 @@ namespace scilex {
       throw grammar_error(origin, 0, 0, "no rules (the grammar is empty)");
     }
     detail::check_transition_targets(parsed, transitions, origin);
+    detail::resolve_predicates(parsed, predicates, origin);
     detail::apply_directives(parsed, directives, origin);
     return parsed;
   }

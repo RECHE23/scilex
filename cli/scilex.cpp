@@ -269,7 +269,7 @@ namespace {
         << "  --errors=token                    recover from unlexable bytes (emit ERROR tokens; default: raise)\n"
         << "  --columns=bytes|codepoints|utf16  unit for token columns (default: bytes)\n"
         << "grammar file: one rule per line   name<TAB>regex[<TAB>options]   ('#' comments, blank lines ok)\n"
-        << "  options (space-separated):      skip, in=m1,m2, and one of push=m, set=m, pop\n"
+        << "  options (space-separated):      skip, in=m1,m2, one of push=m, set=m, pop, and after=A,B or not_after=A,B\n"
         << "  directive line:                 %insignificant m1,m2   (modes without layout, for --layout)\n"
         << "output: one token per line        KIND<TAB>lexeme<TAB>line:col\n"
         << "  the lexeme escaped:             \\\\ \\t \\n \\r, other control bytes as \\xHH\n";

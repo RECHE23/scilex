@@ -12,8 +12,11 @@ dropped too, so a pattern never ends in a blank: write a final space `[ ]` or `\
 | `push=m` | when the rule wins, enter mode `m`, remembering the current one |
 | `set=m` | when the rule wins, replace the current mode with `m` |
 | `pop` | when the rule wins, return to the mode below |
+| `after=A,B` | active only right after a token of the rules named `A` or `B` (`^`: at the start) |
+| `not_after=A,B` | active except right after such a token ({doc}`modes`, "The token before") |
 
-A rule fires at most one of `push=`, `set=` and `pop`, and a mode that `push=` or `set=` enters must
+A rule fires at most one of `push=`, `set=` and `pop`, and takes at most one of `after=` and `not_after=`,
+whose names stand for every rule bearing them, earlier or later in the file. A mode that `push=` or `set=` enters must
 have a rule active in it (`in=`; the rules without `in=` are in `default`). Its kind is its position among the rules,
 counting from 0, and its name labels that kind.
 
@@ -92,6 +95,6 @@ in the line:
 my.lex:2:6: invalid regex: missing ), unterminated subpattern
 ```
 
-An unknown option, an empty mode name, a second transition, a `push=` or `set=` into a mode no rule is
+An unknown option, an empty mode name, a second transition, a name no rule bears in `after=` or `not_after=`, a `push=` or `set=` into a mode no rule is
 active in, an unknown directive, an `%insignificant` with no mode or a mode no rule is active in, a line
 without a tab and a grammar with no rules are refused the same way.

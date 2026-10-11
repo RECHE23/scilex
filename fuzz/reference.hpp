@@ -35,6 +35,7 @@
 #ifndef SCILEX_FUZZ_REFERENCE_HPP
 #define SCILEX_FUZZ_REFERENCE_HPP
 
+#include <algorithm>
 #include <cstddef>
 #include <map>
 #include <string>
@@ -97,6 +98,17 @@ namespace scilex::fuzz {
       }
     }
     return false;
+  }
+
+  //! \brief Is \p rule active after a token of kind \p previous (\ref scilex::rule::after,
+  //!        \ref scilex::rule::not_after)? The spec stated directly, independent of the lexer's units.
+  inline bool predicate_allows(const scilex::rule& rule,
+                               int                 previous)
+  {
+    if (!rule.after.empty()) {
+      return std::find(rule.after.begin(), rule.after.end(), previous) != rule.after.end();
+    }
+    return std::find(rule.not_after.begin(), rule.not_after.end(), previous) == rule.not_after.end();
   }
 
   //! \brief The byte length (1–4) of a valid UTF-8 codepoint at \p off, else 0 — the oracle's OWN
@@ -203,17 +215,18 @@ namespace scilex::fuzz {
         candidate.action->target_id = modes.ids.at(candidate.action->target);
       }
     }
-    const std::vector<std::size_t> weight {column_weights(source, unit)};
+    const std::vector<std::size_t> weight   {column_weights(source, unit)};
     std::vector<scilex::token>     out;
-    scilex::position               cursor {0, 1, 1};
-    std::vector<scilex::frame>     stack  {scilex::frame {.mode_id = 0, .entry_pos = cursor}};
+    scilex::position               cursor   {0, 1, 1};
+    std::vector<scilex::frame>     stack    {scilex::frame {.mode_id = 0, .entry_pos = cursor}};
+    int                            previous {scilex::end_of_input}; // the last emitted (unskipped) kind
     while (cursor.offset < source.size()) {
       const std::string&     mode_name {modes.names[stack.back().mode_id]};
       std::size_t            best_len  {0};
       const scilex::rule*    best      {nullptr};
       for (const scilex::rule& candidate : local) {
-        if (!rule_active_in(candidate, mode_name)) {
-          continue; // brute-force, but only over the rules active in this mode
+        if (!rule_active_in(candidate, mode_name) || !predicate_allows(candidate, previous)) {
+          continue; // brute-force, but only over the rules active in this mode, after this token
         }
         // In the whole text, as the lexer matches: a lookbehind or `^` sees what precedes the token.
         const auto        matched {candidate.pattern.match(source, cursor.offset)};
@@ -245,6 +258,9 @@ namespace scilex::fuzz {
           modes_out->push_back(mode_name); // the mode this token was lexed in
         }
       }
+      if (!best->skip) {
+        previous = best->kind;
+      }
       // The transition is part of the spec: share the lexer's pure pivot verbatim
       // (a pop at the root throws #2 here, at start, exactly as the lexer does).
       scilex::apply_transition(*best, start, stack);
@@ -261,10 +277,11 @@ namespace scilex::fuzz {
   inline bool reference_matches_here(const std::vector<scilex::rule>& rules,
                                      const std::string&               mode_name,
                                      std::string_view                 source,
-                                     std::size_t                      offset)
+                                     std::size_t                      offset,
+                                     int                              previous)
   {
     for (const scilex::rule& candidate : rules) {
-      if (!rule_active_in(candidate, mode_name)) {
+      if (!rule_active_in(candidate, mode_name) || !predicate_allows(candidate, previous)) {
         continue;
       }
       const auto matched {candidate.pattern.match(source, offset)};
@@ -318,13 +335,14 @@ namespace scilex::fuzz {
                                              }
                                              ++at.offset;
                                            }};
+    int previous {scilex::end_of_input}; // the last emitted kind, an error run's included
     while (cursor.offset < source.size()) {
       const std::string&     mode_name {modes.names[stack.back().mode_id]};
       std::size_t            best_len  {0};
       const scilex::rule*    best      {nullptr};
       bool                   any       {false}; // some rule matched, possibly empty
       for (const scilex::rule& candidate : local) {
-        if (!rule_active_in(candidate, mode_name)) {
+        if (!rule_active_in(candidate, mode_name) || !predicate_allows(candidate, previous)) {
           continue;
         }
         const auto matched {candidate.pattern.match(source, cursor.offset)};
@@ -345,12 +363,13 @@ namespace scilex::fuzz {
         const scilex::position err_start {cursor};
         step(cursor); // the byte at err_start is unmatched by definition
         while (cursor.offset < source.size()
-               && !reference_matches_here(local, mode_name, source, cursor.offset)) {
+               && !reference_matches_here(local, mode_name, source, cursor.offset, previous)) {
           step(cursor);
         }
         emit(scilex::token {scilex::error, source.substr(err_start.offset, cursor.offset - err_start.offset),
                             err_start, stack.back().mode_id},
              mode_name);
+        previous = scilex::error;
         continue; // stay in the mode, no transition
       }
       const scilex::position start {cursor};
@@ -360,6 +379,9 @@ namespace scilex::fuzz {
       if (emit_skipped || !best->skip) {
         emit(scilex::token {best->kind, source.substr(start.offset, best_len), start, stack.back().mode_id},
              mode_name);
+      }
+      if (!best->skip) {
+        previous = best->kind;
       }
       scilex::apply_transition(*best, start, stack); // #2 (pop at the root) stays fatal here
     }
@@ -486,9 +508,10 @@ namespace scilex::fuzz {
       const std::string&     mode_name {reference_modes[i]};
       std::size_t            longest   {0};
       bool                   kind_fits {false};
+      const int              previous  {i == 0 ? scilex::end_of_input : eager[i - 1].kind}; // no error runs: the policy raises
       for (const scilex::rule& candidate : rules) {
-        if (!rule_active_in(candidate, mode_name)) {
-          continue; // only the rules the lexer could have used in this mode
+        if (!rule_active_in(candidate, mode_name) || !predicate_allows(candidate, previous)) {
+          continue; // only the rules the lexer could have used in this mode, after the token before
         }
         const auto        matched {candidate.pattern.match(input, tok.start.offset)};
         const std::size_t len     {matched ? static_cast<std::size_t>(matched.end()) - tok.start.offset : 0};

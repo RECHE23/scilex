@@ -26,6 +26,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <numeric>
 #include <memory>
@@ -108,6 +109,16 @@ namespace scilex {
    * `python-unicode` grammar, whose identifier rule stays on Pike, keeps a smaller part of the DFA's
    * gain than `python`, whose rules all take the DFA — the Unicode identifier costs part of the fast path.
    *
+   * ## The previous token {#rule_previous_token}
+   *
+   * \ref after and \ref not_after make a rule depend on the token emitted before it, in any mode (a skip
+   * rule emits none; an error run counts, as \ref scilex::error): with `after`, the rule is active only
+   * right after a token of one of those kinds; with `not_after`, everywhere else. Before the first token
+   * the previous kind is \ref scilex::end_of_input. A rule has at most one of the two. This is how a `/`
+   * after an operand is a division and anywhere else opens a regular expression literal, without a mode
+   * for every context. The lexer gives a mode one DFA per distinct set of active rules, so the choice
+   * costs nothing per token.
+   *
    * If your identifiers are ASCII by specification (JSON, SQL, C), pin `(?a)` inline in the pattern
    * (or pass `real::flags::ascii`) to keep `\w \d \s \b` ASCII and small, DFA-representable, and fast —
    * this is what the `examples/` grammars do. If you want Unicode identifiers, write `\w+` and accept
@@ -116,11 +127,15 @@ namespace scilex {
    */
   struct rule
   {
-    int                        kind;            //!< Kind assigned to tokens this rule produces.
-    real::regex                pattern;         //!< The recognizer (a linear-time REAL regex; its flags are the author's — see above).
-    bool                       skip    {false}; //!< If true, matches are consumed but not emitted.
-    std::vector<std::string>   in_mode {};      //!< Modes this rule is active in; empty ⇒ {"default"}.
-    std::optional<mode_action> action  {};      //!< Mode transition fired when this rule wins.
+    int                        kind;              //!< Kind assigned to tokens this rule produces.
+    real::regex                pattern;           //!< The recognizer (a linear-time REAL regex; its flags are the author's — see above).
+    bool                       skip      {false}; //!< If true, matches are consumed but not emitted.
+    std::vector<std::string>   in_mode   {};      //!< Modes this rule is active in; empty ⇒ {"default"}.
+    std::optional<mode_action> action    {};      //!< Mode transition fired when this rule wins.
+    //! Active only right after a token of one of these kinds (see \ref rule_previous_token).
+    std::vector<int>           after     {};
+    //! Active except right after a token of one of these kinds (see \ref rule_previous_token).
+    std::vector<int>           not_after {};
   };
 
   /*!
@@ -348,6 +363,7 @@ namespace scilex {
     {
       build_dispatch();
       build_significance(insignificant_modes);
+      build_units();
       build_dfa_modes(dfa_modes, dfa);
       for (const rule& r : rules_) {
         left_context_ = std::max(left_context_, r.pattern.left_context());
@@ -382,9 +398,10 @@ namespace scilex {
       std::vector<token> out;
       position           cursor {0, 1, 1};
       std::vector<frame> stack {frame {.mode_id = 0, .entry_pos = cursor}}; // start in "default"
-      token              next   {};
-      munch_memos        memos  {memos_for(source)};
-      while (scan_next(source, cursor, stack, next, memos)) {
+      token              next     {};
+      munch_memos        memos    {memos_for(source)};
+      int                previous {end_of_input};                           // the kind of the token before, for after/not_after
+      while (scan_next(source, cursor, stack, next, memos, previous)) {
         out.push_back(next);
       }
       if (policy == eof_policy::append) {
@@ -447,8 +464,8 @@ namespace scilex {
     [[nodiscard]] std::vector<std::string> dfa_modes_active() const
     {
       std::vector<std::string> active;
-      for (std::size_t m {0}; m < per_mode_dfa_.size(); ++m) {
-        if (per_mode_dfa_[m]) {
+      for (std::size_t m {0}; m < mode_names_.size(); ++m) {
+        if (std::ranges::any_of(units_of_mode_[m], [this](std::size_t u) { return per_mode_dfa_[u] != nullptr; })) {
           active.push_back(mode_names_[m]);
         }
       }
@@ -469,14 +486,22 @@ namespace scilex {
       if (found == mode_id_.end()) {
         throw std::invalid_argument("pike_rules names an unknown mode: " + mode);
       }
-      const mode_dfa* const    hybrid {per_mode_dfa_[found->second].get()};
-      std::vector<std::size_t> on_pike;
-      for (std::size_t idx {0}; idx < rules_.size(); ++idx) {
-        if (rule_active_in_mode(idx, found->second) && (hybrid == nullptr || hybrid->on_pike[idx])) {
-          on_pike.push_back(idx);
+      std::vector<bool> on_pike(rules_.size(), false); // a rule on Pike in any of the mode's units
+      for (const std::size_t u : units_of_mode_[found->second]) {
+        const mode_dfa* const hybrid {per_mode_dfa_[u].get()};
+        for (const std::size_t idx : unit_rules_[u]) {
+          if (hybrid == nullptr || hybrid->on_pike[idx]) {
+            on_pike[idx] = true;
+          }
         }
       }
-      return on_pike;
+      std::vector<std::size_t> indices;
+      for (std::size_t idx {0}; idx < rules_.size(); ++idx) {
+        if (on_pike[idx]) {
+          indices.push_back(idx);
+        }
+      }
+      return indices;
     }
 
     /*!
@@ -519,12 +544,13 @@ namespace scilex {
     //!        one holds up to one bit per source byte per DFA state (Q·n bits for the mode).
     using munch_memos = std::vector<real::dfa_munch_memo>;
 
-    //! \brief The memos for one scan of \p source: one per mode, each unarmed.
+    //! \brief The memos for one scan of \p source: one per unit (a mode, or a mode's variant for a
+    //!        previous token), each unarmed.
     //! \param[in] source The text about to be scanned.
-    //! \return The memos, indexed by mode id.
+    //! \return The memos, indexed by unit.
     [[nodiscard]] munch_memos memos_for(std::string_view source) const
     {
-      return munch_memos(mode_names_.size(), real::dfa_munch_memo {source.size()});
+      return munch_memos(per_mode_.size(), real::dfa_munch_memo {source.size()});
     }
 
     //! \brief Formats a position as "line:column" for diagnostics.
@@ -559,9 +585,10 @@ namespace scilex {
                    position&           cursor,
                    std::vector<frame>& stack,
                    token&              out,
-                   munch_memos&        memos) const
+                   munch_memos&        memos,
+                   int&                previous) const
     {
-      return scan_step(source, cursor, stack, out, memos, whole_text {}) == scan_status::token;
+      return scan_step(source, cursor, stack, out, memos, previous, whole_text {}) == scan_status::token;
     }
 
     //! \brief What \ref scan_step did.
@@ -609,6 +636,8 @@ namespace scilex {
      * \param[in,out] stack  The mode stack (likewise).
      * \param[out]    out    The token, on \ref scan_status::token.
      * \param[in,out] memos  What earlier munches over \p source proved.
+     * \param[in,out] previous The kind of the token before (\ref scilex::end_of_input before the first);
+     *                         set to the kind of the token produced.
      * \param[in]     gate   The gate.
      * \return What the step did.
      * \throws lex_error As \ref scan_next.
@@ -619,14 +648,16 @@ namespace scilex {
                           std::vector<frame>& stack,
                           token&              out,
                           munch_memos&        memos,
+                          int&                previous,
                           const Gate&         gate) const
     {
       while (cursor.offset < source.size()) {
         const std::size_t mode {stack.back().mode_id};
-        if (!gate.ready(mode, cursor.offset)) {
+        const std::size_t unit {unit_of(mode, previous)}; // the mode's rules active after `previous`
+        if (!gate.ready(unit, cursor.offset)) {
           return scan_status::pending;
         }
-        const munch_result m {munch_at(mode, source, cursor.offset, memos)};
+        const munch_result m {munch_at(unit, source, cursor.offset, memos)};
         if (m.open && !gate.at_end()) {
           return scan_status::pending; // the DFA rules' munch may still change with what comes next
         }
@@ -644,11 +675,11 @@ namespace scilex {
           const position err_start {cursor};
           advance(source, cursor, 1); // the byte at err_start is unmatched by definition
           while (cursor.offset < source.size()) {
-            if (!gate.ready(mode, cursor.offset)) {
+            if (!gate.ready(unit, cursor.offset)) {
               return scan_status::pending;
             }
-            if (may_start(mode, static_cast<unsigned char>(source[cursor.offset]))) {
-              const munch_result probe {munch_at(mode, source, cursor.offset, memos)};
+            if (may_start(unit, static_cast<unsigned char>(source[cursor.offset]))) {
+              const munch_result probe {munch_at(unit, source, cursor.offset, memos)};
               if (probe.open && !gate.at_end()) {
                 return scan_status::pending;
               }
@@ -661,8 +692,9 @@ namespace scilex {
           if (cursor.offset == source.size() && !gate.at_end()) {
             return scan_status::pending; // the run may go on into text still to come
           }
-          out = token {scilex::error, source.substr(err_start.offset, cursor.offset - err_start.offset),
-                       err_start, mode};
+          out      = token {scilex::error, source.substr(err_start.offset, cursor.offset - err_start.offset),
+                            err_start, mode};
+          previous = scilex::error;
           return scan_status::token;
         }
         if (m.len == 0) {
@@ -689,7 +721,8 @@ namespace scilex {
         if (!rules_[best_idx].skip) {
           // Tag the token with the mode it was lexed in (captured before the
           // transition above) — Layout Awareness reads it; the scan is untouched.
-          out = token {rules_[best_idx].kind, source.substr(start.offset, best_len), start, mode};
+          out      = token {rules_[best_idx].kind, source.substr(start.offset, best_len), start, mode};
+          previous = out.kind;
           return scan_status::token;
         }
         // Skip rule: keep scanning for the next emitted token (possibly in a new mode).
@@ -705,7 +738,7 @@ namespace scilex {
         // Recovery (error_policy::token): a mode was still pushed at end of input. Emit one zero-width
         // error token positioned at the EOF (the partial tokens already emitted stay), then unwind to
         // the root so the next call reports a clean end of input.
-        out = token {scilex::error, source.substr(cursor.offset, 0), cursor, stack.back().mode_id};
+        out = token {scilex::error, source.substr(cursor.offset, 0), cursor, stack.back().mode_id}; // the last token
         stack.resize(1);
         return scan_status::token;
       }
@@ -830,6 +863,100 @@ namespace scilex {
           candidate.action->target_id = mode_id_.at(candidate.action->target);
         }
       }
+    }
+
+    /*!
+     * \brief Splits each mode by the previous token (\ref rule::after, \ref rule::not_after): the kinds
+     *        are grouped by which of the mode's predicated rules they allow, and each group is a unit with
+     *        its own dispatch (and DFA). The group of a kind no predicate names keeps the mode's id; the
+     *        others take ids past the modes'. A mode with no predicated rule is one unit, its own.
+     * \throws std::invalid_argument On a rule with both `after` and `not_after`.
+     */
+    void build_units()
+    {
+      const std::size_t modes {mode_names_.size()};
+      units_of_mode_.assign(modes, {});
+      unit_rules_.assign(modes, {});
+      variants_.assign(modes, {});
+      for (std::size_t idx {0}; idx < rules_.size(); ++idx) {
+        if (!rules_[idx].after.empty() && !rules_[idx].not_after.empty()) {
+          throw std::invalid_argument("rule " + std::to_string(idx) + ": a rule has after or not_after, not both");
+        }
+      }
+      const auto allowed {[this](std::size_t idx, int previous) {
+                            const rule& r {rules_[idx]};
+                            if (!r.after.empty()) {
+                              return std::ranges::find(r.after, previous) != r.after.end();
+                            }
+                            return std::ranges::find(r.not_after, previous) == r.not_after.end();
+                          }};
+      for (std::size_t m {0}; m < modes; ++m) {
+        std::vector<std::size_t> active;
+        std::vector<int>         named; // every kind a predicate of this mode names
+        for (std::size_t idx {0}; idx < rules_.size(); ++idx) {
+          if (rule_active_in_mode(idx, m)) {
+            active.push_back(idx);
+            named.insert(named.end(), rules_[idx].after.begin(), rules_[idx].after.end());
+            named.insert(named.end(), rules_[idx].not_after.begin(), rules_[idx].not_after.end());
+          }
+        }
+        std::ranges::sort(named);
+        named.erase(std::ranges::unique(named).begin(), named.end());
+        // A kind no predicate names stands for every such kind: they all share the mode's own unit.
+        int unnamed {std::numeric_limits<int>::min()};
+        for (const int kind : named) { // ascending and distinct: the first gap
+          if (kind != unnamed) {
+            break;
+          }
+          ++unnamed;
+        }
+        const auto rules_after {[&](int previous) {
+                                  std::vector<std::size_t> out;
+                                  std::ranges::copy_if(active, std::back_inserter(out),
+                                                       [&](std::size_t idx) { return allowed(idx, previous); });
+                                  return out;
+                                }};
+        const std::vector<std::size_t> own {rules_after(unnamed)};
+        unit_rules_[m] = own;
+        units_of_mode_[m].push_back(m);
+        if (own.size() != active.size()) {
+          per_mode_[m] = dispatch {};
+          for (const std::size_t idx : own) {
+            add_to_mode(m, idx);
+          }
+        }
+        for (const int kind : named) {
+          std::vector<std::size_t> rules_for {rules_after(kind)};
+          const auto               existing  {std::ranges::find_if(units_of_mode_[m], [&](std::size_t u) { return unit_rules_[u] == rules_for; })};
+          std::size_t              unit      {};
+          if (existing != units_of_mode_[m].end()) {
+            unit = *existing;
+          }
+          else {
+            unit = per_mode_.size();
+            per_mode_.emplace_back();
+            for (const std::size_t idx : rules_for) {
+              add_to_mode(unit, idx);
+            }
+            unit_rules_.push_back(std::move(rules_for));
+            units_of_mode_[m].push_back(unit);
+          }
+          // Never the mode's own unit: a predicate of this mode names `kind`, so treats it unlike an unnamed one.
+          variants_[m].emplace_back(kind, unit);
+        }
+      }
+    }
+
+    //! \brief The unit that munches in \p mode after a token of kind \p previous (\ref build_units).
+    [[nodiscard]] std::size_t unit_of(std::size_t mode,
+                                      int         previous) const
+    {
+      const std::vector<std::pair<int, std::size_t>>& variants {variants_[mode]};
+      if (variants.empty()) [[likely]] {
+        return mode;
+      }
+      const auto found {std::ranges::lower_bound(variants, previous, {}, &std::pair<int, std::size_t>::first)};
+      return found != variants.end() && found->first == previous ? found->second : mode;
     }
 
     //! \brief Builds the layout-significance policy from the insignificant-mode
@@ -1201,7 +1328,7 @@ namespace scilex {
     void build_dfa_modes(const std::vector<std::string>& dfa_modes,
                          dfa_policy                      policy)
     {
-      per_mode_dfa_.assign(mode_names_.size(), nullptr);
+      per_mode_dfa_.assign(per_mode_.size(), nullptr);
       std::vector<std::size_t> tried;
       for (const std::string& name : dfa_modes) {
         const auto found {mode_id_.find(name)};
@@ -1217,14 +1344,10 @@ namespace scilex {
       std::ranges::sort(tried);
       tried.erase(std::ranges::unique(tried).begin(), tried.end()); // a mode named twice is built once
       for (const std::size_t mode : tried) {
-        std::vector<std::size_t> to_global;
-        for (std::size_t idx {0}; idx < rules_.size(); ++idx) {
-          if (rule_active_in_mode(idx, mode)) {
-            to_global.push_back(idx);
+        for (const std::size_t unit : units_of_mode_[mode]) {
+          if (auto built {try_build_mode_dfa(unit_rules_[unit])}) {
+            per_mode_dfa_[unit] = std::make_shared<const mode_dfa>(std::move(*built));
           }
-        }
-        if (auto built {try_build_mode_dfa(to_global)}) {
-          per_mode_dfa_[mode] = std::make_shared<const mode_dfa>(std::move(*built));
         }
       }
     }
@@ -1236,15 +1359,19 @@ namespace scilex {
       std::vector<std::size_t>                  general;          //!< Nullable rules (tried everywhere).
     };
 
-    std::vector<rule>                            rules_;            //!< The ordered token rules.
-    error_policy                                 errors_;           //!< What to do at an unmatched byte.
-    scilex::column_unit                          columns_;          //!< The unit position::column is counted in.
-    std::vector<std::string>                     mode_names_;       //!< Mode id -> name ("default" is id 0).
-    std::map<std::string, std::size_t>           mode_id_;          //!< Mode name -> id.
-    std::vector<dispatch>                        per_mode_;         //!< Dispatch index, one per mode (by id).
-    std::vector<std::shared_ptr<const mode_dfa>> per_mode_dfa_;     //!< Per-mode DFA fast path (nullptr = Pike).
-    std::vector<bool>                            mode_significant_; //!< Layout policy (empty = all significant).
-    std::size_t                                  left_context_ {0}; //!< Bytes before a token start any rule may read.
+    std::vector<rule>                            rules_;                     //!< The ordered token rules.
+    error_policy                                 errors_;                    //!< What to do at an unmatched byte.
+    scilex::column_unit                          columns_;                   //!< The unit position::column is counted in.
+    std::vector<std::string>                     mode_names_;                //!< Mode id -> name ("default" is id 0).
+    std::map<std::string, std::size_t>           mode_id_;                   //!< Mode name -> id.
+    std::vector<dispatch>                        per_mode_;                  //!< Dispatch index, one per unit (a mode's id is its own unit).
+    std::vector<std::shared_ptr<const mode_dfa>> per_mode_dfa_;              //!< Per-unit DFA fast path (nullptr = Pike).
+    std::vector<std::vector<std::size_t>>        units_of_mode_;             //!< Mode id -> its units (its own id first).
+    std::vector<std::vector<std::size_t>>        unit_rules_;                //!< Unit -> its active rules, ascending.
+    //! Mode id -> (previous kind, unit) for the kinds whose unit is not the mode's own, by kind.
+    std::vector<std::vector<std::pair<int, std::size_t>>> variants_;
+    std::vector<bool>                                     mode_significant_; //!< Layout policy (empty = all significant).
+    std::size_t                                           left_context_ {0}; //!< Bytes before a token start any rule may read.
   };
 
   /*!
@@ -1341,6 +1468,7 @@ namespace scilex {
     bool               eof_done_ {false};                                               //!< End-of-input token already yielded.
     bool               done_     {true};                                                //!< True once exhausted (end sentinel).
     lexer::munch_memos memos_;                                                          //!< What this scan's munches proved.
+    int                previous_ {end_of_input};                                        //!< The kind of the token before.
 
     //! \brief Produces the next token, or marks the iterator exhausted.
     void advance()
@@ -1348,7 +1476,7 @@ namespace scilex {
       if (done_) {
         return;
       }
-      if (owner_->scan_next(source_, cursor_, stack_, current_, memos_)) {
+      if (owner_->scan_next(source_, cursor_, stack_, current_, memos_, previous_)) {
         return;
       }
       // Input exhausted: yield one end-of-input token if requested, else stop.
@@ -1510,8 +1638,8 @@ namespace scilex {
       bool                     final;  //!< The end of the buffer is the end of the text.
       std::vector<undo_entry>* undo;   //!< The step's transitions, latest last.
 
-      //! \brief Whether the munch at \p offset in mode \p mode is final.
-      //! \param[in] mode   The active mode.
+      //! \brief Whether the munch at \p offset in unit \p mode is final.
+      //! \param[in] mode   The active unit (the mode, or its variant for the previous token).
       //! \param[in] offset Where the munch starts, in the buffer.
       //! \return True when no text still to come can change it.
       [[nodiscard]] bool ready(std::size_t mode,
@@ -1568,7 +1696,7 @@ namespace scilex {
         lexer::scan_status status       {lexer::scan_status::end};
         undo_.clear();
         try {
-          status = owner_->scan_step(buffer_, cursor_, stack_, next, memos, g);
+          status = owner_->scan_step(buffer_, cursor_, stack_, next, memos, previous_, g);
         }
         catch (const lex_error& e) {
           finished_ = true;
@@ -1640,14 +1768,15 @@ namespace scilex {
       return where;
     }
 
-    const lexer     *       owner_;              //!< The lexer.
-    std::string             buffer_;             //!< The text from the first token not yet returned.
-    std::size_t             base_     {0};       //!< Offset of the buffer's first byte in the whole text.
-    position                cursor_   {0, 1, 1}; //!< Where lexing resumes, in the buffer (line and column in the text).
-    std::vector<frame>      stack_;              //!< The mode stack.
-    std::vector<undo_entry> undo_;               //!< The transitions of the step under way (see \ref gate::undo).
-    std::string             tail_;               //!< Fed bytes held back: a code point not yet complete.
-    bool                    finished_ {false};   //!< \ref finish was called, or a lex_error ended the text.
+    const lexer     *       owner_;                   //!< The lexer.
+    std::string             buffer_;                  //!< The text from the first token not yet returned.
+    std::size_t             base_     {0};            //!< Offset of the buffer's first byte in the whole text.
+    position                cursor_   {0, 1, 1};      //!< Where lexing resumes, in the buffer (line and column in the text).
+    std::vector<frame>      stack_;                   //!< The mode stack.
+    std::vector<undo_entry> undo_;                    //!< The transitions of the step under way (see \ref gate::undo).
+    std::string             tail_;                    //!< Fed bytes held back: a code point not yet complete.
+    bool                    finished_ {false};        //!< \ref finish was called, or a lex_error ended the text.
+    int                     previous_ {end_of_input}; //!< The kind of the token before the cursor.
   };
 
   inline token_stream lexer::stream() const&

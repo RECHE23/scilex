@@ -877,6 +877,54 @@ class ErrorCauseTests(unittest.TestCase):
         self.assertIn("cannot pop the mode stack", str(caught.exception))
 
 
+class PreviousTokenTests(unittest.TestCase):
+    """A rule active only after, or except after, a token of given kinds: a `/` divides after an operand and
+    opens a regex literal elsewhere."""
+
+    OPERANDS = [1, 2, 4]
+    RULES = [(0, r"\s+", True), (1, r"(?a)[a-z]+"), (2, r"[0-9]+"), (3, r"[=+(]"), (4, r"\)"),
+             (5, "/", False, [], None, OPERANDS), (6, r"/[^/\n]+/[a-z]*", False, [], None, None, OPERANDS)]
+
+    def kinds(self, lexer, text):
+        return [(t.kind, t.lexeme) for t in lexer.tokenize(text)]
+
+    def test_division_after_an_operand_and_a_regex_elsewhere(self):
+        lexer = scilex.Lexer(self.RULES)
+        self.assertEqual(self.kinds(lexer, "a / b"), [(1, "a"), (5, "/"), (1, "b")])
+        self.assertEqual(self.kinds(lexer, "x = /ab+/g"), [(1, "x"), (3, "="), (6, "/ab+/g")])
+        self.assertEqual(self.kinds(lexer, "(1)/2"), [(3, "("), (2, "1"), (4, ")"), (5, "/"), (2, "2")])
+        self.assertEqual(self.kinds(lexer, "/x/"), [(6, "/x/")])  # before the first token: no operand
+        self.assertEqual(lexer.rules[5], (5, "/", False, [], None, self.OPERANDS, []))
+
+    def test_a_stream_gives_the_same_tokens(self):
+        lexer = scilex.Lexer(self.RULES)
+        text = "x = /ab+/g + a / 2 /y/"
+        stream = lexer.stream()
+        streamed = [t for i in range(len(text)) for t in stream.feed(text[i])] + stream.finish()
+        self.assertEqual([(t.kind, t.lexeme) for t in streamed], self.kinds(lexer, text))
+
+    def test_the_start_is_end_of_input(self):
+        lexer = scilex.Lexer([(0, r"\s+", True), (1, "#![^\n]*", False, [], None, [scilex.END_OF_INPUT]),
+                              (2, "#"), (3, "[a-z]+")])
+        self.assertEqual(self.kinds(lexer, "#!sh x"), [(1, "#!sh x")])
+        self.assertEqual(self.kinds(lexer, "x #"), [(3, "x"), (2, "#")])
+
+    def test_refusals(self):
+        with self.assertRaises(ValueError):
+            scilex.Lexer([(0, "a", False, [], None, [1], [2])])
+        with self.assertRaises(TypeError):
+            scilex.Lexer([(0, "a", False, [], None, ["x"])])
+
+    def test_lex_options_name_rules(self):
+        g = scilex.parse_grammar("ID\t[a-z]+\nDIV\t/\tafter=ID\nRE\t/[a-z]+/\tnot_after=ID\nWS\t\\s+\tskip\n")
+        self.assertEqual(g.rules[1], (1, "/", False, [], None, [0], []))
+        self.assertEqual([(g.name(t.kind), t.lexeme) for t in g.lexer().tokenize("/re/ a / b")],
+                         [("RE", "/re/"), ("ID", "a"), ("DIV", "/"), ("ID", "b")])
+        with self.assertRaises(scilex.GrammarError) as caught:
+            scilex.parse_grammar("A\ta\nB\tb\tafter=Z\n")
+        self.assertEqual((caught.exception.line, caught.exception.column), (2, 5))
+
+
 class GrammarTests(unittest.TestCase):
     """The .lex format through the one C++ parser (scilex/grammar.hpp)."""
 
@@ -924,7 +972,7 @@ class GrammarTests(unittest.TestCase):
         with self.assertRaises(scilex.GrammarError) as caught:
             scilex.parse_grammar("A\ta\tbogus\n")
         self.assertEqual(caught.exception.cause,
-                         "unknown option 'bogus' (expected skip, in=, push=, set= or pop)")
+                         "unknown option 'bogus' (expected skip, in=, push=, set=, pop, after= or not_after=)")
         with self.assertRaises(scilex.GrammarError) as caught:
             scilex.parse_grammar("# nothing\n")
         self.assertEqual(caught.exception.line, 0)

@@ -107,7 +107,7 @@ namespace {
 
     const scilex::grammar_error unknown {refusal("A\ta\tskip  bogus\n")};
     EXPECT_EQ(unknown.column(), 11U);
-    EXPECT_EQ(unknown.cause(), "unknown option 'bogus' (expected skip, in=, push=, set= or pop)");
+    EXPECT_EQ(unknown.cause(), "unknown option 'bogus' (expected skip, in=, push=, set=, pop, after= or not_after=)");
 
     const scilex::grammar_error two {refusal("A\ta\tpush=x pop\n")};
     EXPECT_EQ(two.column(), 12U);
@@ -202,5 +202,38 @@ namespace {
     EXPECT_EQ(inactive.line(), 2U);
     EXPECT_EQ(inactive.column(), 18U);
     EXPECT_EQ(inactive.cause(), "no rule is active in mode 'nope' (give one in=nope)");
+  }
+
+  // after= and not_after= name rules (each name every rule bearing it, earlier or later) or ^, the start.
+  TEST(grammar_predicates_name_rules_and_the_start)
+  {
+    const scilex::grammar g {scilex::parse_grammar("WS\t\\s+\tskip\nID\t[a-z]+\nNUM\t[0-9]+\n"
+                                                   "DIV\t/\tafter=ID,NUM,CLOSE\nRE\t/[^/]+/\tnot_after=ID,NUM,CLOSE\n"
+                                                   "CLOSE\t\\)\nCLOSE\t\\]\nHASH\t#!.*\tafter=^\nOP\t#\n")};
+    EXPECT(g.rules[3].after == (std::vector<int> {1, 2, 5, 6})); // both CLOSE rules
+    EXPECT(g.rules[3].not_after.empty());
+    EXPECT(g.rules[4].not_after == (std::vector<int> {1, 2, 5, 6}));
+    EXPECT(g.rules[7].after == (std::vector<int> {scilex::end_of_input}));
+    const scilex::lexer lex {g.rules};
+    std::vector<int>    kinds;
+    for (const scilex::token& t : lex.tokenize("a / 2 # /x/ ] / 1")) { // after `#`, not an operand: a regex
+      kinds.push_back(t.kind);
+    }
+    EXPECT(kinds == (std::vector<int> {1, 3, 2, 8, 4, 6, 3, 2}));
+    std::vector<int> start;
+    for (const scilex::token& t : lex.tokenize("#!x #")) {
+      start.push_back(t.kind);
+    }
+    EXPECT(start == (std::vector<int> {7})); // HASH runs to the end of the line
+  }
+
+  TEST(grammar_predicate_refusals_name_their_line_and_column)
+  {
+    const scilex::grammar_error unknown {refusal("A\ta\nB\tb\tafter=A,Z\n")};
+    EXPECT_EQ(unknown.line(), 2U);
+    EXPECT_EQ(unknown.column(), 5U);
+    EXPECT_EQ(unknown.cause(), "no rule is named 'Z' (after= and not_after= name rules, or ^)");
+    EXPECT_EQ(refusal("A\ta\tafter=A not_after=A\n").cause(), "a rule takes one of after= and not_after=, once");
+    EXPECT_EQ(refusal("A\ta\tafter=A,\n").cause(), "empty rule name in 'after=A,'");
   }
 } // namespace

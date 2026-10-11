@@ -1,7 +1,7 @@
 // SciLex — Python extension module (CPython Limited API, abi3).
 //
 // Exposes the generic maximal-munch lexer:
-//   _scilex.compile(rules) -> capsule        # [(kind, pattern, skip[, in_mode[, action]]), …]
+//   _scilex.compile(rules) -> capsule        # [(kind, pattern, skip[, in_mode[, action[, after[, not_after]]]]), …]
 //   _scilex.tokenize(handle, text, eof) -> list  # [(kind, lexeme, offset, line, column, mode), …]
 //   _scilex.scan_start(handle, text, eof) -> capsule  # a lazy scan cursor
 //   _scilex.scan_next(cursor) -> tuple | None    # the next 6-token tuple, or None at the end
@@ -38,6 +38,7 @@
 #include <map>
 #include <optional>
 #include <stdexcept>
+#include <limits>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -469,6 +470,38 @@ void stream_capsule_free(PyObject* capsule)
     }
 }
 
+// Parses a rule's optional `after` or `not_after` field into kinds. None/absent -> empty; otherwise a
+// sequence of int. Returns 0 on success, -1 (error set) otherwise.
+int parse_kinds(PyObject* obj, std::vector<int>* out, const char* field)
+{
+    if (obj == nullptr || obj == Py_None) {
+        return 0;
+    }
+    const Py_ssize_t count = PySequence_Size(obj);
+    if (count < 0) {
+        PyErr_Clear();
+        PyErr_Format(sciforge_module_error(), "%s must be a sequence of int kinds", field);
+        return -1;
+    }
+    for (Py_ssize_t i = 0; i < count; ++i) {
+        PyObject* item = PySequence_GetItem(obj, i); // new ref
+        if (item == nullptr) {
+            return -1;
+        }
+        const long kind = PyLong_AsLong(item);
+        Py_DECREF(item);
+        if (kind == -1 && PyErr_Occurred() != nullptr) {
+            return -1;
+        }
+        if (kind < std::numeric_limits<int>::min() || kind > std::numeric_limits<int>::max()) {
+            PyErr_Format(PyExc_OverflowError, "%s: kind %ld does not fit an int", field, kind);
+            return -1;
+        }
+        out->push_back(static_cast<int>(kind));
+    }
+    return 0;
+}
+
 // Parses a rule's optional `in_mode` field into mode names. None/absent -> empty
 // (the rule lives in the default mode only); otherwise a sequence of str. A bare
 // str is rejected (it would silently char-split). Returns 0 on success, -1 (error
@@ -619,24 +652,32 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
             int         skip        = 0;
             PyObject*   in_mode_obj = nullptr; // optional 4th field (borrowed)
             PyObject*   action_obj  = nullptr; // optional 5th field (borrowed)
-            const int   parsed      = PyArg_ParseTuple(item, "isp|OO", &kind, &pattern, &skip,
-                                                       &in_mode_obj, &action_obj);
+            PyObject*   after_obj   = nullptr; // optional 6th field (borrowed)
+            PyObject*   not_obj     = nullptr; // optional 7th field (borrowed)
+            const int   parsed      = PyArg_ParseTuple(item, "isp|OOOO", &kind, &pattern, &skip,
+                                                       &in_mode_obj, &action_obj, &after_obj, &not_obj);
             // pattern, in_mode_obj and action_obj all borrow from `item` — read them
             // (copying through) before releasing it.
             std::string                        pattern_copy {parsed != 0 && pattern != nullptr ? pattern : ""};
             std::vector<std::string>           in_mode;
             std::optional<scilex::mode_action> action;
+            std::vector<int>                   after;
+            std::vector<int>                   not_after;
             const bool                         extras_ok = parsed != 0
                                                            && parse_in_mode(in_mode_obj, &in_mode, "in_mode") == 0
-                                                           && parse_action(action_obj, &action) == 0;
+                                                           && parse_action(action_obj, &action) == 0
+                                                           && parse_kinds(after_obj, &after, "after") == 0
+                                                           && parse_kinds(not_obj, &not_after, "not_after") == 0;
             Py_DECREF(item);
             if (parsed == 0 || !extras_ok) {
                 return nullptr; // PyArg / parse_in_mode / parse_action set the error
             }
             try {
                 scilex::rule built {kind, real::regex(pattern_copy), skip != 0};
-                built.in_mode = std::move(in_mode);
-                built.action  = action;
+                built.in_mode   = std::move(in_mode);
+                built.action    = action;
+                built.after     = std::move(after);
+                built.not_after = std::move(not_after);
                 rules.push_back(std::move(built));
             }
             catch (const real::regex_error& error) {
@@ -689,6 +730,22 @@ std::string column_unit(scilex::lexer* lexer)
     return "bytes";
 }
 
+// A list of int kinds, or nullptr with the error set.
+PyObject* kinds_list(const std::vector<int>& kinds)
+{
+    PyObject* out = PyList_New(0);
+    for (std::size_t i = 0; out != nullptr && i < kinds.size(); ++i) {
+        PyObject* kind = PyLong_FromLong(kinds[i]);
+        if (kind == nullptr || PyList_Append(out, kind) != 0) {
+            Py_XDECREF(kind);
+            Py_DECREF(out);
+            return nullptr;
+        }
+        Py_DECREF(kind);
+    }
+    return out;
+}
+
 // _scilex.parse_grammar(text, origin) -> (rules, names, insignificant_modes): the .lex grammar parsed by
 // scilex/grammar.hpp,
 // each rule as the (kind, pattern, skip, in_mode, action) tuple compile() takes, so the Python and CLI
@@ -732,9 +789,21 @@ PyObject* scilex_parse_grammar(PyObject* /*self*/, PyObject* args)
                 ok = action != nullptr;
             }
             const std::string_view pattern {r.pattern.pattern()};
-            PyObject* tuple = ok ? Py_BuildValue("(is#OOO)", r.kind, pattern.data(), static_cast<Py_ssize_t>(pattern.size()),
-                                                 r.skip ? Py_True : Py_False, in_mode, action)
-                                 : nullptr;
+            PyObject*              tuple   = nullptr;
+            if (ok && r.after.empty() && r.not_after.empty()) {
+                tuple = Py_BuildValue("(is#OOO)", r.kind, pattern.data(), static_cast<Py_ssize_t>(pattern.size()),
+                                      r.skip ? Py_True : Py_False, in_mode, action);
+            }
+            else if (ok) { // a predicated rule: the 7-tuple Lexer normalizes it to
+                PyObject* after     = kinds_list(r.after);
+                PyObject* not_after = kinds_list(r.not_after);
+                tuple = after == nullptr || not_after == nullptr
+                        ? nullptr
+                        : Py_BuildValue("(is#OOOOO)", r.kind, pattern.data(), static_cast<Py_ssize_t>(pattern.size()),
+                                        r.skip ? Py_True : Py_False, in_mode, action, after, not_after);
+                Py_XDECREF(after);
+                Py_XDECREF(not_after);
+            }
             ok = tuple != nullptr && PyList_Append(rules, tuple) == 0;
             Py_XDECREF(tuple);
             Py_XDECREF(action);

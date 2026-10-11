@@ -254,6 +254,16 @@ def _attach_position(exc, source=None, base=0):
     exc.args = (f"{exc}; at line {exc.line}, column {exc.column}: {exc.context}",)
 
 
+def _normalize_kinds(kinds, index, field):
+    """A rule's `after` or `not_after` as a list of int kinds (None or absent: none)."""
+    if kinds is None:
+        return []
+    try:
+        return [operator.index(kind) for kind in kinds]
+    except TypeError:
+        raise TypeError(f"rule {index}: {field} must be a sequence of int kinds") from None
+
+
 def _normalize_action(action, index):
     """Validate a rule action into ``None`` | ``("push"|"set", mode)`` | ``("pop",)``."""
     if action is None:
@@ -357,7 +367,13 @@ class Lexer:
                         f"got {type(mode).__name__}")
                 modes.append(mode)
             action = _normalize_action(entry[4] if len(entry) > 4 else None, len(normalized))
-            if modes or action is not None:
+            after = _normalize_kinds(entry[5] if len(entry) > 5 else None, len(normalized), "after")
+            not_after = _normalize_kinds(entry[6] if len(entry) > 6 else None, len(normalized), "not_after")
+            if after and not_after:
+                raise ValueError(f"rule {len(normalized)}: a rule has after or not_after, not both")
+            if after or not_after:
+                normalized.append((kind, pattern, skip, modes, action, after, not_after))
+            elif modes or action is not None:
                 normalized.append((kind, pattern, skip, modes, action))
             else:
                 normalized.append((kind, pattern, skip)) # plain rule stays a triple

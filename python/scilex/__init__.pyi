@@ -59,17 +59,25 @@ def load_grammar(path: str | os.PathLike[str]) -> Grammar: ...
 #: A mode transition: ("push", mode), ("set", mode), or ("pop",).
 _Action = tuple[str, str] | tuple[str]
 
-#: A rule: (kind, pattern[, skip[, in_mode[, action]]]). in_mode is a sequence of
-#: mode names the rule is active in; action drives the mode stack (or None).
+#: A rule: (kind, pattern[, skip[, in_mode[, action[, after[, not_after]]]]]). in_mode is a sequence of
+#: mode names the rule is active in; action drives the mode stack (or None); after / not_after the kinds of
+#: the previous token the rule is active only after / except after (END_OF_INPUT before the first).
 _Rule = (
     tuple[int, str]
     | tuple[int, str, bool]
     | tuple[int, str, bool, Iterable[str]]
     | tuple[int, str, bool, Iterable[str], _Action | None]
+    | tuple[int, str, bool, Iterable[str], _Action | None, Iterable[int] | None]
+    | tuple[int, str, bool, Iterable[str], _Action | None, Iterable[int] | None, Iterable[int] | None]
 )
 
-#: A rule as normalized by Lexer.rules: a plain triple, or the modal 5-tuple.
-_NormRule = tuple[int, str, bool] | tuple[int, str, bool, list[str], _Action | None]
+#: A rule as normalized by Lexer.rules: a plain triple, the modal 5-tuple, or, with a predicate on the
+#: previous token, the 7-tuple (…, after, not_after).
+_NormRule = (
+    tuple[int, str, bool]
+    | tuple[int, str, bool, list[str], _Action | None]
+    | tuple[int, str, bool, list[str], _Action | None, list[int], list[int]]
+)
 
 # Position and Token are extension types that cannot be subclassed.
 @final

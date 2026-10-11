@@ -8,6 +8,15 @@ fuzz oracle.
 ## Unreleased
 
 ### Added
+- **A rule can depend on the token before it** (`rule::after`, `rule::not_after`): active only right after a
+  token of the kinds listed, or everywhere else — a `/` that divides after an operand and opens a regular
+  expression literal elsewhere, as JavaScript lexes it, without a mode per context. The previous token is the
+  last one emitted in any mode (a skipped match is none, an error run is one; `end_of_input` before the first).
+  The lexer gives a mode one DFA per distinct set of rules the previous token leaves active, so it costs
+  nothing per token, and the stream, the lazy scan and `tokenize` agree as before. Python: two optional fields
+  of a rule tuple, `(…, action, after, not_after)`; `.lex`: `after=A,B` and `not_after=A,B` name rules (`^` for
+  the start). The oracle fuzzer draws them in its random grammars, against a reference that states the rule
+  directly.
 - **`%insignificant m1,m2` in a `.lex` grammar** names the modes whose tokens carry no layout structure, which
   the lexer built from it takes as its `insignificant_modes` (the CLI's `--layout` too). C++:
   `grammar::insignificant_modes`; Python: `Grammar.insignificant_modes`, which `Grammar.lexer()` uses unless

@@ -41,6 +41,38 @@ open.in_mode = {"default", "interp"};
 open.action  = scilex::mode_action {.operation = op::push, .target = "fstr"};
 ```
 
+## The token before
+
+Some decisions depend only on the token before, not on a region of text: in JavaScript a `/` after an
+operand divides, and anywhere else opens a regular expression literal. A mode per context would have to
+be entered and left around every operand. Instead a rule can name the kinds of the previous token:
+`after` makes it active only right after a token of one of those kinds, `not_after` everywhere else.
+
+```pycon
+>>> WS, NAME, NUMBER, CLOSE, DIVIDE, REGEX = range(6)
+>>> operands = [NAME, NUMBER, CLOSE]
+>>> js = scilex.Lexer([
+...     (WS, r"\s+", True),
+...     (NAME, r"(?a)[A-Za-z_]\w*"),
+...     (NUMBER, r"[0-9]+"),
+...     (CLOSE, r"\)"),
+...     (DIVIDE, "/", False, [], None, operands),                      # after
+...     (REGEX, r"/[^/\n]+/[a-z]*", False, [], None, None, operands),  # not_after
+... ])
+>>> [(t.kind, t.lexeme) for t in js.tokenize("a / b")]
+[(1, 'a'), (4, '/'), (1, 'b')]
+>>> [(t.kind, t.lexeme) for t in js.tokenize("/ab+/g")]
+[(5, '/ab+/g')]
+```
+
+The previous token is the last one emitted, in whatever mode: a skipped match (whitespace, a comment) is
+not one, an error run under {doc}`error recovery <errors>` is (`scilex.ERROR`), and before the first token
+it is `scilex.END_OF_INPUT`, so `after=[scilex.END_OF_INPUT]` keeps a rule to the start of the input. A rule
+has at most one of the two. The lexer gives a mode one DFA for each distinct set of rules the previous
+token leaves active, so the choice costs nothing per token. In C++ the fields are `rule::after` and
+`rule::not_after`; in a `.lex` grammar the options `after=` and `not_after=` name rules
+({doc}`grammar-format`).
+
 ## What can go wrong
 
 - **Input ending inside a pushed mode** is an error, `unterminated mode 'fstr' (entered at …)`, which

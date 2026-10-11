@@ -303,7 +303,8 @@ namespace {
   }
 
   //! \brief One to five rules, in `default`, in a second mode `m` or in both, some skipped, some with a
-  //!        transition; nothing when a drawn pattern does not compile under its flags.
+  //!        transition, some active only after (or except after) a drawn previous token; nothing when a
+  //!        drawn pattern does not compile under its flags.
   std::optional<drawn_grammar> draw_grammar(std::mt19937& rng)
   {
     drawn_grammar     out;
@@ -333,9 +334,28 @@ namespace {
         case 3:  rule.action = scilex::mode_action {.operation = scilex::mode_action::op::set, .target = "default"}; break;
         default: break;
       }
+      // A predicate on the token before: one or two of the grammar's kinds, the start, an error run.
+      const auto some_kinds {[&] {
+                               std::vector<int> kinds;
+                               for (std::size_t k {1 + draw(rng, 2)}; k > 0; --k) {
+                                 const std::size_t pick {draw(rng, count + 2)};
+                                 kinds.push_back(pick < count ? static_cast<int>(pick)
+                                                 : pick == count ? scilex::end_of_input : scilex::error);
+                               }
+                               return kinds;
+                             }};
+      std::string predicate;
+      switch (draw(rng, 6)) {
+        case 0:  rule.after     = some_kinds(); predicate = " after"; break;
+        case 1:  rule.not_after = some_kinds(); predicate = " not_after"; break;
+        default: break;
+      }
+      for (const int kind : rule.after.empty() ? rule.not_after : rule.after) {
+        predicate += ' ' + (kind == scilex::end_of_input ? std::string {"start"} : kind == scilex::error ? std::string {"error"} : std::to_string(kind));
+      }
       out.description += "  " + std::to_string(i) + ": " + preview(pattern) + (raw ? " (bytes)" : "")
                          + (rule.skip ? " skip" : "") + (rule.in_mode.empty() ? "" : " in=" + rule.in_mode.back())
-                         + (rule.action ? " action" : "") + '\n';
+                         + (rule.action ? " action" : "") + predicate + '\n';
       out.rules.push_back(std::move(rule));
     }
     return out;
