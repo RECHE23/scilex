@@ -17,8 +17,8 @@ foundation — see the [design tour](https://github.com/RECHE23/scilex/blob/main
 ## Measurement stamp
 
 Every table below was measured on **Apple M1 Pro** (arm64, 8 cores), **Apple LLVM 16.0.0**
-(`clang-1600.0.26.6`), `-O2`, against **real-regex 2026.10.9**, SciLex at `e7f5c86`, on
-**2026-10-09**, **on AC power**, unless a section names another stamp. C++ cases are the **best of 9** timed passes per run, reported as the **median of
+(`clang-1600.0.26.6`), `-O2`, against **real-regex 2026.10.11**, SciLex at `8cb39fe`, on
+**2026-10-11**, **on AC power**, unless a section names another stamp. C++ cases are the **best of 9** timed passes per run, reported as the **median of
 N = 6 runs** (IQR quoted where it matters); the binding rows are the median of 3 runs. The durable
 content is the **ratios**; absolute MB/s track the host and are meaningful only under this stamp —
 never a bare number. Reproduce with `make bench-lex` and `make bench`.
@@ -29,14 +29,11 @@ battery: the same `json` grammar against the same real-regex once read **7.00 MB
 published a regression that did not exist. An A/B is immune (both sides throttle together); an
 ABSOLUTE table is not.
 
-The Fortran, Julia and MATLAB example grammars were added after this stamp and have no row yet; the next
-stamp measures them with the others.
-
 ## The honest headline
 
 SciLex was **not** built to beat `re` on raw throughput, and on the benign case measured below it
-does: **2.15× faster** (0.656 ms against 1.435 ms, the median of 3 runs; the three read 2.19×, 2.12×
-and 2.15×). Since DFA acceleration became automatic, the ordinary rule set of that case runs on a
+does: **2.09× faster** (0.665 ms against 1.388 ms, the median of 3 runs; the three read 2.14×, 2.08×
+and 2.09×). Since DFA acceleration became automatic, the ordinary rule set of that case runs on a
 DFA without the caller asking. Read that narrowly: it is one case, 4000 tokens over ~10 KB of
 identifier-operator soup.
 
@@ -51,7 +48,7 @@ machine-generated input.
 
 | input | winner | why |
 | --- | --- | --- |
-| benign token soup | **SciLex** (2.1–2.2×) | the rule set runs on a DFA by default, one table step per byte |
+| benign token soup | **SciLex** (2.1×) | the rule set runs on a DFA by default, one table step per byte |
 | adversarial / ReDoS | **SciLex** (linear vs exponential) | REAL is linear-time and ReDoS-safe; `re` backtracks catastrophically |
 | untrusted / machine-generated | **SciLex** | no rule backtracks, so no input is exponential; the worst case is quadratic, only through a rule left on Pike, not a cliff |
 | a fixed grammar compiled ahead of time | **flex** (~6× the binding) | a code-generated scanner; SciLex keeps the grammar as runtime data |
@@ -77,27 +74,32 @@ machinery:
 
 | ASCII-pinned grammar | rules | tokens | eager MB/s | lazy MB/s |
 | --- | ---: | ---: | ---: | ---: |
-| json | 12 | 58 793  | 44.75 | 48.67 |
-| cpp  | 41 | 52 228  | 11.13 | 11.41 |
-| sql  | 39 | 38 760  | 10.84 | 11.11 |
-| css  | 17 | 64 224  | 12.71 | 13.09 |
-| lisp |  8 | 96 600  | 17.73 | 19.07 |
-| math | 12 | 123 376 | 19.76 | 21.59 |
+| json    | 12 | 58 793  | 43.94 | 48.08 |
+| cpp     | 41 | 52 228  | 11.09 | 11.34 |
+| sql     | 39 | 38 760  | 10.84 | 11.15 |
+| css     | 17 | 64 224  | 12.70 | 13.02 |
+| lisp    |  8 | 96 600  | 17.52 | 18.89 |
+| math    | 12 | 123 376 | 19.77 | 21.33 |
+| fortran | 18 | 75 240  | 10.69 | 11.14 |
+| matlab  | 23 | 75 852  |  8.04 |  8.30 |
 
 | Unicode text-mode grammar | rules | tokens | eager MB/s | lazy MB/s |
 | --- | ---: | ---: | ---: | ---: |
-| xml    | 12 | 65 588 | 12.83 | 13.44 |
-| yaml   | 14 | 56 829 | 8.32 | 8.44 |
-| python | 65 | 53 960 | 14.16 | 14.73 |
+| xml    | 12 | 65 588 | 12.63 | 13.23 |
+| yaml   | 14 | 56 829 |  8.11 |  8.33 |
+| python | 69 | 53 960 | 12.72 | 13.16 |
+| julia  | 35 | 84 664 |  8.61 |  8.90 |
 
-IQR within 0.5 MB/s on every row. Against the previous stamp (real-regex 2026.9.7) every row rose,
-`json` from 8.14 to **44.75 MB/s** and the others by 7 to 64 %: the move is REAL's. This SciLex and the
-one before its own change in this release (`c2962ad`), built against the same REAL 2026.10.9, read
-the same in an alternated pair of runs (`json` 43.9 / 44.2 against 43.7 / 44.7 MB/s, `cpp` 10.9 / 10.9
-against 11.1 / 11.1). Three grammars are **modal** (contextual lexing): `python`
-(f-strings — five modes), `xml` (content ↔ tag), `yaml` (block ↔ flow); they sit in the same band as
-the flat grammars, because the dispatch runs *per mode*. `python` carries **65** rules (35 keywords +
-the modal machinery) and the first-byte dispatch keeps it rule-count-independent.
+IQR within 0.4 MB/s on every row. Against the previous stamp (real-regex 2026.10.9) the eight rows both
+stamps measure read within 2.5 % of their old value, `json` 44.75 → 43.94 MB/s the widest of the
+ASCII-pinned ones; `python` fell 10 % (14.16 → 12.72) because its grammar grew: string prefixes and
+explicit line joining, 69 rules and a sixth mode. The predicate on the previous token, new in this
+release, costs about five instructions per token (callgrind, x86-64: `math` +1.3 % Ir, `json` −0.03 %),
+below what these rows can resolve. The grammars are **modal** (contextual lexing) where the language
+asks for it: `python` (f-strings, brackets, joined lines — six modes), `xml` (content ↔ tag), `yaml`
+(block ↔ flow), `matlab` (block comments), `julia` (nested comments, interpolation); they sit in the
+same band as the flat grammars, because the dispatch runs *per mode*. `python` carries **69** rules (35
+keywords + the modal machinery) and the first-byte dispatch keeps it rule-count-independent.
 
 Method: lexer built once, warmup then **min of 9** timed passes per run, reported as the **median of
 N = 6 runs**, `-O2`, every result consumed through a volatile sink. Sizes are KiB (1024 B),
@@ -120,10 +122,10 @@ of `a` peaks at 1.21 MB, the armed memo ≈ 0.17 MB of it.
 
 | KiB | eager MB/s |
 | ---: | ---: |
-| 64  | 11.18 |
-| 128 | 11.19 |
-| 256 | 11.21 |
-| 512 | 11.10 |
+| 64  | 11.08 |
+| 128 | 11.08 |
+| 256 | 11.06 |
+| 512 | 10.95 |
 
 Flat MB/s means time scales **linearly** with input on this grammar, whose rules stop scanning near
 their tokens. It is not a bound for every grammar: two rules (`a*b` and `a` on `aaa…`) kept on Pike
@@ -132,12 +134,14 @@ the same pair is linear).
 
 **Reading — modes & Layout Awareness.** Contextual lexing is throughput-neutral by construction.
 `make bench-lex` contrasts the modal `python` grammar with a mono-mode baseline — the same rules with
-the f-string modes stripped — on the same sample: **modal 14.26 vs mono-mode 15.30 MB/s**, the modal
-path 7 % slower while it produces 20 % more tokens (53 960 vs 44 872 — full f-string structure, not
-an opaque string), so cheaper per token. Layout Awareness reads each token's mode but adds nothing
+the f-string modes stripped and every other rule moved into one mode — on the same sample: **modal 12.76
+vs mono-mode 10.50 MB/s**, the modal path 22 % faster while it produces 20 % more tokens (53 960 vs
+44 872 — full f-string structure, not an opaque string). The flattened baseline is the slower one since
+the grammar gained its joined-line mode: that mode's whitespace and line-break rules land beside the
+default mode's and are tried at every position, where the modal lexer tries each only in its own mode. Layout Awareness reads each token's mode but adds nothing
 when no mode is insignificant.
 
-## DFA — what a caller gets by default: every example grammar runs wholly on it, 3.2–17×
+## DFA — what a caller gets by default: every example grammar has one in every mode, 1.6–17×
 
 Every lexer tries a `real::dfa` in each mode (`dfa_policy::automatic`, the default). A rule joins its
 mode's DFA when its `match()` is its longest match and it needs no assertion the DFA cannot represent;
@@ -147,29 +151,38 @@ and the munch merges the two with a byte-identical token stream. On the full tok
 
 | grammar | DFA modes | rules on Pike | Pike MB/s | DFA MB/s | speed-up | DFA build |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| yaml     | 2 | 0 |  8.21 | 139.44 | **16.9×** | 1.52 ms |
-| sql      | 1 | 0 | 10.93 | 151.44 | **13.8×** | 1.45 ms |
-| cpp      | 1 | 0 | 11.14 | 139.73 | **12.6×** | 2.97 ms |
-| css      | 1 | 0 | 12.69 | 141.61 | **11.1×** | 1.54 ms |
-| python   | 5 | 0 | 14.29 | 139.00 |  **9.8×** | 13.1 ms |
-| xml      | 2 | 0 | 12.66 | 118.50 |  **9.6×** | 2.04 ms |
-| lisp     | 1 | 0 | 17.81 |  99.23 |  **5.6×** | 0.53 ms |
-| math     | 1 | 0 | 19.83 |  79.55 |  **4.0×** | 0.05 ms |
-| json     | 1 | 0 | 44.50 | 142.04 |  **3.2×** | 0.38 ms |
-| python-unicode | 5 | 3 | 13.61 | 37.14 | **2.7×** | 14.6 ms |
+| yaml     | 2 | 0 |  8.07 | 138.99 | **17.2×** | 1.54 ms |
+| sql      | 1 | 0 | 10.76 | 154.04 | **14.2×** | 1.48 ms |
+| cpp      | 1 | 0 | 11.09 | 138.08 | **12.6×** | 2.97 ms |
+| python   | 6 | 0 | 12.68 | 140.85 | **11.2×** | 21.5 ms |
+| css      | 1 | 0 | 12.67 | 140.65 | **11.1×** | 1.54 ms |
+| xml      | 2 | 0 | 12.57 | 119.37 |  **9.5×** | 2.04 ms |
+| lisp     | 1 | 0 | 17.57 | 100.78 |  **5.7×** | 0.53 ms |
+| math     | 1 | 0 | 19.68 |  83.27 |  **4.2×** | 0.06 ms |
+| fortran  | 1 | 2 | 10.69 |  39.12 |  **3.6×** | 4.41 ms |
+| json     | 1 | 0 | 43.69 | 140.88 |  **3.2×** | 0.38 ms |
+| python-unicode | 6 | 4 | 12.18 | 37.02 | **3.0×** | 22.6 ms |
+| matlab   | 2 | 6 |  7.95 |  22.06 |  **2.8×** | 1.91 ms |
+| julia    | 6 | 25 | 8.58 |  13.86 |  **1.6×** | 6.02 ms |
 
-The speed-up is the median of the per-run ratios; the DFA column's IQR is 1–13 % (a 256 KiB pass at
-140 MB/s lasts 2 ms). Against the previous stamp the DFA column rose 5–22 % and every DFA builds faster,
-Python's five modes in under half the time (27.2 → 13.1 ms); the ratios fell where Pike rose more,
-`json` most (15.4× → 3.2×, its Pike row ×5.5). **Every example grammar runs wholly on the DFA, the modal ones included** —
-none leaves a rule on Pike. The spread follows token density again: `math` (123 k tokens in 256 KiB)
-and `lisp` (97 k) pay the per-token cost most often, `yaml`, `sql` and `json` least. The hybrid row is
-`python-unicode` (`scilex --example python-unicode`), whose identifier rule is a Unicode `\w` and
-stays on Pike in three modes: 2.7× even so. The DFAs are built once, in the constructor — 0.05–3.0 ms
-for a one-mode grammar, ~13 ms for Python's five modes, a vigilance point only on very short inputs.
+The speed-up is the median of the per-run ratios; the DFA column's IQR is 1–9 % (a 256 KiB pass at
+140 MB/s lasts 2 ms). Against the previous stamp the DFA column of the rows both measure moved −1.2 to +4.7 %,
+and every build is the same but the two Python grammars', whose sixth mode takes them from 13.1 and 14.6
+to 21.5 and 22.6 ms. **Nine example
+grammars run wholly on the DFA, the modal ones included** — none leaves a rule on Pike. The spread follows
+token density again: `math` (123 k tokens in 256 KiB) and `lisp` (97 k) pay the per-token cost most
+often, `yaml`, `sql` and `json` least. Four rows are hybrids, a DFA in every mode with the rules it cannot
+reproduce on Pike beside it: `python-unicode` (`scilex --example python-unicode`), whose identifier rule
+is a Unicode `\w`; `fortran`, whose numbers stop before a dotted operator (a lookahead) and whose
+preprocessor lines start a line (`^`); `matlab`, whose apostrophe is a transpose or a character array by
+the byte before it (a lookbehind), whose numbers stop before an element-wise operator and whose block
+comment markers hold a line alone; `julia`, whose identifiers are Unicode `XID` classes in every code mode
+and whose adjoint, character and symbol rules look behind. They gain 1.6–3.6×. The DFAs are built once, in the constructor — 0.06–4.4 ms for a one-mode grammar, ~22 ms
+for Python's six modes, a vigilance point only on very short inputs.
 
 **x86-64.** The same harness on a second ISA — g++ 13.3, `-O2`, 6 cores, in a development container,
-2026-10-09, the same SciLex and real-regex 2026.10.9; each cell the best of 6 runs (in this container a
+2026-10-09, SciLex at `e7f5c86` and real-regex 2026.10.9, before the Fortran, Julia and MATLAB grammars
+and Python's sixth mode; each cell the best of 6 runs (in this container a
 wall-clock burst lasts seconds, so the minimum across runs is the reading; here the best and the median
 of each DFA cell sat within 2.3 %):
 
@@ -186,8 +199,9 @@ of each DFA cell sat within 2.3 %):
 | json     | 25.72 | 115.63 |  **4.5×** | 0.60 ms |
 | python-unicode | 7.28 | 20.25 | **2.8×** | 15.8 ms |
 
-The DFA column lands near arm64's (61–136 against 80–151 MB/s); the Pike column does not — it reads
-42–49 % lower on this host — so the speed-ups run higher here (4.5–25.4× against 3.2–16.9×).
+The DFA column landed near the arm64 stamp of the same day (61–136 against 80–151 MB/s); the Pike column
+did not — it read 42–49 % lower on this host — so the speed-ups ran higher there (4.5–25.4× against
+3.2–16.9×).
 A ratio is durable only within one ISA and one host; the ordering of the grammars is what both agree on.
 
 The DFA's walks are memoized over the source (`real::dfa_munch_memo`), which makes the rules on it
@@ -219,14 +233,14 @@ throw per byte), leaving a **net per-position** figure.
 
 | path | corpus | rejected positions | raw ns/pos | net ns/pos |
 | --- | --- | ---: | ---: | ---: |
-| DFA (json) | binary blob        | 29 952 | 5 927 | 3 816 |
-| DFA (json) | invalid-UTF-8      | 32 768 | 5 922 | 3 813 |
-| DFA (json) | unclosed quote     | 32 768 | 5 929 | 3 819 |
-| DFA (json) | parasitic delims   | 32 768 | 5 916 | 3 805 |
-| Pike (xml) | binary blob        | 16 512 | 5 997 | 3 888 |
-| Pike (xml) | invalid-UTF-8      | 32 768 | 5 929 | 3 820 |
+| DFA (json) | binary blob        | 29 952 | 5 935 | 3 822 |
+| DFA (json) | invalid-UTF-8      | 32 768 | 5 922 | 3 809 |
+| DFA (json) | unclosed quote     | 32 768 | 5 923 | 3 810 |
+| DFA (json) | parasitic delims   | 32 768 | 5 921 | 3 808 |
+| Pike (xml) | binary blob        | 16 512 | 6 010 | 3 897 |
+| Pike (xml) | invalid-UTF-8      | 32 768 | 5 938 | 3 825 |
 | Pike (xml) | unclosed quote     | 0 (tolerated) | — | — |
-| Pike (xml) | parasitic delims   |  4 096 | 6 155 | 4 045 |
+| Pike (xml) | parasitic delims   |  4 096 | 6 167 | 4 054 |
 
 **Reading — three findings that shape a recovering lexer.**
 
@@ -240,9 +254,9 @@ throw per byte), leaving a **net per-position** figure.
    cursor avoids this; these figures are an upper bound.
 3. **A non-fail-fast rule is O(remaining) per position.** A rule like `[^!]*!` (a maximal run
    before a terminator) that never completes scans to the end of the input before failing, so
-   every recovery position re-scans what's left — **~460 000 ns/position** on an 8 KiB
-   no-terminator run, and quadratic in the input. The three stamps before read ~490 000, ~451 000
-   and ~199 000; the earlier gap was traced to the host, not the engine (two REAL versions twenty
+   every recovery position re-scans what's left — **~468 000 ns/position** on an 8 KiB
+   no-terminator run, and quadratic in the input. The four stamps before read ~460 000, ~490 000,
+   ~451 000 and ~199 000; the earlier gap was traced to the host, not the engine (two REAL versions twenty
    releases apart read within 1.4 % of each other in one session). This is what a first-byte
    prefilter (`may_start_with`) mitigates by skipping positions that cannot begin the rule, and
    what the DFA's memo removes for a rule on the DFA.
@@ -261,12 +275,12 @@ tokenizer (`(?P<NUM>…)|(?P<ID>…)|…` + `finditer`).
 
 | tokenizer | time | vs `re` |
 | --- | ---: | ---: |
-| `scilex.Lexer.tokenize` | 0.656 ms | **2.15× faster** |
-| `re.finditer` (master pattern) | 1.435 ms | 1.0× (baseline) |
+| `scilex.Lexer.tokenize` | 0.665 ms | **2.09× faster** |
+| `re.finditer` (master pattern) | 1.388 ms | 1.0× (baseline) |
 
-**Reading.** The three runs read 2.19×, 2.12× and 2.15× — SciLex within 1.3 % across them (0.656,
-0.653, 0.661 ms), `re` within 4 %. The previous stamp read 1.70× (1.30–1.87× across its runs) with
-the same DFA; the SciLex side takes a quarter less time since, with REAL 2026.10.9 beneath it. One case is one
+**Reading.** The three runs read 2.14×, 2.08× and 2.09× — SciLex within 0.2 % across them (0.664,
+0.665, 0.665 ms), `re` within 3 % (1.381–1.424 ms). The previous stamp read 2.15× (0.656 against
+1.435 ms): the SciLex side moved by 1.4 %, inside what three runs resolve. One case is one
 case, and ReDoS-safety remains the reason to choose SciLex. For multi-threaded throughput, `tokenize`
 releases the GIL around the scan of inputs ≥ 4 KB; the lazy `scan` holds the GIL per one-token step
 (the parser-friendly path, not the throughput path).
@@ -280,11 +294,11 @@ scales linearly.
 | n | `scilex` (linear) | `re.match` (backtracking) |
 | ---: | ---: | ---: |
 | 16 | ~0.41 µs | ~2.1 ms |
-| 18 | ~0.42 µs | ~8.1 ms |
-| 20 | ~0.43 µs | ~32.7 ms |
-| 22 | ~0.45 µs | ~131.0 ms |
-| 24 | ~0.45 µs | ~523 ms |
-| 26 | ~0.47 µs | ~2.09 s |
+| 18 | ~0.42 µs | ~8.2 ms |
+| 20 | ~0.44 µs | ~33.0 ms |
+| 22 | ~0.45 µs | ~132.4 ms |
+| 24 | ~0.45 µs | ~526 ms |
+| 26 | ~0.47 µs | ~2.11 s |
 | 1000 | ~4.5 µs | would not finish |
 
 **Reading.** `re`'s time roughly **quadruples every +2** in `n` (exponential); SciLex
@@ -349,15 +363,16 @@ deterministically by the harness (`benchmarks/bench_compare.py`, cached under `b
 
 | Tool | `big.json` (MB/s) | `sample.py` (MB/s) | What it produces |
 | --- | --- | --- | --- |
-| **scilex** `tokenize()` | 27.5 | 37.3 | a token stream as Python objects |
-| **scilex** `scan()` (lazy) | 17.7 | 22.9 | the same, lazily (fully consumed here) |
+| **scilex** `tokenize()` | 27.0 | 37.2 | a token stream as Python objects |
+| **scilex** `scan()` (lazy) | 17.4 | 22.7 | the same, lazily (fully consumed here) |
 | Pygments | 10.4 | 0.7 | pure-Python styled (type, text) pairs — a highlighting superset |
-| tree-sitter | 12.9 | 10.6 | a full parse tree in C, returned as a handle |
-| flex (codegen) | 162.6 | — | a compile-time DFA scanner (C), best-of-30 internal |
+| tree-sitter | 12.8 | 10.4 | a full parse tree in C, returned as a handle |
+| flex (codegen) | 162.4 | — | a compile-time DFA scanner (C), best-of-30 internal |
 
 Pygments 2.21.0, tree-sitter 0.26.0 with `tree-sitter-json` 0.24.8 and `tree-sitter-python` 0.25.0. The
-previous stamp read SciLex at 23.2 and 32.4 MB/s, and the one before at 5.4 and 6.9, behind tree-sitter
-and, on JSON, Pygments; the difference then was the DFA, which the binding's lexers get by default.
+previous stamp read SciLex at 27.5 and 37.3 MB/s, within 2 % of these; the one before at 23.2 and 32.4,
+and the one before that at 5.4 and 6.9, behind tree-sitter and, on JSON, Pygments — the difference then
+was the DFA, which the binding's lexers get by default.
 
 **Read this with the comparability notes — the tools do different amounts of work:**
 
