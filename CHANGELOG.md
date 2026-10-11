@@ -7,6 +7,8 @@ fuzz oracle.
 
 ## Unreleased
 
+## 2026.10.6 — 2026-10-11
+
 ### Fixed
 - **The Python example grammar lexes as CPython's tokenizer does.** Over the 1 849 files of the standard
   library it agreed with `tokenize` on 825 (audit, 2026-10-11): `obj._x` lexed `._` as a number, `!` and `;`
