@@ -52,7 +52,7 @@ SCIFORGE_LINT ?= ../sciforge/lint
 SCIFORGE_TOOLS ?= ../sciforge/tools
 FORMAT_FILES := $(shell find include tests examples fuzz benchmarks cli -name '*.hpp' -o -name '*.cpp')
 
-.PHONY: all build test python-oracle cpp-oracle xml-oracle css-oracle yaml-oracle oracle-venv sanitize coverage coverage-build coverage-html python-stubtest \
+.PHONY: all build test python-oracle cpp-oracle xml-oracle css-oracle yaml-oracle julia-oracle oracle-venv sanitize coverage coverage-build coverage-html python-stubtest \
         lint misra doc doc-no-coverage doc-check format format-check full-local-gate \
         python python-test bench bench-lex cli example coverage-gate doc-xml docs-venv docs-site docs-site-gate sabotage-help check-sabotage fuzz-check tsan exhaustive-lex check-pins fuzz version-check install install-smoke uninstall install-cli uninstall-cli release clean help
 
@@ -370,6 +370,13 @@ css-oracle: cli oracle-venv
 yaml-oracle: cli oracle-venv
 	$(ORACLE_VENV)/bin/python tests/oracle/yaml_pyyaml.py $(BUILD)/bin/scilex
 
+# The julia grammar against the tokenizer of Julia's own parser, over Julia's standard library and tests.
+# JULIA names the interpreter; where none is installed the check is skipped with a warning (CI runs it).
+JULIA ?= julia
+julia-oracle: cli
+	@if command -v $(firstword $(JULIA)) >/dev/null 2>&1; then JULIA='$(JULIA)' $(PYRUN) tests/oracle/julia_juliasyntax.py $(BUILD)/bin/scilex; \
+	 else echo "julia-oracle: WARN — no $(firstword $(JULIA)) here, skipped (CI runs it)"; fi
+
 fuzz-check:
 	@mkdir -p $(BUILD)/fuzz
 	c++ $(CXXSTD) -O2 -Wall -Wextra -Wpedantic -Werror $(INCLUDES) -Iexamples -Ifuzz fuzz/oracle_check.cpp -o $(BUILD)/fuzz/oracle_check
@@ -464,6 +471,7 @@ full-local-gate:
 	@$(MAKE) xml-oracle
 	@$(MAKE) css-oracle
 	@$(MAKE) yaml-oracle
+	@$(MAKE) julia-oracle
 	@$(MAKE) fuzz-check
 	@$(MAKE) exhaustive-lex
 	@$(MAKE) python-test

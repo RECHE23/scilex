@@ -122,6 +122,11 @@ jobs:
         run: make -C scilex css-oracle
       - name: The yaml grammar against PyYAML's scanner
         run: make -C scilex yaml-oracle
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: '1.11'
+      - name: The julia grammar against the tokenizer of Julia's parser, over Julia's stdlib and tests
+        run: make -C scilex julia-oracle
       - name: Shipped-header hygiene and version agreement
         run: make -C scilex symbol-hygiene version-check
 

@@ -43,6 +43,17 @@ fuzz oracle.
   body or a plain scalar continued on the next line, which need the indentation of their node (Layout
   Awareness Level B, not built): their lines are lexed as the tokens they hold, and 25 still stop the lexer
   (33 before). Both modes stay on their DFAs (138 MB/s, 140 before); building takes 6.5 ms instead of 1.5.
+- **The Julia example grammar lexes as Julia's own tokenizer does.** Against the tokenizer of Julia's parser
+  (`Base.JuliaSyntax`) over the 846 sources of Julia 1.11's standard library and test suite, 576 agreed:
+  most Unicode operators (`≈`, `⊻`, `∪`, `∩`) stopped the lexer, a string macro's `$` (`r"^\s*$"`) was read
+  as interpolation, a command (`` `ls $d` ``) was not read, `2im` was one number, `0x1p3` two tokens, `x!=y`
+  took `x!` as a name, and emoji, primes and `var"…"` names were not names. It now takes Julia's identifier
+  and operator characters from Julia itself (`Base.is_id_char`, `Base.isoperator`), its operator suffixes
+  from the blocks mathematics writes (`==ₜ`, `A'ᵀ`), and reads string macros' and commands' literals raw:
+  846 of 846, and the audit's 51. `make julia-oracle` compares every byte's class and every name's and
+  number's start, in the gate when `julia` is installed and in CI. Throughput 15.0 MB/s over those sources
+  (17.1 before, arm64, Apple clang 16, `-O2`); building the lexer takes 18 ms instead of 6.4, the operator
+  rule's DFA holding Julia's 592 operator characters.
 
 ## 2026.10.6 — 2026-10-11
 
