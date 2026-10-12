@@ -54,11 +54,11 @@ namespace {
   using field   = std::pair<std::string, std::string>;
   using domain  = std::vector<field>;
 
-  //! \brief A domain field whose value is a JSON number (bytes / tokens).
+  //! \brief A domain field whose value is an exact JSON integer (bytes / tokens).
   field num(const char* key,
             std::size_t value)
   {
-    return {key, sciforge::bench::json_number(static_cast<double>(value))};
+    return {key, sciforge::bench::json_integer(value)};
   }
 
   //! \brief A domain field whose value is a JSON string (section / grammar / path / variant).
