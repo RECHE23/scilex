@@ -27,6 +27,14 @@ fuzz oracle.
   holds it to expat over the XML files of Python's test suite, in the gate and in CI: every piece of markup
   starts where expat reports it, with the same name (56 of 56, and the audit's 60). Both modes stay on their
   DFAs (144 MB/s, 117 before on the old sample); building the lexer takes 4.8 ms instead of 2.0.
+- **The CSS example grammar lexes real style sheets.** It stopped at `!important`, an attribute selector
+  (`[href^="x"]`), an unquoted `url(…)`, a vendor at-rule (`@-webkit-…`), `.5em`, a custom property (`--x`) or
+  a unicode range (25 of 60 style sheets of the audit). It now tokenizes as CSS Syntax does: identifiers with
+  escapes, functions, unquoted URLs, numbers with any unit and exponent, unicode ranges, the attribute
+  matchers, and any other character as a delimiter. `make css-oracle` holds it to tinycss2 over the style
+  sheets of the documentation toolchain (pinned, with tinycss2, in `tests/oracle/requirements.txt`), in the
+  gate and in CI: 35 of 35, and the audit's 60. The mode stays on its DFA (141 MB/s, 139 before); building the
+  lexer takes 8.2 ms instead of 1.6, its five name-bearing rules each reading Unicode names and escapes.
 
 ## 2026.10.6 — 2026-10-11
 

@@ -1,0 +1,5 @@
+# The external lexers the example grammars are held to (tests/oracle), exact pins as docs/requirements.txt's.
+# make oracle-venv installs them into build/.venv-oracle beside the documentation toolchain, whose style
+# sheets are css_tinycss2.py's corpus.
+tinycss2==1.5.1
+webencodings==0.6.1
