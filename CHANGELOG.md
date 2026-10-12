@@ -7,6 +7,18 @@ fuzz oracle.
 
 ## Unreleased
 
+### Fixed
+- **The C++ example grammar lexes as Clang does.** On real files it stopped at the first conditional (`a ? b :
+  c`: a single `:` was no token), a `case x:`, a base class (`class D : B`), a digit separator (`1'000`), a
+  float like `.5f`, a `.*`, a line splice, or a Latin-1 byte in a comment (115 of 180 headers of the audit,
+  2026-10-11). It now reads numbers as preprocessing numbers, the encoding prefixes and user-defined
+  suffixes, every punctuator, line splices, raw strings with an empty delimiter, comments of any bytes, and a
+  directive as one token to the end of its logical line (its comments and splices included). Over the
+  headers of the C++ standard library it gives Clang's tokens on all of them: libc++ (1 679) and libstdc++
+  (822). Not read: raw strings with a delimiter, `R"d( … )d"`, and the digraphs `<:` and `:>`.
+- **`make cpp-oracle` checks it**, in the gate and in CI: the grammar against `clang -cc1 -dump-raw-tokens`
+  over the standard library's headers, every header identical.
+
 ## 2026.10.6 — 2026-10-11
 
 ### Fixed

@@ -1,22 +1,25 @@
 /*!
  * \file cpp.hpp
- * \brief A C++-like lexer grammar — the operator-dense maximal-munch example.
+ * \brief A C++ lexer grammar — the operator-dense maximal-munch example.
  *
  * C++ has the richest operator set of the suite, so it is the stress test for
  * maximal munch: multi-byte operators (`<<=`, `->*`, `::`, `...`, `<=>`) must be
- * recognized whole rather than split into their single-byte pieces. It also
- * exercises line and block comments, character and string
- * literals with escapes, numbers, and `#` preprocessor lines.
+ * recognized whole rather than split into their single-byte pieces. It reads C++
+ * as Clang's lexer does (`make cpp-oracle` compares the two over the headers of the
+ * C++ standard library): preprocessing numbers (`1'000`, `0x1p-3`, `.5f`), encoding
+ * prefixes and user-defined suffixes, every punctuator, line splices, and each
+ * preprocessing directive as one token, to the end of its logical line.
  *
- * Honest scope: this is a lexer-grain C++ subset. Raw string literals
- * (`R"delim( … )delim"`) are *not* covered — their delimiter makes the closing
- * sequence context-dependent, which needs mode-based lexing (a future SciLex
- * capability). Template `<…>` versus less-than is a parser concern, not the
+ * Honest scope: a raw string literal is read only with an empty delimiter
+ * (`R"( … )"`); with one (`R"d( … )d"`) the closing sequence must repeat it, which
+ * no regular rule can. The digraphs `<:` and `:>` are not punctuators here (see
+ * the operator rule). Template `<…>` versus less-than is a parser concern, not the
  * lexer's; both are simply the `<` / `>` operators here.
  */
 #ifndef SCILEX_EXAMPLE_CPP_HPP
 #define SCILEX_EXAMPLE_CPP_HPP
 
+#include <string>
 #include <string_view>
 #include <vector>
 
@@ -61,25 +64,50 @@ namespace scilex::examples::cpp {
   //!        single-byte class so the longest operator always wins.
   inline std::vector<scilex::rule> make_rules()
   {
+    // An encoding prefix and a user-defined suffix, shared by the character and string literals.
+    constexpr std::string_view prefix    {"(u8|u|U|L)?"};
+    constexpr std::string_view suffix    {"([A-Za-z_][A-Za-z0-9_]*)?"};
+    // A string or character literal inside a directive, its closing quote optional (`#error don't`).
+    constexpr std::string_view quoted    {R"re("(\\[\s\S]|[^"\\\n])*"?|'(\\[\s\S]|[^'\\\n])*'?)re"};
+    constexpr std::string_view block     {R"re(/\*([^*]|\*+[^*/])*\*+/)re"};
+    const std::string          directive {
+      // `#`, then to the end of the logical line: a backslash splices the next line in, and a string, a character
+      // literal or a comment is read whole (a block comment may run over lines). A `/` opens a comment only when
+      // a `*` or a `/` follows, so the other kinds of element each start with something else.
+      std::string {R"re(#([^\n\\/"']|\\[\s\S]|)re"} + std::string {quoted} + "|" + std::string {block} +
+      R"re(|//([^\n\\]|\\[\s\S])*|/([^*/\n\\"']|\\[\s\S]|)re" + std::string {quoted} + "))*/?"};
     std::vector<scilex::rule> rules;
-    rules.push_back({ws, real::regex("\\s+", real::flags::ascii), true});
-    rules.push_back({line_comment, real::regex("//.*"), true});
-    rules.push_back({block_comment, real::regex(R"re(/\*([^*]|\*+[^*/])*\*+/)re"), true});
-    rules.push_back({preproc, real::regex("#.*"), false});
-    for (const char* word : {"alignas", "auto", "bool", "break", "case", "char", "class", "const",
-                             "constexpr", "continue", "double", "else", "enum", "float", "for",
-                             "if", "int", "namespace", "new", "nullptr", "private", "public",
-                             "return", "struct", "switch", "template", "typename", "using",
-                             "virtual", "void", "while"}) {
+    // Blanks, and a backslash that splices the next line on.
+    rules.push_back({ws, real::regex(R"re((\s|\\\r?\n)+)re", real::flags::ascii), true});
+    // A comment, and so a directive, holds any byte, as Clang and GCC read them (a Latin-1 `©` in a licence).
+    rules.push_back({line_comment, real::regex(R"re(//([^\n\\]|\\[\s\S])*)re", real::flags::bytes), true});
+    rules.push_back({block_comment, real::regex(std::string {block}, real::flags::bytes), true});
+    rules.push_back({preproc, real::regex(directive, real::flags::bytes), false});
+    for (const char* word : {"alignas", "alignof", "asm", "auto", "bool", "break", "case", "catch", "char",
+                             "char8_t", "char16_t", "char32_t", "class", "co_await", "co_return", "co_yield",
+                             "concept", "const", "consteval", "constexpr", "constinit", "const_cast", "continue",
+                             "decltype", "default", "delete", "do", "double", "dynamic_cast", "else", "enum",
+                             "explicit", "export", "extern", "false", "float", "for", "friend", "goto", "if",
+                             "inline", "int", "long", "mutable", "namespace", "new", "noexcept", "nullptr",
+                             "operator", "private", "protected", "public", "register", "reinterpret_cast",
+                             "requires", "return", "short", "signed", "sizeof", "static", "static_assert",
+                             "static_cast", "struct", "switch", "template", "this", "thread_local", "throw",
+                             "true", "try", "typedef", "typeid", "typename", "union", "unsigned", "using",
+                             "virtual", "void", "volatile", "wchar_t", "while"}) {
       rules.push_back({keyword, real::regex(word), false});
     }
-    rules.push_back({ident, real::regex("[A-Za-z_][A-Za-z0-9_]*"), false});
-    // hex, or decimal with optional fraction / exponent and integer/float suffixes
-    rules.push_back({number, real::regex("0[xX][0-9a-fA-F]+|[0-9]+(\\.[0-9]+)?([eE][+-]?[0-9]+)?[fFuUlL]*"), false});
-    rules.push_back({char_lit, real::regex(R"re('(\\.|[^'\\])*')re"), false});
-    rules.push_back({string_lit, real::regex(R"re("(\\.|[^"\\])*")re"), false});
-    // The munch stress: every multi-byte operator before the single-byte class.
-    rules.push_back({op, real::regex(R"re(<<=|>>=|->\*|\.\.\.|<=>|::|->|<<|>>|<=|>=|==|!=|&&|\|\||\+\+|--|\+=|-=|\*=|/=|%=|&=|\|=|\^=|[-+*/%<>=&|^~!?.])re"), false});
+    // As Clang and GCC read them: XID letters and digits, and `$`.
+    rules.push_back({ident, real::regex(R"re([\p{XID_Start}_$][\p{XID_Continue}$]*)re"), false});
+    // A preprocessing number, the lexical form of every C++ number: `1'000`, `0x1p-3`, `.5f`, `12_km`. The
+    // first alternative that matches is taken, so an exponent's sign is tried before the letter alone.
+    rules.push_back({number, real::regex(R"re(\.?[0-9]([eEpP][+-]|[0-9A-Za-z_.]|'[0-9A-Za-z_])*)re"), false});
+    rules.push_back({char_lit, real::regex(std::string {prefix} + R"re('(\\[\s\S]|[^'\\\n])*')re" + std::string {suffix}), false});
+    rules.push_back({string_lit, real::regex(std::string {prefix} + R"re("(\\[\s\S]|[^"\\\n])*")re" + std::string {suffix}), false});
+    // A raw string with an empty delimiter, R"( … )": a delimiter needs the closing sequence to repeat it.
+    rules.push_back({string_lit, real::regex(std::string {prefix} + R"re(R"\(([^)]|\)+[^)"])*\)+")re" + std::string {suffix}), false});
+    // Every punctuator; munch takes the longest. Of the digraphs, `<:` and `:>` are left out: `vector<::T>` is
+    // `<` then `::` because of the character after them, which munch does not consult, and code uses them rarely.
+    rules.push_back({op, real::regex(R"re(%:%:|\.\.\.|<=>|->\*|<<=|>>=|::|\.\*|->|\+\+|--|<<|>>|<=|>=|==|!=|&&|\|\||\+=|-=|\*=|/=|%=|&=|\|=|\^=|##|<%|%>|%:|[-+*/%<>=&|^~!?.:#])re"), false});
     rules.push_back({punct, real::regex(R"re([{}()\[\];,])re"), false});
     return rules;
   }
@@ -101,7 +129,8 @@ namespace scilex::examples::cpp {
   }
 
   //! \brief A snippet exercising scope (`::`), shift-assign (`<<=`),
-  //!        pointer-to-member (`->*`), comments, literals, and a `#` line.
+  //!        pointer-to-member (`->*`), a conditional's `:`, comments, literals,
+  //!        and a `#` line.
   inline constexpr std::string_view sample {
     R"cpp(#include <cstdint>
 // scope, shift-assign and pointer-to-member operators
@@ -110,7 +139,7 @@ namespace demo {
   int f(P* p, int P::* pm, int x) {
     /* a block comment */
     x <<= 2;
-    return (p->*pm) + x;
+    return x > 1'000 ? (p->*pm) + x : 0;
   }
 }
 )cpp"};

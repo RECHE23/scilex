@@ -114,6 +114,8 @@ jobs:
         run: make -C scilex example
       - name: The python grammars against CPython's tokenize over the standard library
         run: make -C scilex python-oracle
+      - name: The cpp grammar against Clang's lexer over the C++ standard library
+        run: make -C scilex cpp-oracle
       - name: Shipped-header hygiene and version agreement
         run: make -C scilex symbol-hygiene version-check
 

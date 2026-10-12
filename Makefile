@@ -52,7 +52,7 @@ SCIFORGE_LINT ?= ../sciforge/lint
 SCIFORGE_TOOLS ?= ../sciforge/tools
 FORMAT_FILES := $(shell find include tests examples fuzz benchmarks cli -name '*.hpp' -o -name '*.cpp')
 
-.PHONY: all build test python-oracle sanitize coverage coverage-build coverage-html python-stubtest \
+.PHONY: all build test python-oracle cpp-oracle sanitize coverage coverage-build coverage-html python-stubtest \
         lint misra doc doc-no-coverage doc-check format format-check full-local-gate \
         python python-test bench bench-lex cli example coverage-gate doc-xml docs-venv docs-site docs-site-gate sabotage-help check-sabotage fuzz-check tsan exhaustive-lex check-pins fuzz version-check install install-smoke uninstall install-cli uninstall-cli release clean help
 
@@ -345,6 +345,10 @@ example: cli
 python-oracle: cli
 	$(PYRUN) tests/oracle/python_tokenize.py $(BUILD)/bin/scilex
 
+# The cpp grammar against Clang's raw lexer over the C++ standard library's headers (CLANG= names the compiler).
+cpp-oracle: cli
+	$(PYRUN) tests/oracle/cpp_clang.py $(BUILD)/bin/scilex
+
 fuzz-check:
 	@mkdir -p $(BUILD)/fuzz
 	c++ $(CXXSTD) -O2 -Wall -Wextra -Wpedantic -Werror $(INCLUDES) -Iexamples -Ifuzz fuzz/oracle_check.cpp -o $(BUILD)/fuzz/oracle_check
@@ -435,6 +439,7 @@ full-local-gate:
 	@$(MAKE) test
 	@$(MAKE) example
 	@$(MAKE) python-oracle
+	@$(MAKE) cpp-oracle
 	@$(MAKE) fuzz-check
 	@$(MAKE) exhaustive-lex
 	@$(MAKE) python-test
