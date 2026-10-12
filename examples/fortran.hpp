@@ -13,9 +13,13 @@
  * strings in either quote with doubled-quote escapes, `**` `//` `/=` `=>` `::`, `%` component access and
  * `(/ … /)` array constructors.
  *
- * Honest scope: fixed form (column 6 continuation, column 1 comments) is a different grammar; a string
- * continued across lines with `&` is not joined; keywords are words, not statements (`end do` is two
- * keywords, `enddo` one), which is what a parser wants.
+ * Also: strings continued over a line with `&`, OpenMP / OpenACC / compiler directives (`!$omp`, `!$acc`,
+ * `!dir$`) as tokens rather than comments, the assumed rank `(..)`, and the statement keywords of Fortran
+ * 2018, compact forms included (`endprogram`, `goto`, `elsewhere`). Fortran reserves no word: the names
+ * programs commonly give their own variables and intrinsics (`len`, `kind`, `data`, `error`) stay names.
+ *
+ * Honest scope: fixed form (column 6 continuation, column 1 comments) is a different grammar; keywords are
+ * words, not statements (`end do` is two keywords, `enddo` one), which is what a parser wants.
  */
 #ifndef SCILEX_EXAMPLE_FORTRAN_HPP
 #define SCILEX_EXAMPLE_FORTRAN_HPP
@@ -50,6 +54,7 @@ namespace scilex::examples::fortran {
     rbracket,
     comma,
     semicolon,
+    directive, //!< `!$omp …`, `!$acc …`, `!$ …`, `!dir$ …`: the rest of the line
   };
 
   //! \brief A printable name for each kind.
@@ -71,6 +76,7 @@ namespace scilex::examples::fortran {
       case rbracket:     return "]";
       case comma:        return ",";
       case semicolon:    return ";";
+      case directive:    return "DIRECTIVE";
       default:           return "?";
     }
   }
@@ -78,12 +84,17 @@ namespace scilex::examples::fortran {
   //! \brief The keywords. An alternation takes its first alternative that matches, so a keyword precedes
   //!        every shorter one it begins with (`inout` before `in`), or the longer one would lose to IDENT.
   constexpr const char* keywords {
-    "program|module|submodule|contains|subroutine|function|use|only|implicit|none|integer|real|double"
-    "|precision|complex|logical|character|type|class|intent|inout|out|parameter|allocatable|dimension"
-    "|pointer|target|optional|save|if|then|elseif|else|endif|enddo|end|do|while|select|case|default|where"
-    "|forall|call|return|stop|exit|cycle|allocate|deallocate|print|write|read|open|close|interface"
-    "|procedure|pure|elemental|recursive|result|associate|block|concurrent|public|private|abstract|extends"
-    "|go|to|in"};
+    "doubleprecision|non_overridable|endsubroutine|non_recursive|asynchronous|endassociate|endblockdata"
+    "|endinterface|endprocedure|endsubmodule|allocatable|codimension|endcritical|endfunction|equivalence"
+    "|concurrent|contiguous|deallocate|endprogram|enumerator|subroutine|associate|backspace|blockdata"
+    "|character|dimension|elemental|elsewhere|endforall|endmodule|endselect|interface|intrinsic|parameter"
+    "|precision|procedure|protected|recursive|submodule|abstract|allocate|contains|continue|critical"
+    "|deferred|endblock|endwhere|external|function|implicit|namelist|operator|optional|sequence|volatile"
+    "|complex|default|endenum|endfile|endtype|extends|generic|include|inquire|integer|logical|nullify"
+    "|pointer|private|program|assign|common|double|elseif|forall|import|impure|intent|module|nopass"
+    "|public|result|return|rewind|select|target|unlock|block|class|close|cycle|enddo|endif|entry|final"
+    "|flush|inout|pause|print|where|while|write|bind|call|case|else|enum|exit|goto|none|only|open|pass"
+    "|pure|read|real|save|stop|sync|then|type|wait|end|out|use|do|go|if|in|to"};
 
   //! \brief Builds the Fortran rule list. KEYWORD precedes IDENT (an equal-length match is a keyword, a
   //!        longer name an identifier) and LOGICAL precedes DOT_OP (`.true.` is a constant, not an operator).
@@ -95,6 +106,9 @@ namespace scilex::examples::fortran {
     std::vector<scilex::rule> rules;
     rules.push_back(r(ws, R"re([ \t]+)re", true));
     rules.push_back(r(continuation, R"re(&[ \t]*(?:![^\n]*)?\r?\n(?:[ \t]*&)?)re", true));
+    // A directive (OpenMP `!$omp`, OpenACC `!$acc`, a conditional `!$` line, a compiler's `!dir$`) is a token,
+    // the rest of its line; any other `!` starts a comment. The directive comes first, to win the tie.
+    rules.push_back(r(directive, R"re((?i)!(?:\$(?:omp|acc)?|dir\$|dec\$|gcc\$|ibm\*)[^\n]*)re"));
     rules.push_back(r(comment, R"re(![^\n]*)re", true));
     rules.push_back(r(preprocessor, R"re((?m)^#[^\n]*)re"));
     rules.push_back(r(newline, R"re(\r?\n)re"));
@@ -105,8 +119,10 @@ namespace scilex::examples::fortran {
                       R"re((?i)[boz](?:'[0-9a-f]+'|"[0-9a-f]+")|(?:[0-9]+(?:\.(?![A-Za-z]{1,31}\.)[0-9]*)?|\.[0-9]+)(?:[eEdDqQ][+-]?[0-9]+)?(?:_[A-Za-z0-9_]+)?)re"));
     rules.push_back(r(logical, R"re((?i)\.(?:true|false)\.(?:_[A-Za-z0-9_]+)?)re"));
     rules.push_back(r(dot_op, R"re(\.[A-Za-z]{1,31}\.)re"));
-    rules.push_back(r(string, R"re('(?:[^'\r\n]|'')*'|"(?:[^"\r\n]|"")*")re"));
-    rules.push_back(r(op, R"re(\*\*|//|==|/=|<=|>=|=>|::|\(/|/\)|[-+*/=<>%:])re"));
+    // A string may go on over a line break: `&` ending the line, an optional `&` leading the next.
+    rules.push_back(r(string, R"re('(?:[^'\r\n&]|''|&[ \t]*\r?\n[ \t]*&?|&)*'|"(?:[^"\r\n&]|""|&[ \t]*\r?\n[ \t]*&?|&)*")re"));
+    // `..` is the assumed rank of `dimension(..)`.
+    rules.push_back(r(op, R"re(\*\*|//|==|/=|<=|>=|=>|::|\.\.|\(/|/\)|[-+*/=<>%:])re"));
     rules.push_back(r(lparen, R"re(\()re"));
     rules.push_back(r(rparen, R"re(\))re"));
     rules.push_back(r(lbracket, R"re(\[)re"));
@@ -183,8 +199,14 @@ end module dynamics
     std::string words                      {keywords};
     std::replace(words.begin(), words.end(), '|', ' ');
     const std::vector<scilex::token> alone {lex.tokenize(words)};
-    const bool                       whole {std::all_of(alone.begin(), alone.end(), [](const scilex::token& t) { return t.kind == keyword; })};
-    return eq_split && exponent && mixed_ops && mixed_kw && joined && whole;
+    // Each keyword lexes alone as one keyword: an alternation that took a shorter word first would split it.
+    const auto count                       {static_cast<std::size_t>(std::count(words.begin(), words.end(), ' ')) + 1};
+    const bool whole                       {alone.size() == count
+                                            && std::all_of(alone.begin(), alone.end(), [](const scilex::token& t) { return t.kind == keyword; })};
+    // A directive is a token, a string goes on over `&`, and `(..)` is an assumed rank.
+    const std::vector<scilex::token> more     {lex.tokenize("!$omp parallel\ns = 'a&\n  &b'(..)")};
+    const bool                       extended {more.size() == 8 && more[0].kind == directive && more[4].kind == string && more[6].lexeme == ".."};
+    return eq_split && exponent && mixed_ops && mixed_kw && joined && whole && extended;
   }
 } // namespace scilex::examples::fortran
 

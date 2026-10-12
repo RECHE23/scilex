@@ -17,7 +17,8 @@
  * Honest scope: whitespace inside `[ ]` and `{ }` separates elements in MATLAB (`[1 -2]` has two, `[1 - 2]`
  * one); the lexer skips it, so a parser that needs the rule reads the token columns. Command syntax
  * (`hold on`, `format long`) lexes as identifiers; Octave's backslash escapes in double-quoted strings are
- * not decoded (MATLAB's `"` strings have none).
+ * not decoded (MATLAB's `"` strings have none). A quote after a `...` continuation is read by the character
+ * before it, as any quote is, so `a ...` then `'` on the next line opens a character array.
  */
 #ifndef SCILEX_EXAMPLE_MATLAB_HPP
 #define SCILEX_EXAMPLE_MATLAB_HPP
@@ -97,8 +98,8 @@ namespace scilex::examples::matlab {
   //!        every shorter one it begins with (`endif` before `end`), or the longer one would lose to IDENT.
   constexpr const char* keywords {
     "function|endfunction|if|elseif|else|endif|for|parfor|endfor|while|endwhile|do|until|switch|case"
-    "|otherwise|endswitch|try|catch|end_try_catch|end|return|break|continue|global|persistent|classdef"
-    "|properties|methods|events|enumeration|spmd"};
+    "|otherwise|endswitch|try|catch|end_try_catch|unwind_protect_cleanup|unwind_protect|end_unwind_protect|end"
+    "|return|break|continue|global|persistent|classdef|properties|methods|events|enumeration|arguments|spmd"};
 
   //! \brief Builds the MATLAB rule list. A keyword precedes IDENT, so it wins an equal-length match and a
   //!        longer identifier (`endx`) stays an identifier; the block-comment opener precedes the line
@@ -212,7 +213,10 @@ end
     std::string words                      {keywords};
     std::replace(words.begin(), words.end(), '|', ' ');
     const std::vector<scilex::token> alone {lex.tokenize(words)};
-    const bool                       whole {std::all_of(alone.begin(), alone.end(), [](const scilex::token& t) { return t.kind == keyword; })};
+    // Each keyword lexes alone as one keyword: an alternation that took a shorter word first would split it.
+    const auto count                       {static_cast<std::size_t>(std::count(words.begin(), words.end(), ' ')) + 1};
+    const bool whole                       {alone.size() == count
+                                            && std::all_of(alone.begin(), alone.end(), [](const scilex::token& t) { return t.kind == keyword; })};
     return transposes == 6 && chars == 3 && escaped && power && hidden && whole;
   }
 } // namespace scilex::examples::matlab

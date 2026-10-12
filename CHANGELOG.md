@@ -54,6 +54,17 @@ fuzz oracle.
   number's start, in the gate when `julia` is installed and in CI. Throughput 15.0 MB/s over those sources
   (17.1 before, arm64, Apple clang 16, `-O2`); building the lexer takes 18 ms instead of 6.4, the operator
   rule's DFA holding Julia's 592 operator characters.
+- **The Fortran example grammar reads Fortran 2018's assumed rank, continued strings and directives.**
+  `dimension(..)` stopped the lexer (5 of the audit's 60 files, all of them now lex), a string continued with
+  `&` over a line break was not read, OpenMP and OpenACC directives (`!$omp`, `!$acc`, `!dir$`) were dropped
+  as comments (they are DIRECTIVE tokens now), and `endprogram`, `goto`, `elsewhere` and most statement
+  keywords were names. The keywords are Fortran 2018's, longest first in their alternation; the names
+  programs give their own variables (`len`, `kind`, `data`) stay names. Same throughput (74 MB/s); building
+  takes 9.5 ms instead of 4.5. No external lexer checks this grammar yet.
+- **The MATLAB example grammar knows `arguments`** (R2019b) and Octave's `unwind_protect` blocks. The
+  audit's two failing `.m` files are Objective-C.
+- **The Fortran and MATLAB self-checks count the keywords**: each must lex alone as one keyword, where an
+  alternation that took `end` before `endprogram` passed as two.
 
 ## 2026.10.6 — 2026-10-11
 
