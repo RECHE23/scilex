@@ -7,6 +7,8 @@ fuzz oracle.
 
 ## Unreleased
 
+## 2026.10.7 — 2026-10-12
+
 ### Fixed
 - **The C++ example grammar lexes as Clang does.** On real files it stopped at the first conditional (`a ? b :
   c`: a single `:` was no token), a `case x:`, a base class (`class D : B`), a digit separator (`1'000`), a
