@@ -633,3 +633,22 @@ TEST(stream_columns_match_tokenize_inside_a_code_point)
   }
   EXPECT(got == (std::vector<std::size_t> {1, 2, 3, 3, 4})); // a, 0xF0, 0x9F, 0x98 0x80 b, c
 }
+
+// The nine example grammars the README counts as wholly on the DFA keep no rule on Pike in any mode the DFA
+// takes: a rule whose first match is not its longest (or a Unicode property class) would silently leave it,
+// at a fifth of the DFA's speed, with the same tokens.
+TEST(the_dfa_example_grammars_keep_no_rule_on_pike)
+{
+  namespace ex = scilex::examples;
+  const std::function<scilex::lexer()> makers[] {ex::json::make_lexer, ex::xml::make_lexer, ex::yaml::make_lexer,
+                                                 ex::python::make_lexer, ex::cpp::make_lexer, ex::css::make_lexer,
+                                                 ex::lisp::make_lexer, ex::math::make_lexer, ex::sql::make_lexer};
+  for (const std::function<scilex::lexer()>& make : makers) {
+    const scilex::lexer            lex    {make()};
+    const std::vector<std::string> active {lex.dfa_modes_active()};
+    EXPECT(!active.empty());
+    for (const std::string& mode : active) {
+      EXPECT(lex.pike_rules(mode).empty());
+    }
+  }
+}

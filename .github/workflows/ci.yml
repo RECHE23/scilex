@@ -116,6 +116,8 @@ jobs:
         run: make -C scilex python-oracle
       - name: The cpp grammar against Clang's lexer over the C++ standard library
         run: make -C scilex cpp-oracle
+      - name: The xml grammar against expat over Python's XML test files
+        run: make -C scilex xml-oracle
       - name: Shipped-header hygiene and version agreement
         run: make -C scilex symbol-hygiene version-check
 

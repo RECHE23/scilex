@@ -15,9 +15,18 @@ fuzz oracle.
   suffixes, every punctuator, line splices, raw strings with an empty delimiter, comments of any bytes, and a
   directive as one token to the end of its logical line (its comments and splices included). Over the
   headers of the C++ standard library it gives Clang's tokens on all of them: libc++ (1 679) and libstdc++
-  (822). Not read: raw strings with a delimiter, `R"d( … )d"`, and the digraphs `<:` and `:>`.
+  (822). Not read: raw strings with a delimiter, `R"d( … )d"`, and the digraphs `<:` and `:>`. Every rule
+  stays on the DFA (`make bench-lex`, arm64, Apple clang 16, `-O2`: 133 MB/s, 140 before on the old sample);
+  building the lexer takes 5.7 ms instead of 2.9, its keywords now C++'s 85 rather than 31.
 - **`make cpp-oracle` checks it**, in the gate and in CI: the grammar against `clang -cc1 -dump-raw-tokens`
   over the standard library's headers, every header identical.
+- **The XML example grammar lexes real documents.** It stopped at the XML declaration (`<?xml …?>`), a
+  `<!DOCTYPE`, a non-ASCII name, an entity with a `-` or a Latin-1 byte (59 of 60 documents of the audit). It
+  now reads processing instructions, the document type with its internal subset (one token each), XML 1.0's
+  names, hexadecimal character references, and text, comments and values of any byte. `make xml-oracle`
+  holds it to expat over the XML files of Python's test suite, in the gate and in CI: every piece of markup
+  starts where expat reports it, with the same name (56 of 56, and the audit's 60). Both modes stay on their
+  DFAs (144 MB/s, 117 before on the old sample); building the lexer takes 4.8 ms instead of 2.0.
 
 ## 2026.10.6 — 2026-10-11
 

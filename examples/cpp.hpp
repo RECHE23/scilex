@@ -67,15 +67,20 @@ namespace scilex::examples::cpp {
     // An encoding prefix and a user-defined suffix, shared by the character and string literals.
     constexpr std::string_view prefix    {"(u8|u|U|L)?"};
     constexpr std::string_view suffix    {"([A-Za-z_][A-Za-z0-9_]*)?"};
-    // A string or character literal inside a directive, its closing quote optional (`#error don't`).
-    constexpr std::string_view quoted    {R"re("(\\[\s\S]|[^"\\\n])*"?|'(\\[\s\S]|[^'\\\n])*'?)re"};
+    // A string or a character literal inside a directive, and the same left open to the end of the line
+    // (`#error don't`).
+    constexpr std::string_view closed    {R"re("(\\[\s\S]|[^"\\\n])*"|'(\\[\s\S]|[^'\\\n])*')re"};
+    constexpr std::string_view open      {R"re("(\\[\s\S]|[^"\\\n])*|'(\\[\s\S]|[^'\\\n])*)re"};
     constexpr std::string_view block     {R"re(/\*([^*]|\*+[^*/])*\*+/)re"};
     const std::string          directive {
       // `#`, then to the end of the logical line: a backslash splices the next line in, and a string, a character
       // literal or a comment is read whole (a block comment may run over lines). A `/` opens a comment only when
-      // a `*` or a `/` follows, so the other kinds of element each start with something else.
-      std::string {R"re(#([^\n\\/"']|\\[\s\S]|)re"} + std::string {quoted} + "|" + std::string {block} +
-      R"re(|//([^\n\\]|\\[\s\S])*|/([^*/\n\\"']|\\[\s\S]|)re" + std::string {quoted} + "))*/?"};
+      // a `*` or a `/` follows. What could stop short of its end, a line comment, an open quote or a last `/`,
+      // comes only last: each element then has one reading, so the first match is the longest and the mode
+      // stays on its DFA.
+      std::string {R"re(#([^\n\\/"']|\\[\s\S]|)re"} + std::string {closed} + "|" + std::string {block} +
+      R"re(|/([^*/\n\\"']|\\[\s\S]|)re" + std::string {closed} + R"re())*(//([^\n\\]|\\[\s\S])*|/|)re" +
+      std::string {open} + ")?"};
     std::vector<scilex::rule> rules;
     // Blanks, and a backslash that splices the next line on.
     rules.push_back({ws, real::regex(R"re((\s|\\\r?\n)+)re", real::flags::ascii), true});
@@ -96,8 +101,10 @@ namespace scilex::examples::cpp {
                              "virtual", "void", "volatile", "wchar_t", "while"}) {
       rules.push_back({keyword, real::regex(word), false});
     }
-    // As Clang and GCC read them: XID letters and digits, and `$`.
-    rules.push_back({ident, real::regex(R"re([\p{XID_Start}_$][\p{XID_Continue}$]*)re"), false});
+    // ASCII letters, digits, `_` and `$`, as Clang and GCC read them, and any other code point: Unicode's
+    // identifier classes would keep the rule off the mode's DFA, and a code point that is no identifier
+    // character is an error in either reading.
+    rules.push_back({ident, real::regex(R"re([A-Za-z_$\x{80}-\x{10FFFF}][A-Za-z0-9_$\x{80}-\x{10FFFF}]*)re"), false});
     // A preprocessing number, the lexical form of every C++ number: `1'000`, `0x1p-3`, `.5f`, `12_km`. The
     // first alternative that matches is taken, so an exponent's sign is tried before the letter alone.
     rules.push_back({number, real::regex(R"re(\.?[0-9]([eEpP][+-]|[0-9A-Za-z_.]|'[0-9A-Za-z_])*)re"), false});

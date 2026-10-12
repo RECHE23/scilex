@@ -16,19 +16,24 @@
  * the lazy form means, and in that form the rule runs on the mode's DFA instead
  * of on Pike, where an unterminated `<!--` rescanned the rest of the input.
  *
- * What this grammar covers
+ * What this grammar covers (`make xml-oracle` holds it to expat, the parser Python
+ * ships, over the XML files of Python's test suite)
  *   - elements: start `<a …>`, end `</a>`, self-closing `<a/>`;
- *   - names with `:` `.` `-` (so a namespaced name lexes as one name);
+ *   - names as XML 1.0 defines them, Unicode letters included (a namespaced name
+ *     lexes as one name);
  *   - attributes `name="…"` / `name='…'`;
- *   - content text, entities `&amp;` / `&#123;`;
- *   - comments `<!--…-->` and CDATA `<![CDATA[…]]>` (one token each).
+ *   - content text, entities `&amp;` / `&#123;` / `&#x1F;`;
+ *   - comments `<!--…-->`, CDATA `<![CDATA[…]]>`, processing instructions and the
+ *     XML declaration `<?…?>`, and the document type `<!DOCTYPE … [ … ]>` with its
+ *     internal subset (one token each);
+ *   - text, comments and values of any byte, as in a document in ISO-8859-1.
  *
- * What it does not cover (a realistic example of modes, not a full XML lexer —
- * none of these is excluded in principle, just beyond this sample):
- *   - processing instructions `<?…?>` and `<!DOCTYPE …>` / DTDs;
+ * What it does not cover (beyond this example, not excluded in principle):
  *   - namespace semantics (a `:` just lexes as part of the name);
+ *   - the declarations inside a document type, which are one token with it;
  *   - entity validation, and entities inside attribute values (an attribute value
- *     is one opaque token).
+ *     is one opaque token);
+ *   - a non-ASCII name in an encoding other than UTF-8.
  *
  * The modes
  *   `content` is the default (root) mode — a document starts in content. A `<` or
@@ -64,6 +69,8 @@ namespace scilex::examples::xml {
     tag_close,      //!< `>` — pops back to content
     self_close,     //!< `/>` — pops back to content
     ws,             //!< whitespace inside a tag (skipped)
+    pi,             //!< `<?…?>`, the XML declaration included (one token)
+    doctype,        //!< `<!DOCTYPE …>`, its internal subset included (one token)
   };
 
   //! \brief A printable name for each kind.
@@ -82,6 +89,8 @@ namespace scilex::examples::xml {
       case tag_close:      return ">";
       case self_close:     return "/>";
       case ws:             return "WS";
+      case pi:             return "PI";
+      case doctype:        return "DOCTYPE";
       default:             return "?";
     }
   }
@@ -93,14 +102,15 @@ namespace scilex::examples::xml {
     return {.operation = operation, .target = target};
   }
 
-  //! \brief A rule active in \p modes, optionally skipped / with an action.
+  //! \brief A rule active in \p modes, optionally skipped / with an action, its pattern read under \p flags.
   inline scilex::rule rule(int                                kind,
-                           const char*                        pattern,
+                           const std::string&                 pattern,
                            std::vector<std::string>           modes,
                            bool                               skip   = false,
-                           std::optional<scilex::mode_action> action = std::nullopt)
+                           std::optional<scilex::mode_action> action = std::nullopt,
+                           real::flags                        flags  = real::flags::none)
   {
-    scilex::rule r {.kind = kind, .pattern = real::regex(pattern), .skip = skip};
+    scilex::rule r {.kind = kind, .pattern = real::regex(pattern, flags), .skip = skip};
     r.in_mode = std::move(modes);
     r.action  = action;
     return r;
@@ -112,23 +122,42 @@ namespace scilex::examples::xml {
     using op_t = scilex::mode_action::op;
     const std::vector<std::string> content {};      // content = the default (root) mode (empty in_mode)
     const std::vector<std::string> in_tag  {"tag"};
-
-    std::vector<scilex::rule> rules;
-    // --- content: comments / CDATA (one token; inner `<` `&` literal), the tag
-    //     openers, entities, then text. Order = munch priority for the `<…`. ------
+    // XML 1.0's NameStartChar and NameChar.
+    const std::string start                {R"re(:A-Z_a-z\u00C0-\u00D6\u00D8-\u00F6\u00F8-\u02FF\u0370-\u037D\u037F-\u1FFF\u200C\u200D)re"
+                                            R"re(\u2070-\u218F\u2C00-\u2FEF\u3001-\uD7FF\uF900-\uFDCF\uFDF0-\uFFFD\U00010000-\U000EFFFF)re"};
+    const std::string xml_name             {"[" + start + "][" + start + R"re(.0-9\u00B7\u0300-\u036F\u203F\u2040-]*)re"};
     // Equal to (?s)<!--.*?--> and (?s)<!\[CDATA\[.*?\]\]> on every input (checked exhaustively on every
     // suffix of up to ten bytes over the delimiters' alphabet), and DFA-faithful where the lazy forms are not.
-    rules.push_back(rule(comment, R"re(<!--(?:[^-]|-[^-]|--+[^->])*-*-->)re", content));
-    rules.push_back(rule(cdata, R"re(<!\[CDATA\[(?:[^\]]|\][^\]]|\]\]+[^\]>])*\]*\]\]>)re", content));
+    const std::string comment_pattern {R"re(<!--(?:[^-]|-[^-]|--+[^->])*-*-->)re"};
+    const std::string pi_pattern      {R"re(<\?(?:[^?]|\?+[^?>])*\?+>)re"};
+    const std::string quoted          {R"re("[^"]*"|'[^']*')re"};
+    // The internal subset: declarations, comments and processing instructions, up to its `]`; a comment, an
+    // instruction or a quoted value is read whole, so a `]` inside one does not end it. A `<` is taken on its
+    // own only where it opens neither a comment nor an instruction, so that each element has one reading: the
+    // first match is then the longest, and the mode stays on its DFA.
+    const std::string subset {R"re(\[(?:)re" + comment_pattern + "|" + pi_pattern + "|" + quoted +
+                              R"re(|[^\]"'<]|<[^!?\]"'<]|<![^-\]"'<]|<!-[^-\]"'<])*\])re"};
+    // Text, comments, instructions, declarations and values hold any byte, as in a document declared in
+    // ISO-8859-1; names stay UTF-8.
+    const real::flags any_byte {real::flags::bytes};
+
+    std::vector<scilex::rule> rules;
+    // --- content: comments / CDATA / instructions / the document type (one token each; inner `<` `&`
+    //     literal), the tag openers, entities, then text. Order = munch priority for the `<…`. ------------
+    rules.push_back(rule(comment, comment_pattern, content, false, std::nullopt, any_byte));
+    rules.push_back(rule(cdata, R"re(<!\[CDATA\[(?:[^\]]|\][^\]]|\]\]+[^\]>])*\]*\]\]>)re", content, false, std::nullopt, any_byte));
+    rules.push_back(rule(pi, pi_pattern, content, false, std::nullopt, any_byte));
+    rules.push_back(rule(doctype, "<!DOCTYPE(?:" + quoted + R"re(|[^\["'>])*(?:)re" + subset + R"re(\s*)?>)re", content, false,
+                         std::nullopt, any_byte));
     rules.push_back(rule(close_tag_open, R"re(</)re", content, false, go(op_t::push, "tag")));
     rules.push_back(rule(tag_open, R"re(<)re", content, false, go(op_t::push, "tag")));
-    rules.push_back(rule(entity, R"re(&[A-Za-z#][A-Za-z0-9]*;)re", content));
-    rules.push_back(rule(text, R"re([^<&]+)re", content));
+    rules.push_back(rule(entity, "&(?:#[0-9]+|#x[0-9A-Fa-f]+|" + xml_name + ");", content));
+    rules.push_back(rule(text, R"re([^<&]+)re", content, false, std::nullopt, any_byte));
     // --- tag: names, attributes, and the closers (which pop back to content) -----
     rules.push_back(rule(ws, R"re(\s+)re", in_tag, /*skip=*/ true));
-    rules.push_back(rule(name, R"re([A-Za-z_:][A-Za-z0-9_:.-]*)re", in_tag));
+    rules.push_back(rule(name, xml_name, in_tag));
     rules.push_back(rule(eq, R"re(=)re", in_tag));
-    rules.push_back(rule(attr_value, R"re("[^"]*"|'[^']*')re", in_tag));
+    rules.push_back(rule(attr_value, quoted, in_tag, false, std::nullopt, any_byte));
     rules.push_back(rule(self_close, R"re(/>)re", in_tag, false, go(op_t::pop)));
     rules.push_back(rule(tag_close, R"re(>)re", in_tag, false, go(op_t::pop)));
     return rules;
@@ -152,7 +181,9 @@ namespace scilex::examples::xml {
 
   //! \brief A small configuration document exercising every covered context.
   inline constexpr std::string_view sample {
-    R"xml(<!-- example configuration -->
+    R"xml(<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE config [ <!ENTITY product "SciLex"> ]>
+<!-- example configuration -->
 <config env="prod" debug='off'>
   <name>SciLex</name>
   <version major="2026" minor="6"/>
@@ -203,8 +234,13 @@ namespace scilex::examples::xml {
     if (!kinds_are(lex.tokenize("<![CDATA[ <raw> & </x> ]]>"), {cdata})) {
       return false;
     }
-    // (5) an entity.
-    if (!kinds_are(lex.tokenize("&amp;"), {entity})) {
+    // (5) entities, by name and by hexadecimal code.
+    if (!kinds_are(lex.tokenize("&amp;&#x1F;"), {entity, entity})) {
+      return false;
+    }
+    // (5b) the XML declaration and a document type with an internal subset, one token each (a `]` inside a
+    //      quoted value does not end the subset).
+    if (!kinds_are(lex.tokenize(R"(<?xml version="1.0"?><!DOCTYPE a [<!ENTITY e "]">]>)"), {pi, doctype})) {
       return false;
     }
     // (6) nested elements cycle content<->tag — NOT stack depth: <a><b/></a> pops
