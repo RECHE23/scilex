@@ -120,6 +120,8 @@ jobs:
         run: make -C scilex xml-oracle
       - name: The css grammar against tinycss2 over the documentation toolchain's style sheets
         run: make -C scilex css-oracle
+      - name: The yaml grammar against PyYAML's scanner
+        run: make -C scilex yaml-oracle
       - name: Shipped-header hygiene and version agreement
         run: make -C scilex symbol-hygiene version-check
 

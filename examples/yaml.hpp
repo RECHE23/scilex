@@ -19,21 +19,22 @@
  *   single source of truth for the policy — no per-rule flag. See
  *   include/scilex/layout.hpp.
  *
- * What this grammar covers
- *   - mappings `key: value`, block sequences `- item`;
+ * What this grammar covers (`make yaml-oracle` holds it to PyYAML's scanner)
+ *   - mappings `key: value`, block sequences `- item`, explicit keys `? k`;
  *   - flow collections `{…}` / `[…]`, single- or multi-line (nesting via the
  *     stack; multi-line adds no spurious layout, via Level A);
- *   - comments `#…`, anchors `&a` / aliases `*a` / tags `!t` (simple);
+ *   - plain scalars as YAML 1.2 reads them on a line: several words, a `:` or a
+ *     `#` glued inside (`http://x.y/z`, `12:30`, `a#b`), number/bool/null typing
+ *     left to the parser;
+ *   - comments `#…`, anchors `&a` / aliases `*a`, tags (`!t`, `!!str`, `!e!t`,
+ *     `!<tag:…>`), documents `---` / `...`, directives `%YAML 1.2`;
  *   - strings `"…"` (with `\`-escapes) and `'…'` (with `''` escapes);
- *   - plain scalars (pragmatic — see below) and block indentation via layout().
+ *   - block indentation via layout().
  *
- * Not yet handled (Layout Awareness Level B):
- *   - block scalars `|` / `>` (they need a reference indent in the frame).
- *
- * YAML complexity beyond this sample (realism, not the model — none excluded):
- *   - fine scalar context-sensitivity (a `:` inside a value, multi-word scalars,
- *     number/bool/null typing — all lexed as plain scalars here);
- *   - multi-document `---` / `...`, merge keys `<<`, complex keys `?`.
+ * Not yet handled (Layout Awareness Level B): a block scalar's body (`|` / `>`,
+ * whose header is a BLOCK token) and a plain scalar continued on the next line
+ * both need the indentation of the node they belong to; their lines are lexed as
+ * the tokens they hold. Most real files have one (85 of the 111 of the audit).
  *
  * REAL notes (reusable): lookahead `(?=…)` is not supported by REAL, so the block
  * dash cannot be written `-(?=\s|$)`. Instead `-` is a 1-char rule listed before
@@ -72,6 +73,10 @@ namespace scilex::examples::yaml {
     comma,      //!< `,` (a flow separator)
     flow_open,  //!< `{` / `[` — pushes `flow`
     flow_close, //!< `}` / `]` — pops `flow`
+    question,   //!< `?` (an explicit key)
+    document,   //!< `---` / `...` (a document's start or end)
+    directive,  //!< `%YAML 1.2`, `%TAG …` (the rest of the line)
+    block,      //!< a block scalar's header, `|`, `>-`, `|2` (its body is lexed as the lines it holds)
   };
 
   //! \brief A printable name for each kind, including the layout / EOF tokens.
@@ -89,6 +94,10 @@ namespace scilex::examples::yaml {
       case comma:      return ",";
       case flow_open:  return "FLOW_OPEN";
       case flow_close: return "FLOW_CLOSE";
+      case question:   return "?";
+      case document:   return "DOCUMENT";
+      case directive:  return "DIRECTIVE";
+      case block:      return "BLOCK";
       case scilex::newline:      return "NEWLINE";
       case scilex::indent:       return "INDENT";
       case scilex::dedent:       return "DEDENT";
@@ -106,7 +115,7 @@ namespace scilex::examples::yaml {
 
   //! \brief A rule active in \p modes, optionally skipped / with an action.
   inline scilex::rule rule(int                                kind,
-                           const char*                        pattern,
+                           const std::string&                 pattern,
                            std::vector<std::string>           modes,
                            bool                               skip   = false,
                            std::optional<scilex::mode_action> action = std::nullopt,
@@ -126,25 +135,42 @@ namespace scilex::examples::yaml {
     const std::vector<std::string> both {"default", "flow"}; // active in block AND flow
     const std::vector<std::string> flow {"flow"};
 
+    // A plain scalar as YAML 1.2 reads one on a line: it starts with no indicator (a `-`, `?` or `:` only when
+    // something other than a blank follows), and goes on over a `:` or a `#` glued to its neighbours and over
+    // blanks followed by more of it; `: ` and ` #` end it, as do a flow's `,` `[` `]` `{` `}` inside a flow. Each
+    // element starts differently, so the first match is the longest and both modes stay on their DFAs.
+    // A reserved `@` or a backquote may start one too: YAML refuses them there, but they are text in a block
+    // scalar's body, which this grammar lexes line by line.
+    const std::string block_first {R"re([^\s\-?:,\[\]{}#&*!|>'"%]|[-?:][^\s])re"};
+    const std::string block_more  {R"re(([^\s:]|:[^\s]|[ \t]+([^\s:#]|:[^\s]))*)re"};
+    const std::string flow_first  {R"re([^\s\-?:,\[\]{}#&*!|>'"%@`]|[-?:][^\s,\[\]{}])re"};
+    const std::string flow_more   {R"re(([^\s:,\[\]{}]|:[^\s,\[\]{}]|[ \t]+([^\s:#,\[\]{}]|:[^\s,\[\]{}]))*)re"};
+
     std::vector<scilex::rule> rules;
     // --- shared by block and flow --------------------------------------------
     // Whitespace (newlines included — layout() recovers structure from positions).
     rules.push_back(rule(ws, R"re(\s+)re", both, /*skip=*/ true, std::nullopt, real::flags::ascii));
+    rules.push_back(rule(comment, R"re(#.*)re", both, /*skip=*/ true));
     rules.push_back(rule(flow_open, R"re([{[])re", both, false, go(op_t::push, "flow"))); // nests
-    rules.push_back(rule(dq, R"re("(\\.|[^"\\])*")re", both));
+    rules.push_back(rule(dq, R"re("(\\[\s\S]|[^"\\])*")re", both));
     rules.push_back(rule(sq, R"re('([^']|'')*')re", both));
     rules.push_back(rule(colon, R"re(:)re", both));
+    rules.push_back(rule(question, R"re(\?)re", both));
+    rules.push_back(rule(anchor, R"re(&[^\s,\[\]{}]+)re", both, false, std::nullopt, real::flags::ascii));
+    rules.push_back(rule(alias, R"re(\*[^\s,\[\]{}]+)re", both, false, std::nullopt, real::flags::ascii));
+    // `!`, `!local`, `!!str`, `!e!tag` and the verbatim `!<tag:…>`.
+    rules.push_back(rule(tag, R"re(!<[^>\s]*>|!([A-Za-z0-9-]*!)?[A-Za-z0-9_\-/.;:%#@&=+$~()]*)re", both));
     // --- block only (the root mode) ------------------------------------------
-    rules.push_back(rule(comment, R"re(#.*)re", root, /*skip=*/ true));
-    rules.push_back(rule(anchor, R"re(&[A-Za-z0-9_-]+)re", root));
-    rules.push_back(rule(alias, R"re(\*[A-Za-z0-9_-]+)re", root));
-    rules.push_back(rule(tag, R"re(![A-Za-z0-9_/-]*)re", root));
-    rules.push_back(rule(dash, R"re(-)re", root));                                                                     // before the scalar (see the dash note)
-    rules.push_back(rule(scalar, R"re([^\s#&*!"'{\[:][^\s#:{\[]*)re", root, false, std::nullopt, real::flags::ascii)); // block plain scalar (approx; ascii \s = DFA-eligible)
+    // Before the scalar: `---` and `...` are document markers, not a three-character plain scalar.
+    rules.push_back(rule(document, R"re(---|\.\.\.)re", root));
+    rules.push_back(rule(directive, R"re(%.*)re", root));
+    rules.push_back(rule(block, R"re([|>]([1-9][+-]?|[+-][1-9]?)?)re", root));
+    rules.push_back(rule(dash, R"re(-)re", root));                                                                      // before the scalar (see the dash note)
+    rules.push_back(rule(scalar, "(" + block_first + ")" + block_more, root, false, std::nullopt, real::flags::ascii)); // ascii \s: DFA-eligible
     // --- flow only -----------------------------------------------------------
     rules.push_back(rule(flow_close, R"re([}\]])re", flow, false, go(op_t::pop)));
     rules.push_back(rule(comma, R"re(,)re", flow));
-    rules.push_back(rule(scalar, R"re([^\s#&*!"'{}\[\]:,][^\s#:{}\[\],]*)re", flow, false, std::nullopt, real::flags::ascii)); // flow plain scalar (approx; ascii \s = DFA-eligible)
+    rules.push_back(rule(scalar, "(" + flow_first + ")" + flow_more, flow, false, std::nullopt, real::flags::ascii));
     return rules;
   }
 
@@ -265,6 +291,12 @@ nested:
       if (toks.size() != 1 || toks[0].kind != sq) {
         return false;
       }
+    }
+    // (6b) a `:` glued inside a plain scalar is part of it, a scalar holds several words, and a document
+    //      marker and a secondary tag are tokens of their own.
+    if (!kinds_are(lex.tokenize("---\nurl: http://x.y/z at 12:30\nk: !!str v\n"),
+                   {document, scalar, colon, scalar, scalar, colon, tag, scalar})) {
+      return false;
     }
     // (7) the realistic sample lexes; its block layout is balanced with INDENTs.
     if (const auto [ind, ded] = indent_dedent(lex, sample); ind == 0 || ind != ded) {

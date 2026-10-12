@@ -35,6 +35,14 @@ fuzz oracle.
   sheets of the documentation toolchain (pinned, with tinycss2, in `tests/oracle/requirements.txt`), in the
   gate and in CI: 35 of 35, and the audit's 60. The mode stays on its DFA (141 MB/s, 139 before); building the
   lexer takes 8.2 ms instead of 1.6, its five name-bearing rules each reading Unicode names and escapes.
+- **The YAML example grammar reads plain scalars as YAML 1.2 does.** `url: http://x.y/z` and `time: 12:30`
+  split at the inner `:`, `Hello world` was two scalars, `!!str` two tags, `---` a scalar, and a block
+  scalar's header (`|`, `>-`), `?` or `%YAML` stopped the lexer. `make yaml-oracle` holds it to PyYAML's
+  scanner, in the gate and in CI (PyYAML pinned in `tests/oracle/requirements.txt`): every explicit token
+  starts and ends where PyYAML's does, on 26 of the audit's 111 files. The other 85 hold a block scalar's
+  body or a plain scalar continued on the next line, which need the indentation of their node (Layout
+  Awareness Level B, not built): their lines are lexed as the tokens they hold, and 25 still stop the lexer
+  (33 before). Both modes stay on their DFAs (138 MB/s, 140 before); building takes 6.5 ms instead of 1.5.
 
 ## 2026.10.6 — 2026-10-11
 

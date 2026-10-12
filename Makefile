@@ -52,7 +52,7 @@ SCIFORGE_LINT ?= ../sciforge/lint
 SCIFORGE_TOOLS ?= ../sciforge/tools
 FORMAT_FILES := $(shell find include tests examples fuzz benchmarks cli -name '*.hpp' -o -name '*.cpp')
 
-.PHONY: all build test python-oracle cpp-oracle xml-oracle css-oracle oracle-venv sanitize coverage coverage-build coverage-html python-stubtest \
+.PHONY: all build test python-oracle cpp-oracle xml-oracle css-oracle yaml-oracle oracle-venv sanitize coverage coverage-build coverage-html python-stubtest \
         lint misra doc doc-no-coverage doc-check format format-check full-local-gate \
         python python-test bench bench-lex cli example coverage-gate doc-xml docs-venv docs-site docs-site-gate sabotage-help check-sabotage fuzz-check tsan exhaustive-lex check-pins fuzz version-check install install-smoke uninstall install-cli uninstall-cli release clean help
 
@@ -356,13 +356,19 @@ xml-oracle: cli
 # The oracles' own packages (tests/oracle/requirements.txt), with the documentation toolchain as the css
 # corpus, in a venv of their own.
 ORACLE_VENV ?= $(BUILD)/.venv-oracle
-oracle-venv:
-	@test -x $(ORACLE_VENV)/bin/python || { python3 -m venv $(ORACLE_VENV) && \
-	  $(ORACLE_VENV)/bin/pip install -q -r tests/oracle/requirements.txt -r docs/requirements.txt; }
+oracle-venv: $(ORACLE_VENV)/.installed
+$(ORACLE_VENV)/.installed: tests/oracle/requirements.txt docs/requirements.txt
+	@test -x $(ORACLE_VENV)/bin/python || python3 -m venv $(ORACLE_VENV)
+	$(ORACLE_VENV)/bin/pip install -q -r tests/oracle/requirements.txt -r docs/requirements.txt
+	@touch $@
 
 # The css grammar against tinycss2 over the style sheets of that venv's interpreter and packages.
 css-oracle: cli oracle-venv
 	$(ORACLE_VENV)/bin/python tests/oracle/css_tinycss2.py $(BUILD)/bin/scilex
+
+# The yaml grammar against PyYAML's scanner over that venv's YAML files and this repository's workflows.
+yaml-oracle: cli oracle-venv
+	$(ORACLE_VENV)/bin/python tests/oracle/yaml_pyyaml.py $(BUILD)/bin/scilex
 
 fuzz-check:
 	@mkdir -p $(BUILD)/fuzz
@@ -457,6 +463,7 @@ full-local-gate:
 	@$(MAKE) cpp-oracle
 	@$(MAKE) xml-oracle
 	@$(MAKE) css-oracle
+	@$(MAKE) yaml-oracle
 	@$(MAKE) fuzz-check
 	@$(MAKE) exhaustive-lex
 	@$(MAKE) python-test

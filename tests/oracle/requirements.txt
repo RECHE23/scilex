@@ -3,3 +3,4 @@
 # sheets are css_tinycss2.py's corpus.
 tinycss2==1.5.1
 webencodings==0.6.1
+PyYAML==6.0.3
