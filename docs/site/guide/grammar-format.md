@@ -14,13 +14,16 @@ dropped too, so a pattern never ends in a blank: write a final space `[ ]` or `\
 | `pop` | when the rule wins, return to the mode below |
 | `after=A,B` | active only right after a token of the rules named `A` or `B` (`^`: at the start) |
 | `not_after=A,B` | active except right after such a token ({doc}`modes`, "The token before") |
+| `line_start` | active only at the start of a line: the start of the text, or right after a `\n` |
+| `not_line_start` | active only past the start of a line ({doc}`modes`, "The start of a line") |
 | `indent=entry`, `key`, `value`, `reset` | the rule's part in the indentation the lexer tracks ({doc}`layout`, "Level B") |
 | `extend=block`, `extend=lines` | how its token extends over the lines indented past its block ({doc}`layout`) |
 | `continue=N` | with `extend=lines`: the pattern each continued line holds, the fragment (else the rule) named `N` |
 | `fragment` | the line names a pattern for `continue=`; it is not a rule, has no kind, and takes no other option |
 
 A rule fires at most one of `push=`, `set=` and `pop`, and takes at most one of `after=` and `not_after=`,
-whose names stand for every rule bearing them, earlier or later in the file. A mode that `push=` or `set=` enters must
+whose names stand for every rule bearing them, earlier or later in the file, and at most one of `line_start` and
+`not_line_start`. A mode that `push=` or `set=` enters must
 have a rule active in it (`in=`; the rules without `in=` are in `default`). Its kind is its position among the rules,
 fragments not counted, from 0, and its name labels that kind.
 

@@ -73,6 +73,29 @@ token leaves active, so the choice costs nothing per token. In C++ the fields ar
 `rule::not_after`; in a `.lex` grammar the options `after=` and `not_after=` name rules
 ({doc}`grammar-format`).
 
+## The start of a line
+
+Some tokens mean something else at the start of a line: a Markdown `#` opens a heading there and is text
+anywhere else, and YAML's `---` marks a document there and begins a scalar past it. The eleventh field of a
+rule, `line_start`, keeps it to the start of a line (`True`) or to past it (`False`). A token begins a line
+at the start of the text or right after a `\n`; past indentation it no longer does.
+
+```pycon
+>>> WS, HEADING, WORD = range(3)
+>>> md = scilex.Lexer([
+...     (WS, r"\s+", True),
+...     (HEADING, r"#[^\n]*", False, [], None, None, None, None, None, None, True),
+...     (WORD, r"\S+"),
+... ])
+>>> [(t.kind, t.lexeme) for t in md.tokenize("# Title\nsee #3\n")]
+[(1, '# Title'), (2, 'see'), (2, '#3')]
+```
+
+A `(?<![^\n])` in front of the pattern would say the same, but a rule that reads the text before its token
+stays off the DFA, and every token of its mode then pays for the general engine. The lexer gives a mode one
+DFA for the start of a line and one for past it instead, as for the token before. In C++ the field is
+`rule::at_line_start`; in a `.lex` grammar the options are `line_start` and `not_line_start`.
+
 ## What can go wrong
 
 - **Input ending inside a pushed mode** is an error, `unterminated mode 'fstr' (entered at …)`, which

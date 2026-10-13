@@ -314,6 +314,8 @@ class Lexer:
             the enclosing block, YAML's ``|``; ``"lines"``: lines indented past it, YAML's
             continued plain scalar); and ``continuation``, the pattern each continued line
             holds (default: the rule's own). A mode in ``insignificant_modes`` takes no part.
+            An eleventh field, ``line_start`` (``None``, ``True`` or ``False``), keeps the rule to the
+            start of a line (the start of the text, or right after a ``\\n``) or to past it.
         insignificant_modes (iterable): Mode names whose tokens carry no layout
             structure (Layout Awareness Level A — see :meth:`layout`): code spanning
             lines in such a mode is treated as continuation, and it takes no part in
@@ -399,7 +401,14 @@ class Lexer:
             if continuation is not None and not isinstance(continuation, str):
                 raise TypeError(f"rule {len(normalized)}: continuation must be None or a pattern str, "
                                 f"got {type(continuation).__name__}")
-            if indent is not None or extend is not None or continuation is not None:
+            line_start = entry[10] if len(entry) > 10 else None
+            if line_start is not None and not isinstance(line_start, bool):
+                raise TypeError(f"rule {len(normalized)}: line_start must be None, True or False, "
+                                f"got {type(line_start).__name__}")
+            if line_start is not None:
+                normalized.append((kind, pattern, skip, modes, action, after, not_after, indent, extend,
+                                   continuation, line_start))
+            elif indent is not None or extend is not None or continuation is not None:
                 normalized.append((kind, pattern, skip, modes, action, after, not_after, indent, extend,
                                    continuation))
             elif after or not_after:
@@ -431,8 +440,8 @@ class Lexer:
     def rules(self):
         """The normalized rules: ``(kind, pattern, skip)``, or
         ``(kind, pattern, skip, in_mode, action)`` for rules that use modes, with ``after`` and
-        ``not_after`` for predicated ones, and ``indent``, ``extend`` and ``continuation`` for
-        Level B ones."""
+        ``not_after`` for predicated ones, ``indent``, ``extend`` and ``continuation`` for
+        Level B ones, and ``line_start`` for the rules bound to the start of a line or to past it."""
         return list(self._rules)
 
     @property

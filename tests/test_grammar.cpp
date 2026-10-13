@@ -3,6 +3,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -107,8 +108,8 @@ namespace {
 
     const scilex::grammar_error unknown {refusal("A\ta\tskip  bogus\n")};
     EXPECT_EQ(unknown.column(), 11U);
-    EXPECT_EQ(unknown.cause(), "unknown option 'bogus' (expected skip, in=, push=, set=, pop, after=, not_after=, indent=, "
-              "extend=, continue= or fragment)");
+    EXPECT_EQ(unknown.cause(), "unknown option 'bogus' (expected skip, in=, push=, set=, pop, after=, not_after=, line_start, "
+              "not_line_start, indent=, extend=, continue= or fragment)");
 
     const scilex::grammar_error two {refusal("A\ta\tpush=x pop\n")};
     EXPECT_EQ(two.column(), 12U);
@@ -268,5 +269,23 @@ namespace {
     EXPECT_EQ(unknown.cause(), "no rule is named 'Z' (after= and not_after= name rules, or ^)");
     EXPECT_EQ(refusal("A\ta\tafter=A not_after=A\n").cause(), "a rule takes one of after= and not_after=, once");
     EXPECT_EQ(refusal("A\ta\tafter=A,\n").cause(), "empty rule name in 'after=A,'");
+  }
+
+  // line_start and not_line_start keep a rule to the start of a line, or to past it; a rule takes one, once.
+  TEST(grammar_line_start_options)
+  {
+    const scilex::grammar g {scilex::parse_grammar("WS\t[ ]+\tskip\nNL\t\\n\nHEAD\t#.*\tline_start\nTAG\t#[a-z]+\tnot_line_start\n")};
+    EXPECT(!g.rules[1].at_line_start.has_value());
+    EXPECT(g.rules[2].at_line_start == std::optional<bool> {true});
+    EXPECT(g.rules[3].at_line_start == std::optional<bool> {false});
+    const scilex::lexer lex {g.rules};
+    std::vector<int>    kinds;
+    for (const scilex::token& t : lex.tokenize("# a #b\n #c")) {
+      kinds.push_back(t.kind);
+    }
+    EXPECT(kinds == (std::vector<int> {2, 1, 3})); // the heading runs to the end of its line
+    const scilex::grammar_error twice {refusal("A\ta\tline_start not_line_start\n")};
+    EXPECT_EQ(twice.column(), 16U);
+    EXPECT_EQ(twice.cause(), "a rule takes one of line_start and not_line_start, once");
   }
 } // namespace

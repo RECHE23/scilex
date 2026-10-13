@@ -634,11 +634,26 @@ int parse_continuation(PyObject* obj, std::optional<std::string>* out)
     return 0;
 }
 
+// Parses a rule's optional `line_start` field: None/absent -> anywhere, True -> only at the start of a line,
+// False -> only past it.
+int parse_line_start(PyObject* obj, std::optional<bool>* out)
+{
+    if (obj == nullptr || obj == Py_None) {
+        return 0;
+    }
+    if (PyBool_Check(obj) == 0) {
+        PyErr_SetString(sciforge_module_error(), "line_start must be None, True or False");
+        return -1;
+    }
+    *out = obj == Py_True;
+    return 0;
+}
+
 // _scilex.compile(rules, dfa_modes=(), errors, columns, dfa, insignificant_modes=()) -> capsule wrapping a
 // scilex::lexer. Each rule is (kind:int, pattern:str, skip:bool) and may carry optional fields: in_mode (a
 // sequence of mode-name str), action (a push/pop/set tuple), after and not_after (kinds), and Level B's
-// indent ("entry", "key", "value", "reset"), extend ("block", "lines") and continuation (a pattern str). A
-// bare 3-tuple stays valid (a default-mode rule with no transition). dfa_modes is a sequence of mode names
+// indent ("entry", "key", "value", "reset"), extend ("block", "lines") and continuation (a pattern str),
+// and line_start (None, True or False). A bare 3-tuple stays valid (a default-mode rule with no transition). dfa_modes is a sequence of mode names
 // to accelerate with a real::dfa fast path (best-effort: an un-DFA-able mode silently stays on Pike — see
 // dfa_modes_active). insignificant_modes names the modes that take no part in Level B's indentation; the
 // layout pass's significance is applied Python-side in _scilex.layout, unchanged.
@@ -715,9 +730,10 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
             PyObject*   indent_obj  = nullptr; // optional 8th field (borrowed)
             PyObject*   extend_obj  = nullptr; // optional 9th field (borrowed)
             PyObject*   cont_obj    = nullptr; // optional 10th field (borrowed)
-            const int   parsed      = PyArg_ParseTuple(item, "isp|OOOOOOO", &kind, &pattern, &skip, &in_mode_obj,
+            PyObject*   line_obj    = nullptr; // optional 11th field (borrowed)
+            const int   parsed      = PyArg_ParseTuple(item, "isp|OOOOOOOO", &kind, &pattern, &skip, &in_mode_obj,
                                                        &action_obj, &after_obj, &not_obj, &indent_obj, &extend_obj,
-                                                       &cont_obj);
+                                                       &cont_obj, &line_obj);
             // pattern, in_mode_obj and action_obj all borrow from `item` — read them
             // (copying through) before releasing it.
             std::string                        pattern_copy {parsed != 0 && pattern != nullptr ? pattern : ""};
@@ -728,6 +744,7 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
             scilex::indent_role                indent {scilex::indent_role::none};
             scilex::extension                  extend {scilex::extension::none};
             std::optional<std::string>         continuation;
+            std::optional<bool>                line_start;
             const bool                         extras_ok = parsed != 0
                                                            && parse_in_mode(in_mode_obj, &in_mode, "in_mode") == 0
                                                            && parse_action(action_obj, &action) == 0
@@ -737,7 +754,8 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
                                                                           "'entry', 'key', 'value', 'reset'", &indent) == 0
                                                            && parse_named(extend_obj, "extend", extend_names, extend_values,
                                                                           "'block', 'lines'", &extend) == 0
-                                                           && parse_continuation(cont_obj, &continuation) == 0;
+                                                           && parse_continuation(cont_obj, &continuation) == 0
+                                                           && parse_line_start(line_obj, &line_start) == 0;
             Py_DECREF(item);
             if (parsed == 0 || !extras_ok) {
                 return nullptr; // PyArg / parse_in_mode / parse_action set the error
@@ -753,6 +771,7 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
                 if (continuation) {
                     built.continuation.emplace(*continuation);
                 }
+                built.at_line_start = line_start;
                 rules.push_back(std::move(built));
             }
             catch (const real::regex_error& error) {
@@ -866,7 +885,8 @@ PyObject* scilex_parse_grammar(PyObject* /*self*/, PyObject* args)
             const std::string_view pattern {r.pattern.pattern()};
             PyObject*              tuple   = nullptr;
             const bool             indented {scilex::takes_part(r) || r.continuation.has_value()};
-            if (ok && indented) { // a Level B rule: the 10-tuple Lexer normalizes it to
+            if (ok && (indented || r.at_line_start.has_value())) {
+                // A Level B rule: the 10-tuple Lexer normalizes it to; one bound to the line's start: the 11-tuple.
                 PyObject*        after     = kinds_list(r.after);
                 PyObject*        not_after = kinds_list(r.not_after);
                 const char*      role      {r.indent == scilex::indent_role::none ? nullptr
@@ -874,11 +894,17 @@ PyObject* scilex_parse_grammar(PyObject* /*self*/, PyObject* args)
                 const char*      how       {r.extend == scilex::extension::none ? nullptr
                                             : extend_names[static_cast<std::size_t>(r.extend) - 1]};
                 const std::string_view more {r.continuation ? r.continuation->pattern() : std::string_view {}};
-                tuple = after == nullptr || not_after == nullptr
-                        ? nullptr
-                        : Py_BuildValue("(is#OOOOOzzz#)", r.kind, pattern.data(), static_cast<Py_ssize_t>(pattern.size()),
-                                        r.skip ? Py_True : Py_False, in_mode, action, after, not_after, role, how,
-                                        r.continuation ? more.data() : nullptr, static_cast<Py_ssize_t>(more.size()));
+                const char* const      cont {r.continuation ? more.data() : nullptr};
+                const auto             size {static_cast<Py_ssize_t>(more.size())};
+                if (after != nullptr && not_after != nullptr) {
+                    tuple = r.at_line_start
+                            ? Py_BuildValue("(is#OOOOOzzz#O)", r.kind, pattern.data(), static_cast<Py_ssize_t>(pattern.size()),
+                                            r.skip ? Py_True : Py_False, in_mode, action, after, not_after, role, how, cont,
+                                            size, *r.at_line_start ? Py_True : Py_False)
+                            : Py_BuildValue("(is#OOOOOzzz#)", r.kind, pattern.data(), static_cast<Py_ssize_t>(pattern.size()),
+                                            r.skip ? Py_True : Py_False, in_mode, action, after, not_after, role, how, cont,
+                                            size);
+                }
                 Py_XDECREF(after);
                 Py_XDECREF(not_after);
             }

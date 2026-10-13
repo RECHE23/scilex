@@ -65,10 +65,12 @@ _IndentRole = Literal["entry", "key", "value", "reset"]
 #: A Level B extension: "block" or "lines".
 _Extension = Literal["block", "lines"]
 
-#: A rule: (kind, pattern[, skip[, in_mode[, action[, after[, not_after[, indent[, extend[, continuation]]]]]]]]).
+#: A rule: (kind, pattern[, skip[, in_mode[, action[, after[, not_after[, indent[, extend[, continuation[,
+#: line_start]]]]]]]]]).
 #: in_mode is a sequence of mode names the rule is active in; action drives the mode stack (or None); after /
 #: not_after the kinds of the previous token the rule is active only after / except after (END_OF_INPUT before
-#: the first); indent, extend and continuation are Layout Awareness Level B (None: none).
+#: the first); indent, extend and continuation are Layout Awareness Level B (None: none); line_start keeps the
+#: rule to the start of a line (True) or to past it (False), None to neither.
 _Rule = (
     tuple[int, str]
     | tuple[int, str, bool]
@@ -82,16 +84,21 @@ _Rule = (
             _IndentRole | None, _Extension | None]
     | tuple[int, str, bool, Iterable[str], _Action | None, Iterable[int] | None, Iterable[int] | None,
             _IndentRole | None, _Extension | None, str | None]
+    | tuple[int, str, bool, Iterable[str], _Action | None, Iterable[int] | None, Iterable[int] | None,
+            _IndentRole | None, _Extension | None, str | None, bool | None]
 )
 
 #: A rule as normalized by Lexer.rules: a plain triple, the modal 5-tuple, with a predicate on the previous
-#: token the 7-tuple (…, after, not_after), or with Level B the 10-tuple (…, indent, extend, continuation).
+#: token the 7-tuple (…, after, not_after), with Level B the 10-tuple (…, indent, extend, continuation), and bound
+#: to the start of a line or to past it the 11-tuple (…, line_start).
 _NormRule = (
     tuple[int, str, bool]
     | tuple[int, str, bool, list[str], _Action | None]
     | tuple[int, str, bool, list[str], _Action | None, list[int], list[int]]
     | tuple[int, str, bool, list[str], _Action | None, list[int], list[int], _IndentRole | None,
             _Extension | None, str | None]
+    | tuple[int, str, bool, list[str], _Action | None, list[int], list[int], _IndentRole | None,
+            _Extension | None, str | None, bool]
 )
 
 # Position and Token are extension types that cannot be subclassed.

@@ -18,6 +18,8 @@
  * - `after=A,B` or `not_after=A,B` — the rule is active only right after (or except right after) a token
  *   of the rules named `A` or `B` (\ref scilex::rule::after): a name stands for every rule that bears
  *   it, earlier or later in the file, and `^` for the start of the input;
+ * - `line_start` or `not_line_start` — the rule is active only at the start of a line (or only past it;
+ *   \ref scilex::rule::at_line_start);
  * - `indent=entry`, `indent=key`, `indent=value` or `indent=reset` — the rule's part in the indentation the
  *   lexer tracks, and `extend=block` or `extend=lines` — how its token extends below its line (Layout
  *   Awareness Level B, \ref rule_indentation);
@@ -378,6 +380,12 @@ namespace scilex {
           }
           predicates.push_back(std::move(site));
         }
+        else if (word == "line_start" || word == "not_line_start") {
+          if (out.at_line_start.has_value()) {
+            throw grammar_error(origin, line, col, "a rule takes one of line_start and not_line_start, once");
+          }
+          out.at_line_start = word == "line_start";
+        }
         else if (word.starts_with("indent=")) {
           const std::string_view role {word.substr(7)};
           if (role == "entry") {
@@ -422,7 +430,8 @@ namespace scilex {
         else {
           throw grammar_error(origin, line, col,
                               quoting("unknown option ", word,
-                                      " (expected skip, in=, push=, set=, pop, after=, not_after=, indent=, extend=, continue= or fragment)"));
+                                      " (expected skip, in=, push=, set=, pop, after=, not_after=, line_start, not_line_start, indent=, extend=, "
+                                      "continue= or fragment)"));
         }
         at = end;
       }

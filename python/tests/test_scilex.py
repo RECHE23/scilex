@@ -685,6 +685,44 @@ class BindingErrorMessageTests(unittest.TestCase):
             self._scilex.compile([(0, "a", False)], "default")  # dfa_modes as a bare str
         self.assertIn("dfa_modes must be a sequence", str(caught.exception))
 
+    def test_line_start_must_be_a_bool(self):  # parse_line_start
+        with self.assertRaises(self._scilex.error) as caught:
+            self._scilex.compile([(0, "a", False, [], None, None, None, None, None, None, 1)])
+        self.assertIn("line_start must be None, True or False", str(caught.exception))
+
+
+class LineStartTests(unittest.TestCase):
+    """The eleventh field keeps a rule to the start of a line (True) or to past it (False)."""
+
+    RULES = [(0, r"[ \t]+", True), (1, r"\n"), (2, r"#[^\n]*", False, [], None, None, None, None, None, None, True),
+             (3, r"#[a-z]+", False, [], None, None, None, None, None, None, False), (4, r"[a-z]+")]
+
+    def test_a_rule_is_kept_to_its_place_on_the_line(self):
+        lexer = scilex.Lexer(self.RULES)
+        tokens = lexer.tokenize("# a #b\nx #c\n  #d")
+        self.assertEqual([(t.kind, t.lexeme) for t in tokens],
+                         [(2, "# a #b"), (1, "\n"), (4, "x"), (3, "#c"), (1, "\n"), (3, "#d")])
+        self.assertEqual(lexer.pike_rules("default"), [])
+
+    def test_the_rules_keep_the_field(self):
+        lexer = scilex.Lexer(self.RULES)
+        self.assertEqual(lexer.rules[2][10], True)
+        self.assertEqual(lexer.rules[3][10], False)
+        self.assertEqual(len(lexer.rules[4]), 3)
+        self.assertEqual(scilex.Lexer(lexer.rules).rules, lexer.rules)
+
+    def test_a_grammar_gives_the_field(self):
+        grammar = scilex.parse_grammar("HEAD\t#.*\tline_start\nTAG\t#[a-z]+\tnot_line_start extend=lines\n"
+                                       "WORD\t[a-z]+\textend=lines\nWS\t\\s+\tskip\n")
+        self.assertEqual(grammar.rules[0][10], True)
+        self.assertEqual(grammar.rules[1][8:], ("lines", None, False))
+        self.assertEqual(len(grammar.rules[2]), 10)
+        self.assertEqual([t.kind for t in grammar.lexer().tokenize("# x\n#y")], [0, 0])
+
+    def test_a_line_start_that_is_not_a_bool_is_refused(self):
+        with self.assertRaisesRegex(TypeError, "line_start must be None, True or False, got int"):
+            scilex.Lexer([(1, "a", False, [], None, None, None, None, None, None, 1)])
+
 
 class ErrorRecoveryTests(unittest.TestCase):
     """errors="token": a run of unlexable bytes becomes one ERROR token, not an exception."""
@@ -973,7 +1011,7 @@ class GrammarTests(unittest.TestCase):
             scilex.parse_grammar("A\ta\tbogus\n")
         self.assertEqual(caught.exception.cause,
                          "unknown option 'bogus' (expected skip, in=, push=, set=, pop, after=, not_after=, "
-                         "indent=, extend=, continue= or fragment)")
+                         "line_start, not_line_start, indent=, extend=, continue= or fragment)")
         with self.assertRaises(scilex.GrammarError) as caught:
             scilex.parse_grammar("# nothing\n")
         self.assertEqual(caught.exception.line, 0)

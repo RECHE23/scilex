@@ -146,6 +146,14 @@ namespace scilex {
    * for every context. The lexer gives a mode one DFA per distinct set of active rules, so the choice
    * costs nothing per token.
    *
+   * ## The start of a line {#rule_line_start}
+   *
+   * \ref at_line_start makes a rule depend on where its token begins: with `true` it is active only at the
+   * start of a line (the start of the text, or right after a `\n`), with `false` only past it. It says what
+   * a `(?<![^\n])` or `(?<=[^\n])` in front of the pattern says, but through the same units as the previous
+   * token, so the rule stays on the DFA where the lookbehind would send it to Pike, which every token then
+   * pays for. YAML's `---` is a document marker only at the start of a line, and past it begins a scalar.
+   *
    * ## Indentation {#rule_indentation}
    *
    * \ref indent and \ref extend (Layout Awareness Level B) let a token's extent depend on the indentation of
@@ -187,6 +195,9 @@ namespace scilex {
     //! What each line an \ref extension::lines token continues on must hold at its first non-blank (matched
     //! within the line); empty ⇒ \ref pattern.
     std::optional<real::regex> continuation {};
+    //! Active only at the start of a line (`true`) or only past it (`false`); empty ⇒ both (see
+    //! \ref rule_line_start).
+    std::optional<bool>        at_line_start {};
   };
 
   /*!
@@ -649,6 +660,9 @@ namespace scilex {
       build_dfa_modes(dfa_modes, dfa);
       for (const rule& r : rules_) {
         left_context_ = std::max(left_context_, r.pattern.left_context());
+        if (r.at_line_start.has_value()) {
+          left_context_ = std::max<std::size_t>(left_context_, 1); // the byte before a token says if a line starts there
+        }
         indentation_  = indentation_ || takes_part(r);
         std::vector<int>* const kinds {r.indent == indent_role::entry   ? &layout_roles_.entries
                                        : r.indent == indent_role::value ? &layout_roles_.values
@@ -960,7 +974,7 @@ namespace scilex {
     {
       while (cursor.offset < source.size()) {
         const std::size_t mode {stack.back().mode_id};
-        const std::size_t unit {unit_of(mode, previous)}; // the mode's rules active after `previous`
+        const std::size_t unit {unit_of(mode, previous, source, cursor.offset)}; // the mode's rules active here
         if (!gate.ready(unit, cursor.offset)) {
           return scan_status::pending;
         }
@@ -982,11 +996,12 @@ namespace scilex {
           const position err_start {cursor};
           advance(source, cursor, 1); // the byte at err_start is unmatched by definition
           while (cursor.offset < source.size()) {
-            if (!gate.ready(unit, cursor.offset)) {
+            const std::size_t here {unit_of(mode, previous, source, cursor.offset)};
+            if (!gate.ready(here, cursor.offset)) {
               return scan_status::pending;
             }
-            if (may_start(unit, static_cast<unsigned char>(source[cursor.offset]))) {
-              const munch_result probe {munch_at<may_wait<Gate>>(unit, source, cursor.offset, memos)};
+            if (may_start(here, static_cast<unsigned char>(source[cursor.offset]))) {
+              const munch_result probe {munch_at<may_wait<Gate>>(here, source, cursor.offset, memos)};
               if (probe.open && !gate.at_end()) {
                 return scan_status::pending;
               }
@@ -1214,10 +1229,11 @@ namespace scilex {
     }
 
     /*!
-     * \brief Splits each mode by the previous token (\ref rule::after, \ref rule::not_after): the kinds
-     *        are grouped by which of the mode's predicated rules they allow, and each group is a unit with
-     *        its own dispatch (and DFA). The group of a kind no predicate names keeps the mode's id; the
-     *        others take ids past the modes'. A mode with no predicated rule is one unit, its own.
+     * \brief Splits each mode by the previous token (\ref rule::after, \ref rule::not_after) and, when a
+     *        rule of it asks, by the start of a line (\ref rule::at_line_start): the kinds are grouped by
+     *        which of the mode's predicated rules they allow, and each group is a unit with its own dispatch
+     *        (and DFA). Past the start of a line, the group of a kind no predicate names keeps the mode's id;
+     *        the others take ids past the modes'. A mode with no predicated rule is one unit, its own.
      * \throws std::invalid_argument On a rule with both `after` and `not_after`.
      */
     void build_units()
@@ -1225,14 +1241,18 @@ namespace scilex {
       const std::size_t modes {mode_names_.size()};
       units_of_mode_.assign(modes, {});
       unit_rules_.assign(modes, {});
-      variants_.assign(modes, {});
+      inside_line_.assign(modes, {});
+      line_start_.assign(modes, {});
       for (std::size_t idx {0}; idx < rules_.size(); ++idx) {
         if (!rules_[idx].after.empty() && !rules_[idx].not_after.empty()) {
           throw std::invalid_argument("rule " + std::to_string(idx) + ": a rule has after or not_after, not both");
         }
       }
-      const auto allowed {[this](std::size_t idx, int previous) {
+      const auto allowed {[this](std::size_t idx, int previous, bool line_start) {
                             const rule& r {rules_[idx]};
+                            if (r.at_line_start.has_value() && *r.at_line_start != line_start) {
+                              return false;
+                            }
                             if (!r.after.empty()) {
                               return std::ranges::find(r.after, previous) != r.after.end();
                             }
@@ -1258,13 +1278,13 @@ namespace scilex {
           }
           ++unnamed;
         }
-        const auto rules_after {[&](int previous) {
+        const auto rules_after {[&](int previous, bool line_start) {
                                   std::vector<std::size_t> out;
                                   std::ranges::copy_if(active, std::back_inserter(out),
-                                                       [&](std::size_t idx) { return allowed(idx, previous); });
+                                                       [&](std::size_t idx) { return allowed(idx, previous, line_start); });
                                   return out;
                                 }};
-        const std::vector<std::size_t> own {rules_after(unnamed)};
+        const std::vector<std::size_t> own {rules_after(unnamed, false)};
         unit_rules_[m] = own;
         units_of_mode_[m].push_back(m);
         if (own.size() != active.size()) {
@@ -1273,38 +1293,60 @@ namespace scilex {
             add_to_mode(m, idx);
           }
         }
+        const auto unit_for {[&](std::vector<std::size_t> rules_for) {
+                               const auto existing {std::ranges::find_if(units_of_mode_[m], [&](std::size_t u) { return unit_rules_[u] == rules_for; })};
+                               if (existing != units_of_mode_[m].end()) {
+                                 return *existing;
+                               }
+                               const std::size_t unit {per_mode_.size()};
+                               per_mode_.emplace_back();
+                               for (const std::size_t idx : rules_for) {
+                                 add_to_mode(unit, idx);
+                               }
+                               unit_rules_.push_back(std::move(rules_for));
+                               units_of_mode_[m].push_back(unit);
+                               return unit;
+                             }};
+        inside_line_[m].own = m;
         for (const int kind : named) {
-          std::vector<std::size_t> rules_for {rules_after(kind)};
-          const auto               existing  {std::ranges::find_if(units_of_mode_[m], [&](std::size_t u) { return unit_rules_[u] == rules_for; })};
-          std::size_t              unit      {};
-          if (existing != units_of_mode_[m].end()) {
-            unit = *existing;
-          }
-          else {
-            unit = per_mode_.size();
-            per_mode_.emplace_back();
-            for (const std::size_t idx : rules_for) {
-              add_to_mode(unit, idx);
-            }
-            unit_rules_.push_back(std::move(rules_for));
-            units_of_mode_[m].push_back(unit);
-          }
           // Never the mode's own unit: a predicate of this mode names `kind`, so treats it unlike an unnamed one.
-          variants_[m].emplace_back(kind, unit);
+          inside_line_[m].variants.emplace_back(kind, unit_for(rules_after(kind, false)));
+        }
+        if (std::ranges::none_of(active, [this](std::size_t idx) { return rules_[idx].at_line_start.has_value(); })) {
+          inside_line_[m].single = named.empty();
+          continue;
+        }
+        inside_line_[m].by_line = true;
+        line_start_[m].own      = unit_for(rules_after(unnamed, true));
+        for (const int kind : named) {
+          line_start_[m].variants.emplace_back(kind, unit_for(rules_after(kind, true)));
         }
       }
     }
 
-    //! \brief The unit that munches in \p mode after a token of kind \p previous (\ref build_units).
-    [[nodiscard]] std::size_t unit_of(std::size_t mode,
-                                      int         previous) const
+    //! \brief Whether \p offset starts a line of \p source: its start, or right after a `\n` (\ref rule_line_start).
+    [[nodiscard]] static bool line_starts_at(std::string_view source,
+                                             std::size_t      offset) noexcept
     {
-      const std::vector<std::pair<int, std::size_t>>& variants {variants_[mode]};
-      if (variants.empty()) [[likely]] {
+      return offset == 0 || source[offset - 1] == '\n';
+    }
+
+    //! \brief The unit that munches in \p mode after a token of kind \p previous, at \p offset of \p source
+    //!        (\ref build_units).
+    [[nodiscard]] std::size_t unit_of(std::size_t      mode,
+                                      int              previous,
+                                      std::string_view source,
+                                      std::size_t      offset) const
+    {
+      const unit_table* table {&inside_line_[mode]};
+      if (table->single) [[likely]] {
         return mode;
       }
-      const auto found {std::ranges::lower_bound(variants, previous, {}, &std::pair<int, std::size_t>::first)};
-      return found != variants.end() && found->first == previous ? found->second : mode;
+      if (table->by_line && line_starts_at(source, offset)) {
+        table = &line_start_[mode];
+      }
+      const auto found {std::ranges::lower_bound(table->variants, previous, {}, &std::pair<int, std::size_t>::first)};
+      return found != table->variants.end() && found->first == previous ? found->second : table->own;
     }
 
     //! \brief Builds the layout-significance policy from the insignificant-mode
@@ -1747,8 +1789,16 @@ namespace scilex {
     std::vector<std::shared_ptr<const mode_dfa>> per_mode_dfa_;                  //!< Per-unit DFA fast path (nullptr = Pike).
     std::vector<std::vector<std::size_t>>        units_of_mode_;                 //!< Mode id -> its units (its own id first).
     std::vector<std::vector<std::size_t>>        unit_rules_;                    //!< Unit -> its active rules, ascending.
-    //! Mode id -> (previous kind, unit) for the kinds whose unit is not the mode's own, by kind.
-    std::vector<std::vector<std::pair<int, std::size_t>>> variants_;
+    //! \brief Where a mode munches, at one place on the line (\ref unit_of).
+    struct unit_table
+    {
+      std::size_t                              own      {0};     //!< The unit after a kind no predicate names.
+      std::vector<std::pair<int, std::size_t>> variants {};      //!< (previous kind, unit) for the others, by kind.
+      bool                                     by_line  {false}; //!< Whether a rule of the mode asks for the start of a line.
+      bool                                     single   {false}; //!< Whether the mode is one unit, its own.
+    };
+    std::vector<unit_table>                               inside_line_;          //!< By mode: past the start of a line.
+    std::vector<unit_table>                               line_start_;           //!< By mode: at the start of a line (when by_line).
     std::vector<bool>                                     mode_significant_;     //!< Layout policy (empty = all significant).
     scilex::layout_roles                                  layout_roles_;         //!< The kinds of the entry and value rules.
     std::size_t                                           left_context_ {0};     //!< Bytes before a token start any rule may read.

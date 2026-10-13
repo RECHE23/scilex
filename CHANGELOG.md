@@ -7,6 +7,15 @@ fuzz oracle.
 
 ## Unreleased
 
+### Added
+- **A rule can keep to the start of a line, or to past it** (`rule::at_line_start`): active only where its
+  token begins a line (the start of the text, or right after a `\n`), or only where it does not. It says what a
+  `(?<![^\n])` in front of the pattern says, but the lexer gives each place on the line its own unit and DFA, as
+  for the token before, so the rule stays off the general engine: on the YAML grammar the lookbehind form left
+  its scalar on Pike, 40 times as slow as with the predicate. A grammar that does not use it pays one test per
+  token, as before. In a `.lex` grammar the options `line_start` and `not_line_start`; from Python an eleventh
+  rule field, `line_start` (`None`, `True` or `False`).
+
 ## 2026.10.9 — 2026-10-13
 
 ### Added

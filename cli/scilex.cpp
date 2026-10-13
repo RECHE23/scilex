@@ -21,7 +21,7 @@
  *   name<TAB>regex[<TAB>options]       (`#` comments and blank lines ignored)
  *
  * where the options are `skip`, `in=m1,m2`, one of `push=m`, `set=m`, `pop`, `after=` or
- * `not_after=`, and Level B's `indent=`, `extend=`, `continue=` and `fragment`; a line
+ * `not_after=`, `line_start` or `not_line_start`, and Level B's `indent=`, `extend=`, `continue=` and `fragment`; a line
  * `%insignificant m1,m2` names the modes whose tokens carry no layout (for `--layout`).
  * The lexer itself takes plain C++ rule lists; `scilex.hpp` does not include the
  * format. Built-in grammars reuse the `examples/<lang>.hpp` registry, so the
@@ -273,6 +273,7 @@ namespace {
         << "  --columns=bytes|codepoints|utf16  unit for token columns (default: bytes)\n"
         << "grammar file: one rule per line   name<TAB>regex[<TAB>options]   ('#' comments, blank lines ok)\n"
         << "  options (space-separated):      skip, in=m1,m2, one of push=m, set=m, pop, after=A,B or not_after=A,B,\n"
+        << "                                  line_start or not_line_start,\n"
         << "                                  indent=entry|key|value|reset, extend=block|lines, continue=N, fragment\n"
         << "  directive line:                 %insignificant m1,m2   (modes without layout, for --layout)\n"
         << "output: one token per line        KIND<TAB>lexeme<TAB>line:col\n"

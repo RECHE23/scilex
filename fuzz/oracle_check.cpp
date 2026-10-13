@@ -386,6 +386,11 @@ namespace {
       for (const int kind : rule.after.empty() ? rule.not_after : rule.after) {
         predicate += ' ' + (kind == scilex::end_of_input ? std::string {"start"} : kind == scilex::error ? std::string {"error"} : std::to_string(kind));
       }
+      switch (draw(rng, 6)) {
+        case 0:  rule.at_line_start = true; predicate += " line_start"; break;
+        case 1:  rule.at_line_start = false; predicate += " not_line_start"; break;
+        default: break;
+      }
       out.description += "  " + std::to_string(i) + ": " + preview(pattern) + (raw ? " (bytes)" : "")
                          + (rule.skip ? " skip" : "") + (rule.in_mode.empty() ? "" : " in=" + rule.in_mode.back())
                          + (rule.action ? " action" : "") + indentation + predicate + '\n';

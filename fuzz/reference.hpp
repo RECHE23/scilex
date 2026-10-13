@@ -101,10 +101,16 @@ namespace scilex::fuzz {
   }
 
   //! \brief Is \p rule active after a token of kind \p previous (\ref scilex::rule::after,
-  //!        \ref scilex::rule::not_after)? The spec stated directly, independent of the lexer's units.
+  //!        \ref scilex::rule::not_after), at \p offset of \p source (\ref scilex::rule::at_line_start)? The
+  //!        spec stated directly, independent of the lexer's units.
   inline bool predicate_allows(const scilex::rule& rule,
-                               int                 previous)
+                               int                 previous,
+                               std::string_view    source,
+                               std::size_t         offset)
   {
+    if (rule.at_line_start && *rule.at_line_start != (offset == 0 || source[offset - 1] == '\n')) {
+      return false;
+    }
     if (!rule.after.empty()) {
       return std::find(rule.after.begin(), rule.after.end(), previous) != rule.after.end();
     }
@@ -264,7 +270,7 @@ namespace scilex::fuzz {
       std::size_t            best_len  {0};
       const scilex::rule*    best      {nullptr};
       for (const scilex::rule& candidate : local) {
-        if (!rule_active_in(candidate, mode_name) || !predicate_allows(candidate, previous)) {
+        if (!rule_active_in(candidate, mode_name) || !predicate_allows(candidate, previous, source, cursor.offset)) {
           continue; // brute-force, but only over the rules active in this mode, after this token
         }
         // In the whole text, as the lexer matches: a lookbehind or `^` sees what precedes the token.
@@ -322,7 +328,7 @@ namespace scilex::fuzz {
                                      int                              previous)
   {
     for (const scilex::rule& candidate : rules) {
-      if (!rule_active_in(candidate, mode_name) || !predicate_allows(candidate, previous)) {
+      if (!rule_active_in(candidate, mode_name) || !predicate_allows(candidate, previous, source, offset)) {
         continue;
       }
       const auto matched {candidate.pattern.match(source, offset)};
@@ -385,7 +391,7 @@ namespace scilex::fuzz {
       const scilex::rule*    best      {nullptr};
       bool                   any       {false}; // some rule matched, possibly empty
       for (const scilex::rule& candidate : local) {
-        if (!rule_active_in(candidate, mode_name) || !predicate_allows(candidate, previous)) {
+        if (!rule_active_in(candidate, mode_name) || !predicate_allows(candidate, previous, source, cursor.offset)) {
           continue;
         }
         const auto matched {candidate.pattern.match(source, cursor.offset)};
@@ -556,7 +562,7 @@ namespace scilex::fuzz {
       std::vector<std::size_t> heads;                                                         // the matches of this kind's extending rules, shorter than the lexeme
       const int                previous  {i == 0 ? scilex::end_of_input : eager[i - 1].kind}; // no error runs: the policy raises
       for (const scilex::rule& candidate : rules) {
-        if (!rule_active_in(candidate, mode_name) || !predicate_allows(candidate, previous)) {
+        if (!rule_active_in(candidate, mode_name) || !predicate_allows(candidate, previous, input, tok.start.offset)) {
           continue; // only the rules the lexer could have used in this mode, after the token before
         }
         const auto        matched {candidate.pattern.match(input, tok.start.offset)};
