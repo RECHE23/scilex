@@ -39,7 +39,8 @@
  *   - strings `"…"` (with `\`-escapes) and `'…'` (with `''` escapes);
  *   - block scalars `|` / `>` (with chomping and indentation indicators) as one
  *     token, header to body, and plain scalars continued on the next lines;
- *   - block indentation via layout().
+ *   - block indentation via layout(), with the lexer's entry and value roles: the compact `- key:` nests at its
+ *     key, and a value on the line below its key opens no block, as PyYAML's indentation stack takes them.
  *
  * REAL notes (reusable): lookahead `(?=…)` is not supported by REAL, so the block
  * dash cannot be written `-(?=\s|$)`. Instead `-` is a 1-char rule listed before
@@ -260,7 +261,7 @@ nested:
     int indents {0};
     int dedents {0};
     for (const scilex::token& tok : scilex::layout(lex.tokenize(src, scilex::eof_policy::append),
-                                                   lex.mode_significant())) {
+                                                   lex.mode_significant(), lex.layout_roles())) {
       indents += static_cast<int>(tok.kind == scilex::indent);
       dedents += static_cast<int>(tok.kind == scilex::dedent);
     }
@@ -335,6 +336,12 @@ nested:
     }
     // (7) the realistic sample lexes; its block layout is balanced with INDENTs.
     if (const auto [ind, ded] = indent_dedent(lex, sample); ind == 0 || ind != ded) {
+      return false;
+    }
+    // (8) the compact `- key:` nests its mapping at its key, whose sibling keys continue it (one block, as PyYAML's
+    //     indentation stack opens), and a value on the line below its key opens none.
+    if (indent_dedent(lex, "- a:\n    b: 1\n  c: 2\n") != std::pair<int, int> {2, 2}
+        || indent_dedent(lex, "k:\n  v\n") != std::pair<int, int> {0, 0}) {
       return false;
     }
     return true;

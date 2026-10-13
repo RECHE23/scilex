@@ -409,6 +409,8 @@ class Lexer:
             else:
                 normalized.append((kind, pattern, skip)) # plain rule stays a triple
         self._rules = normalized
+        self._entry_kinds = sorted({rule[0] for rule in normalized if len(rule) > 7 and rule[7] == "entry"})
+        self._value_kinds = sorted({rule[0] for rule in normalized if len(rule) > 7 and rule[7] == "value"})
         self._dfa_modes = [str(mode) for mode in dfa_modes]
         self._errors = errors
         self._columns = columns
@@ -502,6 +504,10 @@ class Lexer:
         Uses this lexer's :attr:`insignificant_modes` (Layout Awareness Level A):
         a token in an insignificant mode is passed through without shaping
         indentation, so multi-line brackets / flow collections read as continuation.
+        And its rules' ``indent`` roles (Level B): the node past an ``"entry"`` opens
+        a block at its column when it is an entry itself or a ``"value"`` follows it
+        on its line (YAML's compact ``- key: v``), and with such roles a deeper line
+        opens one only as a collection.
 
         Args:
             tokens (iterable[Token]): An end-of-input-terminated token stream
@@ -517,7 +523,8 @@ class Lexer:
             error: On a line that dedents to an unknown indentation, or mixes tabs
                 and spaces ambiguously under ``tabs="python"`` (``.position``).
         """
-        return Layout(self._insignificant).apply(tokens, source=source, tabs=tabs)
+        return Layout(self._insignificant, self._entry_kinds, self._value_kinds).apply(tokens, source=source,
+                                                                                       tabs=tabs)
 
     def tokenize(self, text, eof=False):
         """Tokenize ``text`` eagerly into a list.
@@ -690,7 +697,11 @@ class Layout:
     With ``insignificant_modes`` (Layout Awareness Level A), a token whose
     :attr:`Token.mode` is listed is passed through without shaping indentation, so a
     multi-line bracket or flow collection reads as line continuation. The default
-    (none) is the positional pass. :meth:`Lexer.layout` wires a lexer's own modes.
+    (none) is the positional pass. With ``entry_kinds`` and ``value_kinds`` (Layout
+    Awareness Level B), the node past an entry on its line opens a block at its column
+    when it is an entry itself or a value follows it there, and a deeper line opens
+    one only as a collection, as YAML's indentation nests. :meth:`Lexer.layout` wires a
+    lexer's own modes and roles.
 
     The reserved kinds are exposed as :attr:`newline_kind`, :attr:`indent_kind` and
     :attr:`dedent_kind`.
@@ -700,8 +711,10 @@ class Layout:
     indent_kind = INDENT
     dedent_kind = DEDENT
 
-    def __init__(self, insignificant_modes=()):
+    def __init__(self, insignificant_modes=(), entry_kinds=(), value_kinds=()):
         self._insignificant = [str(mode) for mode in insignificant_modes]
+        self._entry_kinds = list(entry_kinds)
+        self._value_kinds = list(value_kinds)
 
     def apply(self, tokens, source=None, tabs="columns"):
         """Rewrite ``tokens`` with NEWLINE/INDENT/DEDENT inserted.
@@ -735,7 +748,7 @@ class Layout:
                                 "tokenize a str source before applying layout")
             fields.append((t.kind, t.lexeme, t.offset, t.line, t.column, t.mode))
         try:
-            raw = _layout(fields, self._insignificant, source, tabs)
+            raw = _layout(fields, self._insignificant, source, tabs, self._entry_kinds, self._value_kinds)
         except error as exc:
             _attach_position(exc)
             raise
@@ -770,7 +783,7 @@ def scan(rules, text, eof=False):
     return Lexer(rules).scan(text, eof=eof)
 
 
-def layout(tokens, insignificant_modes=(), source=None, tabs="columns"):
+def layout(tokens, insignificant_modes=(), source=None, tabs="columns", entry_kinds=(), value_kinds=()):
     """Insert NEWLINE/INDENT/DEDENT into ``tokens`` (see :meth:`Layout.apply`).
 
     Args:
@@ -779,11 +792,13 @@ def layout(tokens, insignificant_modes=(), source=None, tabs="columns"):
             (Layout Awareness Level A).
         source (str | None): The text ``tokens`` were lexed from (for ``tabs="python"``).
         tabs (str): ``"columns"`` or ``"python"`` (see :meth:`Layout.apply`).
+        entry_kinds (iterable[int]), value_kinds (iterable[int]): The kinds of the entry
+            and value rules (Layout Awareness Level B, see :class:`Layout`).
 
     Returns:
         list[Token]: The layout-aware tokens.
     """
-    return Layout(insignificant_modes).apply(tokens, source=source, tabs=tabs)
+    return Layout(insignificant_modes, entry_kinds, value_kinds).apply(tokens, source=source, tabs=tabs)
 
 
 def get_include():

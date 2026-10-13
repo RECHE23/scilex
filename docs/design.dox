@@ -189,7 +189,10 @@ lay = scilex.Lexer([(0, r"\s+", True), (1, r"\w+", False), (2, r":", False)])
   an indentation role (\ref scilex::indent_role), and an \ref scilex::extension reads the
   innermost — YAML's block scalars and continued plain scalars. The roles and the
   stack are YAML's scanner's; an insignificant mode takes no part, and a grammar with no
-  role pays nothing.
+  role pays nothing. The same roles reach \ref scilex::layout as \ref scilex::layout_roles
+  (\ref scilex::lexer::layout_roles): the node past an entry opens a block at its column
+  when it is an entry or a value follows it on its line (the compact `- key: v`), and a
+  deeper line opens one only as a collection — the blocks PyYAML's indentation stack opens.
 - **Byte columns.** A `column` counts bytes, matching REAL's UTF-8 byte model: an
   ASCII column equals a character column, but a multibyte codepoint spans several
   byte columns.

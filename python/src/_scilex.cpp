@@ -8,7 +8,7 @@
 //   _scilex.stream_start(handle) -> capsule       # text fed in pieces (scilex::token_stream)
 //   _scilex.stream_feed(stream, chunk) -> list     # the tokens no text still to come can change
 //   _scilex.stream_finish(stream) -> list          # the tokens left once the text has ended
-//   _scilex.layout(tokens, insignificant=()) -> list  # mode-aware NEWLINE/INDENT/DEDENT
+//   _scilex.layout(tokens, insignificant=(), source=None, tabs='columns', entry_kinds=(), value_kinds=()) -> list
 //   _scilex.error                             # raised on a bad pattern, unlexable input, or bad indent
 //
 // A compiled lexer (held in a PyCapsule) owns its REAL regexes, so the rules are
@@ -1323,8 +1323,16 @@ PyObject* scilex_layout(PyObject* /*self*/, PyObject* args)
     const char* source            = nullptr; // optional: the UTF-8 text the tokens came from
     Py_ssize_t  source_length     = 0;
     const char* tabs_name         = "columns";
-    if (PyArg_ParseTuple(args, "O|Oz#s", &seq, &insignificant_obj, &source, &source_length, &tabs_name) == 0) {
+    PyObject*   entries_obj       = nullptr; // optional: the kinds of the entry rules (Level B)
+    PyObject*   values_obj        = nullptr; // optional: the kinds of the value rules (Level B)
+    if (PyArg_ParseTuple(args, "O|Oz#sOO", &seq, &insignificant_obj, &source, &source_length, &tabs_name, &entries_obj,
+                         &values_obj)
+        == 0) {
         return nullptr;
+    }
+    scilex::layout_roles roles;
+    if (parse_kinds(entries_obj, &roles.entries, "entry_kinds") < 0 || parse_kinds(values_obj, &roles.values, "value_kinds") < 0) {
+        return nullptr; // not a sequence of ints (error set)
     }
     const std::string_view tabs_view {tabs_name};
     if (tabs_view != "columns" && tabs_view != "python") {
@@ -1400,9 +1408,9 @@ PyObject* scilex_layout(PyObject* /*self*/, PyObject* args)
                                   == insignificant.end();
         }
         const std::vector<scilex::token> out {
-            source == nullptr ? scilex::layout(input, mode_significant)
+            source == nullptr ? scilex::layout(input, mode_significant, roles)
                               : scilex::layout(input, std::string_view(source, static_cast<std::size_t>(source_length)),
-                                               tabs, mode_significant)};
+                                               tabs, mode_significant, roles)};
         // Layout is a str/indentation pass, so its synthetic and re-emitted tokens are str lexemes.
         result = build_token_list(out, /*is_bytes=*/false,
                                   [&](std::size_t id) -> const std::string& { return names[id]; });
@@ -1568,7 +1576,7 @@ SCIFORGE_MODULE(_scilex, "scilex.error", m)
           "stream_window(stream) -> (offset, bytes)\n"
           "The last bytes fed and the offset of the first in the whole text (an error's surroundings).");
     m.raw("layout", scilex_layout, METH_VARARGS,
-          "layout(tokens, insignificant=(), source=None, tabs='columns')\n"
+          "layout(tokens, insignificant=(), source=None, tabs='columns', entry_kinds=(), value_kinds=())\n"
           "Insert NEWLINE/INDENT/DEDENT tokens from indentation (mode-aware).\n\n"
           "Args:\n"
           "    tokens (sequence): An end_of_input-terminated sequence of\n"
@@ -1577,13 +1585,17 @@ SCIFORGE_MODULE(_scilex, "scilex.error", m)
           "        structure (Layout Awareness Level A); empty is the positional pass.\n"
           "    source (str | None): The text the tokens were lexed from (UTF-8 offsets).\n"
           "    tabs (str): 'columns' (a tab is one column) or 'python' (CPython's rule,\n"
-          "        which needs source).\n\n"
+          "        which needs source).\n"
+          "    entry_kinds, value_kinds (sequence): The kinds of the entry and value rules\n"
+          "        (Layout Awareness Level B): the node past an entry opens a block at its\n"
+          "        column as a collection; none is the positional pass.\n\n"
           "Returns:\n"
           "    list: The layout-aware tuples (still end_of_input-terminated).\n\n"
           "Raises:\n"
           "    error: On a dedent to an indentation no open block used, or tabs and spaces mixed\n"
           "        so that a level is ambiguous under tabs='python' (with .offset/.line/.column).\n"
-          "    ValueError: On an unknown tabs, tabs='python' without source, or a token beyond source.");
+          "    ValueError: On an unknown tabs, tabs='python' without source, or a token beyond source.\n"
+          "    error: On entry_kinds or value_kinds not a sequence of int kinds.");
 
     // C-native value types (the bulk-tokenization diet): built once, in C, instead of a C tuple that
     // Python re-wraps. The attribute surface, __eq__/__hash__/__repr__ and the manual constructors match

@@ -44,8 +44,10 @@ Tokens and positions
 Layout (``scilex/layout.hpp``)
 ------------------------------
 
-.. doxygenfunction:: scilex::layout(std::span<const token>, const std::vector<bool>&)
-.. doxygenfunction:: scilex::layout(std::span<const token>, std::string_view, tab_policy, const std::vector<bool>&)
+.. doxygenfunction:: scilex::layout(std::span<const token>, const std::vector<bool>&, const layout_roles&)
+.. doxygenfunction:: scilex::layout(std::span<const token>, std::string_view, tab_policy, const std::vector<bool>&, const layout_roles&)
+.. doxygenstruct:: scilex::layout_roles
+   :members:
 .. doxygenenum:: scilex::tab_policy
 .. doxygenclass:: scilex::layout_error
    :members:

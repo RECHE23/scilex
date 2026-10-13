@@ -254,3 +254,119 @@ TEST(python_policy_refuses_a_source_shorter_than_the_tokens)
   }
   EXPECT(threw);
 }
+
+namespace {
+  inline constexpr int dash   {3};
+  inline constexpr int colon  {4};
+  inline constexpr int anchor {5};
+  inline constexpr int flow   {6};
+
+  // A lexer whose `-` opens a block at its column and whose `:` is a value (Layout Awareness Level B roles).
+  scilex::lexer make_role_lexer()
+  {
+    std::vector<scilex::rule> rules;
+    rules.push_back({.kind = ws, .pattern = real::regex("\\s+"), .skip = true});
+    rules.push_back({.kind = dash, .pattern = real::regex("-"), .skip = false, .indent = scilex::indent_role::entry});
+    rules.push_back({.kind = colon, .pattern = real::regex(":"), .skip = false, .indent = scilex::indent_role::value});
+    rules.push_back({.kind = anchor, .pattern = real::regex("&[a-z]+"), .skip = false});
+    rules.push_back({.kind = flow, .pattern = real::regex("\\[[a-z]*\\]"), .skip = false});
+    rules.push_back({.kind = id, .pattern = real::regex("[a-z]+"), .skip = false});
+    return scilex::lexer(std::move(rules));
+  }
+
+  // The kinds of the laid-out stream with the lexer's roles, measured by columns or (with \p python) CPython's rule.
+  std::vector<int> role_kinds(std::string_view source,
+                              bool             python = false)
+  {
+    const scilex::lexer lexer  {make_role_lexer()};
+    const auto          tokens {lexer.tokenize(source, scilex::eof_policy::append)};
+    std::vector<int>    kinds;
+    for (const scilex::token& tok : python ? scilex::layout(tokens, source, scilex::tab_policy::python, {}, lexer.layout_roles())
+                                           : scilex::layout(tokens, {}, lexer.layout_roles())) {
+      kinds.push_back(tok.kind);
+    }
+    return kinds;
+  }
+
+  constexpr int r_nl  {scilex::newline};
+  constexpr int r_in  {scilex::indent};
+  constexpr int r_de  {scilex::dedent};
+  constexpr int r_end {scilex::end_of_input};
+} // namespace
+
+TEST(a_lexer_lists_its_entry_and_value_kinds)
+{
+  const scilex::lexer lexer {make_role_lexer()};
+  EXPECT(lexer.layout_roles().entries == std::vector<int> {dash});
+  EXPECT(lexer.layout_roles().values == std::vector<int> {colon});
+  EXPECT(make_lexer().layout_roles().entries.empty() && make_lexer().layout_roles().values.empty());
+}
+
+// The compact `- key: v` opens a block at the key, which its sibling keys continue, as PyYAML nests it; `- - x`
+// opens one at the inner entry.
+TEST(the_node_past_an_entry_opens_a_block_as_a_collection)
+{
+  EXPECT(role_kinds("- a: b\n  c: d\n- e\n")
+         == (std::vector<int> {dash, r_in, id, colon, id, r_nl, id, colon, id, r_nl, r_de, dash, id, r_nl, r_end}));
+  EXPECT(role_kinds("- - a: b\n    c: d\n")
+         == (std::vector<int> {dash, r_in, dash, r_in, id, colon, id, r_nl, id, colon, id, r_nl, r_de, r_de, r_end}));
+  EXPECT(role_kinds("- &x a: b\n  c: d\n")
+         == (std::vector<int> {dash, r_in, anchor, id, colon, id, r_nl, id, colon, id, r_nl, r_de, r_end}));
+}
+
+// A scalar, a flow collection or a node's properties past an entry open none: the next line decides.
+TEST(a_scalar_flow_or_property_past_an_entry_opens_no_block)
+{
+  EXPECT(role_kinds("- a\n- [b]\n") == (std::vector<int> {dash, id, r_nl, dash, flow, r_nl, r_end}));
+  EXPECT(role_kinds("- &x\n   a: b\n")
+         == (std::vector<int> {dash, anchor, r_nl, r_in, id, colon, id, r_nl, r_de, r_end}));
+}
+
+// With roles, a deeper line opens a block only as a collection: a value on the line below its key opens none.
+TEST(a_deeper_line_opens_a_block_only_as_a_collection)
+{
+  EXPECT(role_kinds("a:\n  b\nc: d\n") == (std::vector<int> {id, colon, r_nl, id, r_nl, id, colon, id, r_nl, r_end}));
+  EXPECT(role_kinds("a:\n  b: c\n") == (std::vector<int> {id, colon, r_nl, r_in, id, colon, id, r_nl, r_de, r_end}));
+  EXPECT(role_kinds("a:\n  - b\n") == (std::vector<int> {id, colon, r_nl, r_in, dash, id, r_nl, r_de, r_end}));
+  // Without roles the same lexer's stream is the positional pass, which opens one for the lone value.
+  const scilex::lexer lexer  {make_role_lexer()};
+  const auto          tokens {lexer.tokenize("a:\n  b\n", scilex::eof_policy::append)};
+  std::vector<int>    kinds;
+  for (const scilex::token& tok : scilex::layout(tokens)) {
+    kinds.push_back(tok.kind);
+  }
+  EXPECT(kinds == (std::vector<int> {id, colon, r_nl, r_in, id, r_nl, r_de, r_end}));
+}
+
+// CPython's measure places the blocks the roles open as the columns do, where no tab makes them differ.
+TEST(the_roles_take_the_python_measure_too)
+{
+  for (const std::string_view source : {"- a: b\n  c: d\n", "a:\n  b: c\n"}) {
+    EXPECT(role_kinds(source, true) == role_kinds(source));
+  }
+}
+
+// An entry alone on its line leaves the block to the next line; a value opening a line, past a node left pending
+// on the line before, opens none (YAML's explicit `: v`).
+TEST(an_entry_or_a_pending_node_ends_with_its_line)
+{
+  EXPECT(role_kinds("-\n  a: b\n") == (std::vector<int> {dash, r_nl, r_in, id, colon, id, r_nl, r_de, r_end}));
+  EXPECT(role_kinds("- a\n: b\n") == (std::vector<int> {dash, id, r_nl, colon, id, r_nl, r_end}));
+}
+
+// Value roles alone take part too: a deeper line opens a block only as a collection. Two entry rules of one kind
+// list it once.
+TEST(value_roles_alone_and_repeated_kinds)
+{
+  const scilex::lexer lexer  {make_role_lexer()};
+  const auto          tokens {lexer.tokenize("a:\n  b\nc:\n  d: e\n", scilex::eof_policy::append)};
+  std::vector<int>    kinds;
+  for (const scilex::token& tok : scilex::layout(tokens, {}, scilex::layout_roles {.entries = {}, .values = {colon}})) {
+    kinds.push_back(tok.kind);
+  }
+  EXPECT(kinds == (std::vector<int> {id, colon, r_nl, id, r_nl, id, colon, r_nl, r_in, id, colon, id, r_nl, r_de, r_end}));
+  std::vector<scilex::rule> rules;
+  rules.push_back({.kind = dash, .pattern = real::regex("-"), .skip = false, .indent = scilex::indent_role::entry});
+  rules.push_back({.kind = dash, .pattern = real::regex("[+]"), .skip = false, .indent = scilex::indent_role::entry});
+  EXPECT(scilex::lexer(std::move(rules)).layout_roles().entries == std::vector<int> {dash});
+}

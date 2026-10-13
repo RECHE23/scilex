@@ -28,7 +28,12 @@
  * tokens). A token whose end the indentation decides (YAML's block scalar `|` / `>`,
  * a continued plain scalar) is the lexer's — Layout Awareness Level B, see
  * \ref rule_indentation — and spans its lines; this pass reads where it starts, so
- * its body adds no structure. Two invariants
+ * its body adds no structure. The same roles reach this pass through \ref scilex::layout_roles, where
+ * the node past an entry (`indent=entry`, YAML's `-`) on its line opens a block at its column when it is
+ * an entry itself or a value (`indent=value`, YAML's `:`) follows it there, so the compact `- key: v` and
+ * `- - x` nest as PyYAML's indentation stack nests them (an INDENT before `key`, its sibling keys at that
+ * column), while `- x`, `- [a]` or a node's properties alone (`- &anchor`) open none; and a deeper line
+ * opens a block only as a collection. No roles (the default) is the positional pass. Two invariants
  * hold: (1) an empty policy ⇒ byte-for-byte the positional pass, at zero cost; (2)
  * the **mode** is the single source of truth for the policy — there is no per-rule
  * flag (e.g. `ignore_layout`); significance is derived from the mode, never beside it.
@@ -147,6 +152,7 @@ namespace scilex {
 
     [[nodiscard]] inline std::vector<token> layout_pass(std::span<const token>   tokens,
                                                         const std::vector<bool>& mode_significant,
+                                                        const layout_roles&      roles,
                                                         const std::string_view*  source,
                                                         tab_policy               tabs);
   } // namespace detail
@@ -162,14 +168,17 @@ namespace scilex {
    *        every token is significant — byte-for-byte the positional pass. (A
    *        `std::vector<bool>` rather than a `std::span<const bool>`: the bit-packed
    *        `vector<bool>` cannot be viewed as a contiguous span of `bool`.)
+   * \param[in] roles The kinds of the entry and value rules (Layout Awareness Level B: a lexer's
+   *        \ref lexer::layout_roles). None (the default) is the positional pass.
    * \return The layout-aware token sequence (still end-of-input-terminated).
    * \throws layout_error If a line dedents to an indentation that no open block
    *         used.
    */
   [[nodiscard]] inline std::vector<token> layout(std::span<const token>   tokens,
-                                                 const std::vector<bool>& mode_significant = {})
+                                                 const std::vector<bool>& mode_significant = {},
+                                                 const layout_roles&      roles            = {})
   {
-    return detail::layout_pass(tokens, mode_significant, nullptr, tab_policy::columns);
+    return detail::layout_pass(tokens, mode_significant, roles, nullptr, tab_policy::columns);
   }
 
   /*!
@@ -180,6 +189,7 @@ namespace scilex {
    * \param[in] source The text \p tokens were lexed from; a token's `start.offset` indexes it.
    * \param[in] tabs   How indentation is measured (\ref tab_policy).
    * \param[in] mode_significant As in the overload without a source.
+   * \param[in] roles            As in the overload without a source.
    * \return The layout-aware token sequence (still end-of-input-terminated).
    * \throws layout_error If a line dedents to an indentation that no open block used, or (under
    *         `tab_policy::python`) mixes tabs and spaces so that its level is ambiguous.
@@ -188,21 +198,27 @@ namespace scilex {
   [[nodiscard]] inline std::vector<token> layout(std::span<const token>   tokens,
                                                  std::string_view         source,
                                                  tab_policy               tabs,
-                                                 const std::vector<bool>& mode_significant = {})
+                                                 const std::vector<bool>& mode_significant = {},
+                                                 const layout_roles&      roles            = {})
   {
-    return detail::layout_pass(tokens, mode_significant, &source, tabs);
+    return detail::layout_pass(tokens, mode_significant, roles, &source, tabs);
   }
 
   [[nodiscard]] inline std::vector<token> detail::layout_pass(std::span<const token>   tokens,
                                                               const std::vector<bool>& mode_significant,
+                                                              const layout_roles&      roles,
                                                               const std::string_view*  source,
                                                               tab_policy               tabs)
   {
     const bool                          python_tabs   {source != nullptr && tabs == tab_policy::python};
+    const bool                          with_roles    {!roles.entries.empty() || !roles.values.empty()};
     std::vector<token>                  out;
     std::vector<std::size_t>            levels        {0};
     std::vector<detail::indent_measure> measured      {{0, 0}}; // python_tabs only: one per level
     bool                                started       {false};
+    bool                                opens         {false};  // the last significant token is an entry's
+    std::size_t                         pending       {0};      // with roles: out's index of a node that may open, or 0
+    detail::indent_measure              pending_at    {0, 0};   // that node's column
     std::size_t                         previous_line {0};      // last line a token reached
     position                            end_position  {0, 1, 1};
 
@@ -216,7 +232,9 @@ namespace scilex {
       const bool significant {mode_significant.empty()
                               || current.mode_id >= mode_significant.size()
                               || mode_significant[current.mode_id]};
-      if (significant && (!started || current.start.line != previous_line)) {
+      const bool line_start {significant && (!started || current.start.line != previous_line)};
+      bool       deeper     {false}; // with roles: a line deeper than its block, which opens one only as a collection
+      if (line_start) {
         if (started) {
           out.push_back(token {newline, {}, current.start});
         }
@@ -231,9 +249,15 @@ namespace scilex {
           if (python_tabs && here.tab1 <= measured.back().tab1) {
             throw layout_error(mixed, current.start);
           }
-          levels.push_back(width);
-          measured.push_back(here);
-          out.push_back(token {indent, {}, current.start});
+          if (with_roles) {
+            deeper     = true;
+            pending_at = here;
+          }
+          else {
+            levels.push_back(width);
+            measured.push_back(here);
+            out.push_back(token {indent, {}, current.start});
+          }
         }
         else {
           while (width < levels.back()) {
@@ -249,6 +273,36 @@ namespace scilex {
           }
         }
         started = true;
+      }
+      if (significant && with_roles) {
+        // A node opens a block at its column once it shows itself a collection: an entry itself (`- - x`, a deeper
+        // line's `- x`), or a value past it on its line (`- key: v`, `- &a key: v`, a deeper line's `key: v`). The
+        // nodes that may open are the one past an entry on its line and a line deeper than its block; a scalar, a
+        // flow collection or a node's properties alone (`- x`, `- [a]`, `- &a`, a value on the line below its key)
+        // open none, as PyYAML's indentation stack takes them.
+        const bool entry {std::ranges::find(roles.entries, current.kind) != roles.entries.end()};
+        const bool value {std::ranges::find(roles.values, current.kind) != roles.values.end()};
+        const bool past  {opens && !line_start};
+        if (past) {
+          pending_at = python_tabs ? detail::measure_indent(*source, current.start.offset)
+                                   : detail::indent_measure {current.start.column - 1, 0};
+        }
+        if ((past || deeper) && !entry) {
+          pending = out.size(); // its index once pushed
+        }
+        else if ((past || deeper) || (pending != 0 && value && !line_start)) {
+          // Deeper than the block it is in: a deeper line by its test above, a node past an entry by its column,
+          // and a node left pending was the last to open on its line, so it lies right of any block opened there.
+          const std::size_t node {past || deeper ? out.size() : pending};
+          levels.push_back(pending_at.tab8);
+          measured.push_back(pending_at);
+          out.insert(out.begin() + static_cast<std::ptrdiff_t>(node), token {indent, {}, node < out.size() ? out[node].start : current.start});
+          pending = 0;
+        }
+        else if (line_start) {
+          pending = 0;
+        }
+        opens = entry;
       }
       // Every token advances this, to the line of its LAST byte: a token spanning lines (a triple-quoted
       // string) leaves the scan on its closing line, so what follows there continues that line rather

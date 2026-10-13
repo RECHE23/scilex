@@ -82,5 +82,36 @@ class LevelB(unittest.TestCase):
             scilex.parse_grammar("A\ta\tskip fragment\n")
 
 
+class LayoutRoles(unittest.TestCase):
+    """The positional pass with the lexer's entry and value roles: the compact `- key: v` nests at its key, as
+    PyYAML's indentation stack does, and with roles a deeper line opens a block only as a collection."""
+
+    TEXT = "- a: b\n  c: d\nk:\n  v\n"
+
+    def kinds(self, tokens):
+        return [t.kind for t in tokens]
+
+    def test_a_lexer_lays_out_with_its_roles(self):
+        lexer = scilex.Lexer(RULES, insignificant_modes=["inner"])
+        indent, dedent, newline = scilex.Layout.indent_kind, scilex.Layout.dedent_kind, scilex.Layout.newline_kind
+        tokens = lexer.tokenize(self.TEXT, eof=True)
+        self.assertEqual([t.lexeme if t.kind >= 0 else t.kind for t in lexer.layout(tokens)],
+                         ["-", indent, "a", ":", "b", newline, "c", ":", "d", newline, dedent, "k", ":", newline, "v",
+                          newline, scilex.END_OF_INPUT])
+        grammar_lexer = scilex.parse_grammar(GRAMMAR).lexer()
+        self.assertEqual(self.kinds(grammar_lexer.layout(grammar_lexer.tokenize(self.TEXT, eof=True))).count(indent), 1)
+
+    def test_the_free_function_takes_the_roles_or_none(self):
+        lexer = scilex.Lexer(RULES, insignificant_modes=["inner"])
+        tokens = lexer.tokenize(self.TEXT, eof=True)
+        with_roles = scilex.layout(tokens, ["inner"], entry_kinds=[2], value_kinds=[3])
+        self.assertEqual(self.kinds(with_roles), self.kinds(lexer.layout(tokens)))
+        self.assertEqual(self.kinds(scilex.layout(tokens, ["inner"])).count(scilex.Layout.indent_kind), 2)
+        with self.assertRaises(TypeError):
+            scilex.layout(tokens, entry_kinds=3)
+        with self.assertRaises(TypeError):
+            scilex.layout(tokens, value_kinds=["a"])
+
+
 if __name__ == "__main__":
     unittest.main()

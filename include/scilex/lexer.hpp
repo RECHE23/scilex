@@ -650,6 +650,12 @@ namespace scilex {
       for (const rule& r : rules_) {
         left_context_ = std::max(left_context_, r.pattern.left_context());
         indentation_  = indentation_ || takes_part(r);
+        std::vector<int>* const kinds {r.indent == indent_role::entry   ? &layout_roles_.entries
+                                       : r.indent == indent_role::value ? &layout_roles_.values
+                                                                        : nullptr};
+        if (kinds != nullptr && std::ranges::find(*kinds, r.kind) == kinds->end()) {
+          kinds->push_back(r.kind);
+        }
       }
       indent_modes_.assign(mode_names_.size(), 1);
       for (std::size_t m {0}; m < mode_significant_.size(); ++m) {
@@ -735,6 +741,14 @@ namespace scilex {
     [[nodiscard]] const std::vector<bool>& mode_significant() const noexcept
     {
       return mode_significant_;
+    }
+
+    //! \brief The kinds of the rules with \ref indent_role::entry and \ref indent_role::value, in rule order: what
+    //!        \ref scilex::layout takes so that the node past an entry opens a block where it is a collection
+    //!        (YAML's compact `- key: v`). Empty when no rule has either role.
+    [[nodiscard]] const scilex::layout_roles& layout_roles() const noexcept
+    {
+      return layout_roles_;
     }
 
     //! \brief The name of mode \p id (0 is "default"), for labelling tokens.
@@ -1736,6 +1750,7 @@ namespace scilex {
     //! Mode id -> (previous kind, unit) for the kinds whose unit is not the mode's own, by kind.
     std::vector<std::vector<std::pair<int, std::size_t>>> variants_;
     std::vector<bool>                                     mode_significant_;     //!< Layout policy (empty = all significant).
+    scilex::layout_roles                                  layout_roles_;         //!< The kinds of the entry and value rules.
     std::size_t                                           left_context_ {0};     //!< Bytes before a token start any rule may read.
     bool                                                  indentation_  {false}; //!< Whether a rule takes part in Level B.
     std::vector<std::uint8_t>                             indent_modes_;         //!< By mode: 1 if it takes part in Level B (significant).

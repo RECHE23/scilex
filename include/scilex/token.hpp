@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <limits>
 #include <string_view>
+#include <vector>
 
 namespace scilex {
 
@@ -61,6 +62,15 @@ namespace scilex {
     std::string_view lexeme;      //!< The matched text, viewing into the source.
     position         start;       //!< Position of the token's first byte.
     std::size_t      mode_id {0}; //!< The mode this token was lexed in (0 = the default/root mode).
+  };
+  /*!
+   * \brief The token kinds whose rules take part in the indentation (Layout Awareness Level B), as a lexer's
+   *        \ref lexer::layout_roles gives them, for \ref layout.
+   */
+  struct layout_roles
+  {
+    std::vector<int> entries; //!< The kinds of `indent=entry` rules (YAML's `-`).
+    std::vector<int> values;  //!< The kinds of `indent=value` rules (YAML's `:`).
   };
 } // namespace scilex
 

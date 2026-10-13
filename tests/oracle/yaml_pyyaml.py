@@ -3,8 +3,9 @@ documentation toolchain and PyYAML) and this repository's workflows: each file m
 tokens — where each starts and ends, and a coarse class (plain, double- or single-quoted or block scalar, `:`,
 `?`, `-`, `,`, a flow bracket, anchor, alias, tag, document marker, directive) — as `yaml.scan` gives, or the run
 fails below its floor. A block scalar (`|`, `>`) and a plain scalar continued on the next lines are tokens the
-lexer bounds by the indentation of the node they belong to (Layout Awareness Level B). A file PyYAML refuses is
-counted apart, and printed by name.
+lexer bounds by the indentation of the node they belong to (Layout Awareness Level B). The layout pass's blocks are
+held to PyYAML's too: an INDENT wherever PyYAML starts a block collection past column 0 (a block mapping or
+sequence), and nowhere else. A file PyYAML refuses is counted apart, and printed by name.
 
 Usage: yaml_pyyaml.py <scilex CLI> [file …]   (run with the interpreter that has PyYAML: make yaml-oracle)
 """
@@ -32,8 +33,8 @@ THEIRS = {"ValueToken": "value", "KeyToken": "key", "BlockEntryToken": "entry", 
 
 
 def pyyaml_tokens(text):
-    """PyYAML's explicit tokens as (class, start, end) in characters; an exception's text when PyYAML refuses
-    the file."""
+    """PyYAML's explicit tokens as (class, start, end) in characters, and where it starts a block collection past
+    column 0 as ("block", start, start); an exception's text when PyYAML refuses the file."""
     tokens = []
     try:
         for token in yaml.scan(text):
@@ -44,6 +45,8 @@ def pyyaml_tokens(text):
                                start, end))
             elif name in THEIRS and end > start:  # an implicit key or value has no characters
                 tokens.append((THEIRS[name], start, end))
+            elif name in ("BlockMappingStartToken", "BlockSequenceStartToken") and token.start_mark.column > 0:
+                tokens.append(("block", start, start))
     except yaml.YAMLError as error:
         return str(error).split("\n")[0]
     return tokens
@@ -51,7 +54,7 @@ def pyyaml_tokens(text):
 
 def scilex_tokens(cli, path, text):
     """The CLI's tokens as (class, start, end) in characters, and its error line if it stopped."""
-    run = subprocess.run([cli, "--example", "yaml", "--no-layout", "--columns=codepoints", path], capture_output=True)
+    run = subprocess.run([cli, "--example", "yaml", "--columns=codepoints", path], capture_output=True)
     line_starts = [0] + [i + 1 for i, char in enumerate(text) if char == "\n"]
     tokens = []
     for line in run.stdout.decode("utf-8", "surrogateescape").split("\n"):
@@ -59,10 +62,13 @@ def scilex_tokens(cli, path, text):
         if len(fields) != 3 or line.startswith("#"):
             continue
         kind, lexeme, position = fields
-        if kind in ("NEWLINE", "INDENT", "DEDENT", "EOF"):  # the layout pass's, compared by its own tests
+        if kind in ("NEWLINE", "DEDENT", "EOF"):  # an INDENT is the block it opens; the others follow from it
             continue
         row, column = (int(part) for part in position.split(":"))
         start = line_starts[row - 1] + column - 1
+        if kind == "INDENT":
+            tokens.append(("block", start, start))
+            continue
         tokens.append((OURS[kind], start, start + len(unescape(lexeme).decode("utf-8", "replace"))))
     return tokens, run.stderr.decode("utf-8", "replace").strip()
 

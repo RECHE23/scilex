@@ -7,6 +7,16 @@ fuzz oracle.
 
 ## Unreleased
 
+### Added
+- **Layout Awareness Level B reaches the layout pass.** The entry and value roles of a lexer's rules
+  (`lexer::layout_roles`, a `scilex::layout_roles` for `scilex::layout`) let the node past an entry open a block at
+  its column when it is an entry itself or a value follows it on its line, and a deeper line open one only as a
+  collection. YAML's compact `- key: v` with sibling keys aligned on `key` now lays out (it was a layout error in
+  10 of 1 107 real files), and the YAML grammar's INDENTs are where PyYAML starts a block collection on all
+  1 107: the YAML oracle now holds the blocks to PyYAML's as well as the tokens. From Python, `Lexer.layout`
+  takes its rules' roles, and `layout` and `Layout` take `entry_kinds=` and `value_kinds=`; the CLI lays out
+  with the grammar's roles. With no such role the pass is the positional one, unchanged.
+
 ## 2026.10.8 — 2026-10-13
 
 ### Added

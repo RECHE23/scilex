@@ -254,12 +254,19 @@ Two invariants hold: with **no** insignificant mode the result is byte-for-byte 
 positional pass (zero cost); and the **mode** is the single source of the policy (no
 per-rule flag).
 
+**Level B** reaches the pass too. A lexer whose rules carry the roles `indent=entry` (YAML's
+`-`) and `indent=value` (`:`) lays out with them (`lexer.layout`, or the CLI): the node
+past an entry opens a block at its column when it is an entry itself or a value follows it
+on its line, so the compact `- key: v` nests its mapping at `key` and its sibling keys
+continue it; and a deeper line opens a block only as a collection, not for a value on the
+line below its key. With no such role, the pass is the positional one.
+
 **Honest scope.** Level A covers multi-line flow and implicit continuation; **Level B**
 covers tokens bounded by the indentation of their block (YAML's `|` / `>` scalars and
-continued plain scalars, held to PyYAML's scanner over 1 107 real files). The layout pass
-itself stays positional: YAML's compact form `- key:` followed by a sibling key aligned on
-`key` is a layout error there, though it lexes. The bundled grammars *demonstrate* the
-features; each `examples/<lang>.hpp` header documents its own scope.
+continued plain scalars) and the blocks the layout pass opens: over 1 107 real files, the
+YAML grammar's tokens are PyYAML's scanner's, and its INDENTs are where PyYAML starts a
+block collection. The bundled grammars *demonstrate* the features; each
+`examples/<lang>.hpp` header documents its own scope.
 
 ## CLI
 

@@ -56,7 +56,20 @@ match fixes the body's indentation), `lines` the lines indented past it, each re
 ```
 
 An insignificant mode takes no part, a stream decides such a token once its lines are complete, and layout
-reads where it starts, so its body adds no structure. In a `.lex` grammar the options are `indent=`,
+reads where it starts, so its body adds no structure.
+
+The roles shape `layout` as well. The node past an entry opens a block at its column when it is an entry
+itself or a value follows it on its line, so the compact `- key: v` nests its mapping at `key`, whose sibling
+keys continue it; and a deeper line opens a block only as a collection — a value on the line below its key
+opens none. These are the blocks YAML's scanner opens:
+
+```pycon
+>>> show(yamlish.layout(yamlish.tokenize("- a: b\n  c: d\nk:\n  v\n", eof=True)))
+['-', 'IN', 'a', ':', 'b', 'NL', 'c', ':', 'd', 'NL', 'DE', 'k', ':', 'NL', 'v', 'NL', 'EOF']
+```
+
+A lexer with no such role lays out positionally. The free function takes them as `entry_kinds=` and
+`value_kinds=`; in C++, `scilex::layout(tokens, mode_significant, lexer.layout_roles())`. In a `.lex` grammar the options are `indent=`,
 `extend=` and `continue=` ({doc}`grammar-format`); in C++, `scilex::rule::indent`, `extend` and
 `continuation`.
 
