@@ -983,8 +983,11 @@ namespace scilex {
         if (!gate.ready(unit, cursor.offset)) {
           return scan_status::pending;
         }
-        const munch_result m {munch_at<may_wait<Gate>>(unit, source, cursor.offset, memos)};
+        const munch_result m {munch_here(gate, unit, source, cursor.offset, memos)};
         if (m.open && !gate.at_end()) {
+          if constexpr (may_wait<Gate>::value) {
+            gate.left_open(unit, cursor.offset); // the next piece goes on from where this munch stands
+          }
           return scan_status::pending; // the DFA rules' munch may still change with what comes next
         }
 
@@ -1418,6 +1421,25 @@ namespace scilex {
     template <typename Gate>
     using may_wait = std::bool_constant<!std::is_same_v<Gate, whole_text>>;
 
+    //! \brief \ref munch_at for a scan step through \p gate: a stream's munch left open at the end of its last
+    //!        piece goes on from where it stood (`real::dfa_munch_progress`), so a long token fed in pieces is
+    //!        read once rather than once per piece; any other munch is \ref munch_at's.
+    template <typename Gate>
+    munch_result munch_here(const Gate&      gate,
+                            std::size_t      unit,
+                            std::string_view source,
+                            std::size_t      offset,
+                            munch_memos&     memos) const
+    {
+      if constexpr (may_wait<Gate>::value) {
+        if (gate.resumes(unit, offset)) {
+          const mode_dfa& hybrid {*per_mode_dfa_[unit]};
+          return munch_of(hybrid, hybrid.dfa.munch(source, offset, gate.progress()));
+        }
+      }
+      return munch_at<may_wait<Gate>>(unit, source, offset, memos);
+    }
+
     //! \brief The DFA's share of \ref munch_at: its rules' longest non-empty match, else the empty
     //!        match of a nullable DFA rule (\ref mode_dfa::empty_winner), else nothing.
     //! \param[in]     hybrid The mode's DFA.
@@ -1439,7 +1461,15 @@ namespace scilex {
       // linear in the source rather than quadratic. Each rule's match() is its longest, so the DFA's
       // longest is theirs; a DFA rule's empty match, which the DFA never reports, competes through
       // empty_winner.
-      const real::dfa_munch munch {hybrid.dfa.munch(source, offset, memo)};
+      return munch_of(hybrid, hybrid.dfa.munch(source, offset, memo));
+    }
+
+    //! \brief A DFA munch as \ref munch_at answers it: its rules' winner as a global rule index, else the empty
+    //!        match of a nullable DFA rule (\ref mode_dfa::empty_winner), else nothing; and whether more text may
+    //!        change it.
+    static munch_result munch_of(const mode_dfa&        hybrid,
+                                 const real::dfa_munch& munch) noexcept
+    {
       if (munch.match) {
         return munch_result {.have = true, .idx = hybrid.to_global[munch.match->rule_index], .len = munch.match->length,
                              .open = munch.more_text_may_change};
@@ -2069,12 +2099,49 @@ namespace scilex {
       frame       top;   //!< Its top frame before the transition.
     };
 
+    //! \brief A munch a step left open at the end of the buffer, in a mode wholly on its DFA: the next piece goes
+    //!        on from where it stood.
+    struct open_munch
+    {
+      std::size_t              unit     {std::numeric_limits<std::size_t>::max()}; //!< Its unit (none: no munch).
+      std::size_t              at       {0};                                       //!< Where it starts, in the whole text.
+      real::dfa_munch_progress progress {};                                        //!< Where its walk stands.
+    };
+
     //! \brief The gate a stream scans with: a munch goes ahead only where no rule of the mode can extend.
     struct gate
     {
       const token_stream*      stream; //!< The stream (its lexer and buffer).
       bool                     final;  //!< The end of the buffer is the end of the text.
       std::vector<undo_entry>* undo;   //!< The step's transitions, latest last.
+      open_munch*              open;   //!< The munch the last piece left open.
+
+      //! \brief Whether the munch in unit \p mode at \p offset of the buffer is the one the last piece left open.
+      [[nodiscard]] bool resumes(std::size_t mode,
+                                 std::size_t offset) const noexcept
+      {
+        return open->unit == mode && open->at == stream->base_ + offset;
+      }
+
+      //! \brief Where the open munch's walk stands.
+      [[nodiscard]] real::dfa_munch_progress& progress() const noexcept
+      {
+        return open->progress;
+      }
+
+      //! \brief Records that the munch in unit \p mode at \p offset of the buffer is open at its end: in a mode
+      //!        wholly on its DFA, the next piece goes on from where it stands (a munch it did not take from a
+      //!        progress, a fresh one).
+      void left_open(std::size_t mode,
+                     std::size_t offset) const noexcept
+      {
+        const auto* const hybrid {stream->owner_->per_mode_dfa_[mode].get()};
+        if (hybrid != nullptr && !hybrid->any_on_pike && !resumes(mode, offset)) {
+          open->progress.reset();
+          open->unit = mode;
+          open->at   = stream->base_ + offset;
+        }
+      }
 
       //! \brief Whether the munch at \p offset in unit \p mode is final.
       //! \param[in] mode   The active unit (the mode, or its variant for the previous token).
@@ -2127,7 +2194,7 @@ namespace scilex {
     {
       std::vector<token>  out;
       lexer::munch_memos  memos {owner_->memos_for(buffer_)};
-      const gate          g {.stream = this, .final = final, .undo = &undo_};
+      const gate          g {.stream = this, .final = final, .undo = &undo_, .open = &open_};
       token               next {};
       while (true) {
         const position     saved_cursor {cursor_};
@@ -2212,6 +2279,7 @@ namespace scilex {
     position                cursor_   {0, 1, 1};      //!< Where lexing resumes, in the buffer (line and column in the text).
     std::vector<frame>      stack_;                   //!< The mode stack.
     std::vector<undo_entry> undo_;                    //!< The transitions of the step under way (see \ref gate::undo).
+    open_munch              open_;                    //!< The munch the last piece left open (see \ref gate::open).
     std::string             tail_;                    //!< Fed bytes held back: a code point not yet complete.
     bool                    finished_ {false};        //!< \ref finish was called, or a lex_error ended the text.
     int                     previous_ {end_of_input}; //!< The kind of the token before the cursor.

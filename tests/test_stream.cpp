@@ -1,5 +1,7 @@
 // token_stream: text fed in pieces gives exactly the tokens tokenize gives the whole text -- the same
 // kinds, lexemes, positions and modes, the same errors -- whatever the cuts.
+#include <algorithm>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -651,4 +653,35 @@ TEST(the_dfa_example_grammars_keep_no_rule_on_pike)
       EXPECT(lex.pike_rules(mode).empty());
     }
   }
+}
+
+// A token still open at the end of a piece goes on, at the next one, from where its walk stood: a string of 256 KiB fed
+// in pieces of 64 bytes costs about what lexing it whole costs, where reading it again from its start at every piece
+// took some 2 000 times as long. The bound leaves a factor of 40 to the machine.
+TEST(stream_reads_a_long_open_token_once)
+{
+  const scilex::lexer lex {{scilex::rule {.kind = 1, .pattern = real::regex(R"("[^"]*")")},
+    scilex::rule {.kind = 2, .pattern = real::regex(R"(\s+)"), .skip = true}}};
+  const std::string text {'"' + std::string(256 * 1024, 'a') + '"'};
+  const auto        best {[](const auto& run) {
+                            double fastest {1e30};
+                            for (int round {0}; round < 3; ++round) {
+                              const auto start {std::chrono::steady_clock::now()};
+                              run();
+                              fastest = std::min(fastest, std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
+                            }
+                            return fastest;
+                          }};
+  std::size_t  tokens   {0};
+  const double whole    {best([&] { tokens = lex.tokenize(text).size(); })};
+  const double streamed {best([&] {
+                                scilex::token_stream in {lex.stream()};
+                                std::size_t          count {0};
+                                for (std::size_t at {0}; at < text.size(); at += 64) {
+                                  count += in.feed(std::string_view {text}.substr(at, 64)).size();
+                                }
+                                count += in.finish().size();
+                                EXPECT_EQ(count, tokens);
+                              })};
+  EXPECT(streamed < 40.0 * whole + 1e-3);
 }
