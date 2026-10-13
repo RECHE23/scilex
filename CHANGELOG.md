@@ -7,6 +7,8 @@ fuzz oracle.
 
 ## Unreleased
 
+## 2026.10.9 — 2026-10-13
+
 ### Added
 - **Layout Awareness Level B reaches the layout pass.** The entry and value roles of a lexer's rules
   (`lexer::layout_roles`, a `scilex::layout_roles` for `scilex::layout`) let the node past an entry open a block at
