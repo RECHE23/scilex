@@ -95,6 +95,15 @@ TEST(a_rule_kept_past_the_start_of_a_line_and_one_kept_to_it_split_a_pattern)
   EXPECT(every_scan_agrees(lex, "---\n --- ---\n---"));
 }
 
+TEST(a_stream_reads_the_byte_before_a_token_it_has_dropped_the_text_of)
+{
+  // `#b` follows the word `a` with no blank: a stream that dropped `a` must still see that `#b` is past the start.
+  const scilex::lexer lex {{plain(newline, R"(\n)"), placed(plain(heading, R"(#[a-z]*)"), true),
+                            placed(plain(marker, R"(#[a-z]*)"), false), plain(word, R"([a-z]+)")}};
+  EXPECT(pairs(lex.tokenize("a#b\n#c")) == (expected {{word, "a"}, {marker, "#b"}, {newline, "\n"}, {heading, "#c"}}));
+  EXPECT(every_scan_agrees(lex, "a#b\n#c"));
+}
+
 TEST(each_place_on_the_line_stays_on_the_dfa)
 {
   const scilex::lexer lex {markdown_like()};
