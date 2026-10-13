@@ -14,18 +14,15 @@
 
 namespace {
 
-  enum kind
-  {
-    blank = 1,
-    comment,
-    document,
-    entry,
-    value,
-    block,
-    scalar,
-    open,
-    close,
-  };
+  constexpr int blank    {1};
+  constexpr int comment  {2};
+  constexpr int document {3};
+  constexpr int entry    {4};
+  constexpr int value    {5};
+  constexpr int block    {6};
+  constexpr int scalar   {7};
+  constexpr int open     {8};
+  constexpr int close    {9};
 
   //! A small block language with YAML's roles: `-` entries, `:` values, `---` resets, `|`/`>` block bodies,
   //! and words continued on lines indented past their block. `[` … `]` is an insignificant mode.
@@ -34,9 +31,9 @@ namespace {
     const std::vector<std::string> both {"default", "inner"};
     return scilex::lexer {
       {
-        {.kind         = blank, .pattern = real::regex {"[ \\t\\r\\n]+"}, .skip = true, .in_mode = both},
-        {.kind         = comment, .pattern = real::regex {"#[^\\n]*"}, .skip = true, .in_mode = both},
-        {.kind         = document, .pattern = real::regex {"---|\\.\\.\\."}, .indent = scilex::indent_role::reset},
+        {.kind         = blank, .pattern = real::regex {R"([ \t\r\n]+)"}, .skip = true, .in_mode = both},
+        {.kind         = comment, .pattern = real::regex {R"(#[^\n]*)"}, .skip = true, .in_mode = both},
+        {.kind         = document, .pattern = real::regex {R"(---|\.\.\.)"}, .indent = scilex::indent_role::reset},
         {.kind         = entry, .pattern = real::regex {"-"}, .indent = scilex::indent_role::entry},
         {.kind         = value, .pattern = real::regex {":"}, .indent = scilex::indent_role::value, .in_mode = both},
         {.kind         = block, .pattern = real::regex {"[|>]([1-9][+-]?|[+-][1-9]?)?"}, .extend = scilex::extension::block},
@@ -93,6 +90,7 @@ namespace {
     }
     keep(in.finish());
     std::vector<std::string> whole_positions;
+    whole_positions.reserve(whole.size());
     for (const scilex::token& t : whole) {
       whole_positions.push_back(std::to_string(t.start.offset));
     }
@@ -146,6 +144,8 @@ TEST(a_scalar_continues_on_the_lines_indented_past_its_block)
   EXPECT(lexes("a: x\n  y # c\nb: 1\n", {"a", "x\n  y", "b", "1"}));
   EXPECT(lexes("a: x # c\n  y\n", {"a", "x", "y"}));
   EXPECT(lexes("a: x\n\n  y\n", {"a", "x\n\n  y"}));
+  EXPECT(lexes("a: x\r\n  y\r\nb: 1\r\n", {"a", "x\r\n  y", "b", "1"}));
+  EXPECT(lexes("a: x\t\n  \t\n  y\n", {"a", "x\t\n  \t\n  y"})); // tabs are blanks to the mechanism
   EXPECT(lexes("x\n---\ny\n", {"x", "y"}));
   EXPECT(lexes("--- x\n... \n", {"x"}));
 }

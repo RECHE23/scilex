@@ -21,9 +21,10 @@ wherever the rules run on the DFA, and quadratic in the worst case only through 
 (see *Performance*).
 
 What that covers today: significant indentation, plus contexts like f-strings, YAML
-flow collections, and bracket continuation (modes + **Layout Awareness Level A**).
-Cases that need a deeper lexing↔indentation coupling — YAML block scalars `|` / `>`,
-heredocs — are **Level B**: documented, not in this version.
+flow collections, and bracket continuation (modes + **Layout Awareness Level A**),
+and tokens whose end the indentation decides — YAML block scalars `|` / `>` and plain
+scalars continued on the next lines (**Level B**: the lexer tracks the open blocks'
+columns from the rules' indentation roles, as YAML's scanner does).
 
 This follows the same design principles as REAL: purity, simplicity, and
 measured optimality.
@@ -45,10 +46,10 @@ measured optimality.
   interpolation and nested comments); the Python one lexes the standard library as CPython's tokenizer does
 
 The modal grammars differ in shape and each documents its own scope; modes
-resolve the contexts above, but the one contextual case still outside the model —
-lexing steered by *indentation* (block scalars, heredocs) — is Level B.
+resolve the contexts above, and Level B the lexing steered by *indentation* (YAML's
+block and continued scalars).
 
-**Not yet:** block scalars / heredocs (Layout Awareness Level B), a compile-time
+**Not yet:** heredocs (a body ended by a delimiter word, not by indentation), a compile-time
 `static_lexer` (a baked DFA — the Phase-0 spike found this wants build-time codegen,
 not constexpr).
 
@@ -253,10 +254,12 @@ Two invariants hold: with **no** insignificant mode the result is byte-for-byte 
 positional pass (zero cost); and the **mode** is the single source of the policy (no
 per-rule flag).
 
-**Honest scope.** Level A covers multi-line flow and implicit continuation. **Block
-scalars** (`|` / `>`) and heredocs need a reference indent carried in the mode frame
-— that is **Level B**, a designed next step, not yet built. The bundled grammars
-*demonstrate* the features; each `examples/<lang>.hpp` header documents its own scope.
+**Honest scope.** Level A covers multi-line flow and implicit continuation; **Level B**
+covers tokens bounded by the indentation of their block (YAML's `|` / `>` scalars and
+continued plain scalars, held to PyYAML's scanner over 1 107 real files). The layout pass
+itself stays positional: YAML's compact form `- key:` followed by a sibling key aligned on
+`key` is a layout error there, though it lexes. The bundled grammars *demonstrate* the
+features; each `examples/<lang>.hpp` header documents its own scope.
 
 ## CLI
 

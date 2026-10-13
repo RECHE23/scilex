@@ -183,8 +183,13 @@ lay = scilex.Lexer([(0, r"\s+", True), (1, r"\w+", False), (2, r":", False)])
   \ref scilex::layout passes its tokens through: multi-line flow collections and
   bracket continuation add no spurious INDENT/DEDENT. Invariants: an empty policy is
   byte-for-byte the positional pass (zero cost); the mode is the single source of the
-  policy (no per-rule flag). **Block scalars** `|`/`>` and heredocs (a reference
-  indent carried in the frame) are **Level B** — designed, not built.
+  policy (no per-rule flag).
+- **Layout Awareness (Level B).** A token can end where the indentation of its block
+  says: the lexer keeps the open blocks' columns, updated by each token of a rule with
+  an indentation role (\ref scilex::indent_role), and an \ref scilex::extension reads the
+  innermost — YAML's block scalars and continued plain scalars. The roles and the
+  stack are YAML's scanner's; an insignificant mode takes no part, and a grammar with no
+  role pays nothing.
 - **Byte columns.** A `column` counts bytes, matching REAL's UTF-8 byte model: an
   ASCII column equals a character column, but a multibyte codepoint spans several
   byte columns.

@@ -395,6 +395,17 @@ namespace scilex {
     return static_cast<std::ptrdiff_t>(end - at);
   }
 
+  //! \brief Where the spaces, tabs and carriage returns from \p at in \p source end (a loop: a search for a set
+  //!        of bytes tests each byte against each of them).
+  [[nodiscard]] inline std::size_t past_blanks(std::string_view source,
+                                               std::size_t      at) noexcept
+  {
+    while (at < source.size() && (source[at] == ' ' || source[at] == '\t' || source[at] == '\r')) {
+      ++at;
+    }
+    return at;
+  }
+
   //! \brief Whether \p source holds only bytes of \p blanks from \p first to \p last.
   [[nodiscard]] inline bool blank_between(std::string_view source,
                                           std::size_t      first,
@@ -477,47 +488,51 @@ namespace scilex {
                                                                std::ptrdiff_t     reference,
                                                                bool               final)
   {
-    constexpr std::string_view blanks {" \t\r"};
-    const auto                 wait   {[final](std::size_t at) {
-                                         return final ? std::optional<std::size_t> {at} : std::nullopt;
-                                       }};
+    const auto wait {[final](std::size_t at) {
+                       return final ? std::optional<std::size_t> {at} : std::nullopt;
+                     }};
     for (std::size_t reached {end};;) {
-      const std::size_t after {source.find_first_not_of(blanks, reached)};
-      if (after == std::string_view::npos) {
+      const std::size_t after {past_blanks(source, reached)};
+      if (after == source.size()) {
         return wait(reached);
       }
       if (source[after] != '\n') {
         return reached; // more on the line: a comment or another token ends the continuation
       }
       std::size_t line {after + 1};
-      std::size_t last {0};
-      while (true) { // the blank lines between
-        if (line == source.size()) {
+      while (true) {    // the blank lines between: blanks up to their line break
+        const std::size_t first {past_blanks(source, line)};
+        if (first == source.size()) {
           return wait(reached);
         }
-        const std::size_t eol {source.find('\n', line)};
-        if (eol == std::string_view::npos && !final) {
-          return std::nullopt;
-        }
-        last = eol == std::string_view::npos ? source.size() : eol;
-        if (!blank_between(source, line, last, blanks)) {
+        if (source[first] != '\n') {
           break;
         }
-        if (last == source.size()) {
-          return reached;
-        }
-        line = last + 1;
+        line = first + 1;
       }
-      const std::string_view text {source.substr(line, last - line)};
-      if ((text.starts_with("---") || text.starts_with("...")) && (text.size() == 3 || blanks.find(text[3]) != std::string_view::npos)) {
-        return reached; // a document marker at column 0
-      }
-      const std::size_t first {source.find_first_not_of(" \t", line)};
-      const auto        found {continuation.match(source.substr(0, last), first)};
-      if (leading_spaces(source, line) <= reference || !found || found.end() == first) {
+      // Decided on the indentation before the line is read whole: most lines are not indented past the block.
+      const std::ptrdiff_t indentation {leading_spaces(source, line)};
+      if (indentation <= reference) {
         return reached;
       }
-      reached = found.end();
+      if (indentation == 0) { // a document marker at column 0 ends it
+        const std::string_view head {source.substr(line, 4)};
+        if ((head.starts_with("---") || head.starts_with("...")) && (head.size() == 3 || std::string_view {" \t\r\n"}.find(head[3]) != std::string_view::npos)) {
+          return head.size() == 3 ? wait(reached) : std::optional<std::size_t> {reached};
+        }
+      }
+      const std::size_t eol {source.find('\n', line)};
+      if (eol == std::string_view::npos && !final) {
+        return std::nullopt;
+      }
+      // Matched within the line alone: a view of the whole text costs the engine its length at every call.
+      const std::string_view text  {source.substr(line, (eol == std::string_view::npos ? source.size() : eol) - line)};
+      const std::size_t      first {text.find_first_not_of(" \t")};
+      const auto             found {continuation.match(text, first)};
+      if (!found || found.end() == first) {
+        return reached;
+      }
+      reached = line + found.end();
     }
   }
 
@@ -634,6 +649,11 @@ namespace scilex {
       build_dfa_modes(dfa_modes, dfa);
       for (const rule& r : rules_) {
         left_context_ = std::max(left_context_, r.pattern.left_context());
+        indentation_  = indentation_ || takes_part(r);
+      }
+      indent_modes_.assign(mode_names_.size(), 1);
+      for (std::size_t m {0}; m < mode_significant_.size(); ++m) {
+        indent_modes_[m] = mode_significant_[m] ? 1 : 0;
       }
     }
 
@@ -982,25 +1002,9 @@ namespace scilex {
         const std::size_t best_idx {m.idx};
         std::size_t       best_len {m.len};
         const position    start    {cursor};
-        const rule&       won      {rules_[best_idx]};
-        // Level B: a token with a role or an extension, in a significant mode, reads and updates the open
-        // blocks. Its extent is decided first, the state left as it is if the text may still change it.
-        const bool indented {!won.skip && takes_part(won) && (mode_significant_.empty() || mode_significant_[mode])};
-        if (indented) {
-          if (won.extend != extension::none) {
-            const std::ptrdiff_t             reference {indent_reference(won, start, indents)};
-            const std::optional<std::size_t> extent    {won.extend == extension::block
-                                                          ? block_extent(source, start.offset + best_len, source.substr(start.offset, best_len),
-                                                                         reference, gate.at_end())
-                                                          : lines_extent(source, start.offset + best_len,
-                                                                         won.continuation ? *won.continuation : won.pattern,
-                                                                         reference, gate.at_end())};
-            if (!extent) {
-              return scan_status::pending;
-            }
-            best_len = *extent - start.offset;
-          }
-          apply_indent(won, start, indents);
+        // Level B, in a grammar that uses it: out of this loop, which the grammars without it keep as it was.
+        if (indentation_ && !indent_token(rules_[best_idx], mode, source, start, best_len, indents, gate.at_end())) {
+          return scan_status::pending;
         }
         advance(source, cursor, best_len);
 
@@ -1036,6 +1040,39 @@ namespace scilex {
         return scan_status::token;
       }
       return scan_status::end;
+    }
+
+    /*!
+     * \brief Level B for the token of \p won at \p start, \p length bytes long, lexed in \p mode
+     *        (\ref rule_indentation): when the rule takes part and the mode is significant, extends \p length and
+     *        updates \p indents. Its extent is decided first, \p indents left as it is if the text may still change
+     *        it (\p final false). \return False when the step must wait for more text.
+     */
+    bool indent_token(const rule&      won,
+                      std::size_t      mode,
+                      std::string_view source,
+                      position         start,
+                      std::size_t&     length,
+                      indent_state&    indents,
+                      bool             final) const
+    {
+      if (won.skip || !takes_part(won) || indent_modes_[mode] == 0) {
+        return true;
+      }
+      if (won.extend != extension::none) {
+        const std::ptrdiff_t             reference {indent_reference(won, start, indents)};
+        const std::size_t                end       {start.offset + length};
+        const std::optional<std::size_t> extent    {won.extend == extension::block
+                                                      ? block_extent(source, end, source.substr(start.offset, length), reference, final)
+                                                      : lines_extent(source, end, won.continuation ? *won.continuation : won.pattern,
+                                                                     reference, final)};
+        if (!extent) {
+          return false;
+        }
+        length = *extent - start.offset;
+      }
+      apply_indent(won, start, indents);
+      return true;
     }
 
     //! \brief Interns a mode name to its id, assigning the next id on first sight.
@@ -1687,19 +1724,21 @@ namespace scilex {
       std::vector<std::size_t>                  general;          //!< Nullable rules (tried everywhere).
     };
 
-    std::vector<rule>                            rules_;                     //!< The ordered token rules.
-    error_policy                                 errors_;                    //!< What to do at an unmatched byte.
-    scilex::column_unit                          columns_;                   //!< The unit position::column is counted in.
-    std::vector<std::string>                     mode_names_;                //!< Mode id -> name ("default" is id 0).
-    std::map<std::string, std::size_t>           mode_id_;                   //!< Mode name -> id.
-    std::vector<dispatch>                        per_mode_;                  //!< Dispatch index, one per unit (a mode's id is its own unit).
-    std::vector<std::shared_ptr<const mode_dfa>> per_mode_dfa_;              //!< Per-unit DFA fast path (nullptr = Pike).
-    std::vector<std::vector<std::size_t>>        units_of_mode_;             //!< Mode id -> its units (its own id first).
-    std::vector<std::vector<std::size_t>>        unit_rules_;                //!< Unit -> its active rules, ascending.
+    std::vector<rule>                            rules_;                         //!< The ordered token rules.
+    error_policy                                 errors_;                        //!< What to do at an unmatched byte.
+    scilex::column_unit                          columns_;                       //!< The unit position::column is counted in.
+    std::vector<std::string>                     mode_names_;                    //!< Mode id -> name ("default" is id 0).
+    std::map<std::string, std::size_t>           mode_id_;                       //!< Mode name -> id.
+    std::vector<dispatch>                        per_mode_;                      //!< Dispatch index, one per unit (a mode's id is its own unit).
+    std::vector<std::shared_ptr<const mode_dfa>> per_mode_dfa_;                  //!< Per-unit DFA fast path (nullptr = Pike).
+    std::vector<std::vector<std::size_t>>        units_of_mode_;                 //!< Mode id -> its units (its own id first).
+    std::vector<std::vector<std::size_t>>        unit_rules_;                    //!< Unit -> its active rules, ascending.
     //! Mode id -> (previous kind, unit) for the kinds whose unit is not the mode's own, by kind.
     std::vector<std::vector<std::pair<int, std::size_t>>> variants_;
-    std::vector<bool>                                     mode_significant_; //!< Layout policy (empty = all significant).
-    std::size_t                                           left_context_ {0}; //!< Bytes before a token start any rule may read.
+    std::vector<bool>                                     mode_significant_;     //!< Layout policy (empty = all significant).
+    std::size_t                                           left_context_ {0};     //!< Bytes before a token start any rule may read.
+    bool                                                  indentation_  {false}; //!< Whether a rule takes part in Level B.
+    std::vector<std::uint8_t>                             indent_modes_;         //!< By mode: 1 if it takes part in Level B (significant).
   };
 
   /*!

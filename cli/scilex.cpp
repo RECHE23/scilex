@@ -12,7 +12,7 @@
  *   scilex --check                     run every example self-check (dev gate)
  *
  * Option `--layout` runs the indentation pass (emitting NEWLINE / INDENT /
- * DEDENT). Output is one token per line: KIND<TAB>lexeme<TAB>line:col, the
+ * DEDENT), and `--no-layout` keeps an example that runs it from doing so. Output is one token per line: KIND<TAB>lexeme<TAB>line:col, the
  * lexeme escaped so that a line is a token (`\\`, `\t`, `\n`, `\r`, `\xHH`).
  *
  * Grammar files (see `examples/sample.lex`) use the `.lex` format of the optional
@@ -20,7 +20,8 @@
  *
  *   name<TAB>regex[<TAB>options]       (`#` comments and blank lines ignored)
  *
- * where the options are `skip`, `in=m1,m2`, and one of `push=m`, `set=m`, `pop`; a line
+ * where the options are `skip`, `in=m1,m2`, one of `push=m`, `set=m`, `pop`, `after=` or
+ * `not_after=`, and Level B's `indent=`, `extend=`, `continue=` and `fragment`; a line
  * `%insignificant m1,m2` names the modes whose tokens carry no layout (for `--layout`).
  * The lexer itself takes plain C++ rule lists; `scilex.hpp` does not include the
  * format. Built-in grammars reuse the `examples/<lang>.hpp` registry, so the
@@ -32,6 +33,7 @@
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -266,10 +268,12 @@ namespace {
         << "  scilex --version                  print SciLex's version and the REAL it was built with\n"
         << "options:\n"
         << "  --layout                          emit indentation tokens (NEWLINE / INDENT / DEDENT)\n"
+        << "  --no-layout                       emit the lexer's tokens alone, even for an example that lays out\n"
         << "  --errors=token                    recover from unlexable bytes (emit ERROR tokens; default: raise)\n"
         << "  --columns=bytes|codepoints|utf16  unit for token columns (default: bytes)\n"
         << "grammar file: one rule per line   name<TAB>regex[<TAB>options]   ('#' comments, blank lines ok)\n"
-        << "  options (space-separated):      skip, in=m1,m2, one of push=m, set=m, pop, and after=A,B or not_after=A,B\n"
+        << "  options (space-separated):      skip, in=m1,m2, one of push=m, set=m, pop, after=A,B or not_after=A,B,\n"
+        << "                                  indent=entry|key|value|reset, extend=block|lines, continue=N, fragment\n"
         << "  directive line:                 %insignificant m1,m2   (modes without layout, for --layout)\n"
         << "output: one token per line        KIND<TAB>lexeme<TAB>line:col\n"
         << "  the lexeme escaped:             \\\\ \\t \\n \\r, other control bytes as \\xHH\n";
@@ -277,7 +281,7 @@ namespace {
 
   //! \brief Lexes with a built-in grammar (`--example <lang> [file|-]`).
   int run_example(const std::vector<std::string_view>& args,
-                  bool                                 layout,
+                  std::optional<bool>                  layout,
                   scilex::error_policy                 errors,
                   scilex::column_unit                  columns)
   {
@@ -295,7 +299,7 @@ namespace {
     const std::string   source {args.size() >= 3 ? read_input(args[2]) : std::string {lang->sample}};
     dump(lex, source, [lang](int kind) {
            return lang->kind_name(kind);
-         }, layout || lang->uses_layout, lang->tabs);
+         }, layout.value_or(lang->uses_layout), lang->tabs);
     return 0;
   }
 
@@ -333,13 +337,16 @@ int main(int    argc,
          char** argv)
 {
   std::vector<std::string_view> args;
-  bool                          layout  {false};
+  std::optional<bool>           layout  {}; // unset: the example's own choice, or none for a grammar file
   scilex::error_policy          errors  {scilex::error_policy::raise};
   scilex::column_unit           columns {scilex::column_unit::bytes};
   for (int i {1}; i < argc; ++i) {
     const std::string_view arg {argv[i]};
     if (arg == "--layout") {
       layout = true;
+    }
+    else if (arg == "--no-layout") {
+      layout = false;
     }
     else if (arg == "--errors=token") {
       errors = scilex::error_policy::token;
@@ -384,7 +391,7 @@ int main(int    argc,
     if (command == "--example") {
       return run_example(args, layout, errors, columns);
     }
-    return run_grammar(args, layout, errors, columns);
+    return run_grammar(args, layout.value_or(false), errors, columns);
   }
   catch (const scilex::lex_error& error) {
     std::cerr << "lex error at " << error.where().line << ':' << error.where().column << ": " << error.what()

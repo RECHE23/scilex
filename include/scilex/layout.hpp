@@ -25,8 +25,10 @@
  * how a multi-line flow collection (`examples/yaml.hpp`) and implicit line
  * continuation inside brackets (`examples/python.hpp`) avoid spurious structure. A
  * mode marked insignificant must be self-delimited (entered and left by its own
- * tokens). Block scalars `|` / `>` and heredocs are a deeper case (a reference
- * indent in the frame) — Layout Awareness Level B, still to come. Two invariants
+ * tokens). A token whose end the indentation decides (YAML's block scalar `|` / `>`,
+ * a continued plain scalar) is the lexer's — Layout Awareness Level B, see
+ * \ref rule_indentation — and spans its lines; this pass reads where it starts, so
+ * its body adds no structure. Two invariants
  * hold: (1) an empty policy ⇒ byte-for-byte the positional pass, at zero cost; (2)
  * the **mode** is the single source of truth for the policy — there is no per-rule
  * flag (e.g. `ignore_layout`); significance is derived from the mode, never beside it.

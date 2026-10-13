@@ -7,6 +7,29 @@ fuzz oracle.
 
 ## Unreleased
 
+### Added
+- **Layout Awareness Level B: tokens bounded by the indentation of their block.** A rule's `indent` role
+  (`entry`, `key`, `value`, `reset`) lets the lexer keep the open blocks' columns as YAML's scanner does, and its
+  `extend` (`block`, `lines`, with a `continuation` pattern) extends its token over the lines indented past the
+  innermost: YAML's block scalars `|` / `>` (chomping and indentation indicators included) and plain scalars
+  continued on the next lines are each one token. In C++ `scilex::rule::indent`, `extend` and `continuation`;
+  in a `.lex` grammar the options `indent=`, `extend=`, `continue=` and `fragment` (a named pattern that is not
+  a rule); from Python three more rule fields. A mode named insignificant takes no part, a stream decides such
+  a token once its lines are complete, and a grammar with no role pays nothing: its scan runs no more
+  instructions than before (counted exactly under x86-64 GCC 13: JSON −1.3 %, CSS −0.7 %), and its timings stay
+  within the ±4 % the machine moves between two runs of the same binary.
+- **`scilex --no-layout`** prints the lexer's tokens alone, for an example grammar that lays out by default.
+
+### Fixed
+- **The YAML example grammar lexes block scalars and continued plain scalars as PyYAML's scanner does**, with
+  Level B: over 1 107 YAML files (the audit's 111 among them), every explicit token starts and ends where
+  PyYAML's does, where 85 of the audit's 111 were out of reach. `--- |`, `--- !tag` or `--- value` begin with a
+  document marker (they were one plain scalar), and a `,` in a block is a token, as PyYAML reads it. A run of
+  `-` starts a scalar only before a character neither blank nor `-`: `--` alone and `-- x` are no longer
+  scalars (none of the 1 107 files has one). The YAML grammar stays on its DFAs; tracking the blocks costs it
+  a quarter of its throughput (M1 Pro, the 262 KB sample: 1.88 → 2.47 ms, about 139 → 106 MB/s), and its
+  construction 6.5 → 7.1 ms.
+
 ## 2026.10.7 — 2026-10-12
 
 ### Fixed
