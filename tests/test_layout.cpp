@@ -389,7 +389,7 @@ TEST(the_indent_meter_measures_every_offset_from_its_line_start)
                                    while (start > 0 && source[start - 1] != '\n' && source[start - 1] != '\f') {
                                      --start;
                                    }
-                                   scilex::detail::indent_measure width {0, 0};
+                                   scilex::detail::indent_measure width {.tab8 = 0, .tab1 = 0};
                                    for (std::size_t i {start}; i < offset; ++i) {
                                      width.tab8 = source[i] == '\t' ? ((width.tab8 / 8) + 1) * 8 : width.tab8 + 1;
                                      ++width.tab1;
