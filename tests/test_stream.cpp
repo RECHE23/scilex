@@ -662,7 +662,7 @@ TEST(stream_reads_a_long_open_token_once)
 {
   const scilex::lexer lex {{scilex::rule {.kind = 1, .pattern = real::regex(R"("[^"]*")")},
     scilex::rule {.kind = 2, .pattern = real::regex(R"(\s+)"), .skip = true}}};
-  const std::string text {'"' + std::string(256 * 1024, 'a') + '"'};
+  const std::string text {'"' + std::string(std::size_t {256} *1024, 'a') + '"'};
   const auto        best {[](const auto& run) {
                             double fastest {1e30};
                             for (int round {0}; round < 3; ++round) {
@@ -683,5 +683,5 @@ TEST(stream_reads_a_long_open_token_once)
                                 count += in.finish().size();
                                 EXPECT_EQ(count, tokens);
                               })};
-  EXPECT(streamed < 40.0 * whole + 1e-3);
+  EXPECT(streamed < (40.0 * whole) + 1e-3);
 }
