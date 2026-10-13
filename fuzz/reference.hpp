@@ -182,6 +182,43 @@ namespace scilex::fuzz {
     return weight;
   }
 
+  //! \brief The length of the token of \p r matched for \p len bytes at \p start of \p source, once Level B has
+  //!        extended it, and \p indents updated (scilex::rule_indentation): the lexer's pure pieces, shared
+  //!        verbatim as apply_transition is, over the whole text. \p significant: whether its mode takes part.
+  inline std::size_t reference_extend(const scilex::rule&   r,
+                                      std::string_view      source,
+                                      scilex::position      start,
+                                      std::size_t           len,
+                                      scilex::indent_state& indents,
+                                      bool                  significant)
+  {
+    if (r.skip || !scilex::takes_part(r) || !significant) {
+      return len;
+    }
+    if (r.extend != scilex::extension::none) {
+      const std::ptrdiff_t reference {scilex::indent_reference(r, start, indents)};
+      const std::size_t    end       {start.offset + len};
+      len = *(r.extend == scilex::extension::block
+                ? scilex::block_extent(source, end, source.substr(start.offset, len), reference, true)
+                : scilex::lines_extent(source, end, r.continuation ? *r.continuation : r.pattern, reference, true))
+            - start.offset;
+    }
+    scilex::apply_indent(r, start, indents);
+    return len;
+  }
+
+  //! \brief The modes \p lex was built to treat as insignificant, by name.
+  inline std::vector<std::string> insignificant_modes(const scilex::lexer& lex)
+  {
+    std::vector<std::string> names;
+    for (std::size_t id {0}; id < lex.mode_significant().size(); ++id) {
+      if (!lex.mode_significant()[id]) {
+        names.push_back(lex.mode_name(id));
+      }
+    }
+    return names;
+  }
+
   //! \brief Tokenizes \p source by the SciLex spec, brute-force (no dispatch).
   //!
   //! Mode-aware: keeps its own mode stack, considers only the rules active in the
@@ -203,7 +240,8 @@ namespace scilex::fuzz {
                                                        std::string_view                 source,
                                                        bool                             emit_skipped  = false,
                                                        std::vector<std::string>*        modes_out     = nullptr,
-                                                       scilex::column_unit              unit          = scilex::column_unit::bytes)
+                                                       scilex::column_unit              unit          = scilex::column_unit::bytes,
+                                                       const std::vector<std::string>&  insignificant = {})
   {
     // A local copy with each transition's target id pre-resolved (independently, from
     // the oracle's own mode map), so the shared apply_transition reads the same field
@@ -220,6 +258,7 @@ namespace scilex::fuzz {
     scilex::position               cursor   {0, 1, 1};
     std::vector<scilex::frame>     stack    {scilex::frame {.mode_id = 0, .entry_pos = cursor}};
     int                            previous {scilex::end_of_input}; // the last emitted (unskipped) kind
+    scilex::indent_state           indents  {};                     // the open blocks (Level B)
     while (cursor.offset < source.size()) {
       const std::string&     mode_name {modes.names[stack.back().mode_id]};
       std::size_t            best_len  {0};
@@ -242,6 +281,8 @@ namespace scilex::fuzz {
         throw scilex::lex_error("no rule matches in the current mode", cursor); // #1, at the byte
       }
       const scilex::position start {cursor};
+      best_len = reference_extend(*best, source, start, best_len, indents,
+                                  std::ranges::find(insignificant, mode_name) == insignificant.end());
       for (std::size_t i {0}; i < best_len; ++i) {
         if (source[cursor.offset + i] == '\n') {
           ++cursor.line;
@@ -306,7 +347,8 @@ namespace scilex::fuzz {
                                                                std::string_view                 source,
                                                                bool                             emit_skipped  = false,
                                                                std::vector<std::string>*        modes_out     = nullptr,
-                                                               scilex::column_unit              unit          = scilex::column_unit::bytes)
+                                                               scilex::column_unit              unit          = scilex::column_unit::bytes,
+                                                               const std::vector<std::string>&  insignificant = {})
   {
     std::vector<scilex::rule> local {rules};
     const mode_map            modes {derive_modes(local)};
@@ -335,7 +377,8 @@ namespace scilex::fuzz {
                                              }
                                              ++at.offset;
                                            }};
-    int previous {scilex::end_of_input}; // the last emitted kind, an error run's included
+    int                  previous {scilex::end_of_input}; // the last emitted kind, an error run's included
+    scilex::indent_state indents  {};                     // the open blocks (Level B)
     while (cursor.offset < source.size()) {
       const std::string&     mode_name {modes.names[stack.back().mode_id]};
       std::size_t            best_len  {0};
@@ -373,6 +416,8 @@ namespace scilex::fuzz {
         continue; // stay in the mode, no transition
       }
       const scilex::position start {cursor};
+      best_len = reference_extend(*best, source, start, best_len, indents,
+                                  std::ranges::find(insignificant, mode_name) == insignificant.end());
       for (std::size_t i {0}; i < best_len; ++i) {
         step(cursor);
       }
@@ -440,7 +485,7 @@ namespace scilex::fuzz {
     std::vector<scilex::token> reference;
     std::vector<std::string>   reference_modes; // the mode each reference token was lexed in
     try {
-      reference = reference_tokenize(rules, input, false, &reference_modes, lex.columns());
+      reference = reference_tokenize(rules, input, false, &reference_modes, lex.columns(), insignificant_modes(lex));
     }
     catch (const scilex::lex_error& error) {
       reference_threw = true;
@@ -489,7 +534,7 @@ namespace scilex::fuzz {
     }
 
     // --- #3 total coverage: every byte consumed exactly once, contiguously ---
-    const std::vector<scilex::token> all     {reference_tokenize(rules, input, true, nullptr, lex.columns())};
+    const std::vector<scilex::token> all     {reference_tokenize(rules, input, true, nullptr, lex.columns(), insignificant_modes(lex))};
     std::size_t                      covered {0};
     for (const scilex::token& tok : all) {
       if (tok.start.offset != covered) {
@@ -504,11 +549,12 @@ namespace scilex::fuzz {
     // --- #4 independent per-token munch re-check (mode-aware) ---
     // reference == eager (checked above), so reference_modes aligns 1:1 with eager.
     for (std::size_t i {0}; i < eager.size(); ++i) {
-      const scilex::token&   tok       {eager[i]};
-      const std::string&     mode_name {reference_modes[i]};
-      std::size_t            longest   {0};
-      bool                   kind_fits {false};
-      const int              previous  {i == 0 ? scilex::end_of_input : eager[i - 1].kind}; // no error runs: the policy raises
+      const scilex::token&     tok       {eager[i]};
+      const std::string&       mode_name {reference_modes[i]};
+      std::size_t              longest   {0};
+      bool                     kind_fits {false};
+      std::vector<std::size_t> heads;                                                         // the matches of this kind's extending rules, shorter than the lexeme
+      const int                previous  {i == 0 ? scilex::end_of_input : eager[i - 1].kind}; // no error runs: the policy raises
       for (const scilex::rule& candidate : rules) {
         if (!rule_active_in(candidate, mode_name) || !predicate_allows(candidate, previous)) {
           continue; // only the rules the lexer could have used in this mode, after the token before
@@ -521,11 +567,16 @@ namespace scilex::fuzz {
         if (candidate.kind == tok.kind && len == tok.lexeme.size() && len > 0) {
           kind_fits = true; // (a) a rule of this kind matches this lexeme anchored
         }
+        if (candidate.kind == tok.kind && candidate.extend != scilex::extension::none && len > 0
+            && len < tok.lexeme.size()) {
+          heads.push_back(len); // or the lexeme is a match its rule's Level B extension continued
+        }
       }
-      if (!kind_fits) {
+      const bool extended {longest < tok.lexeme.size() && std::ranges::find(heads, longest) != heads.end()};
+      if (!kind_fits && !extended) {
         return {false, "munch: the chosen kind's rule does not match the lexeme anchored"};
       }
-      if (longest != tok.lexeme.size()) { // (b) no active rule matches a longer prefix here
+      if (longest != tok.lexeme.size() && !extended) { // (b) no active rule matches a longer prefix here
         return {false, "munch: a rule matches a longer prefix than the chosen token"};
       }
     }
@@ -577,7 +628,7 @@ namespace scilex::fuzz {
     std::size_t                reference_pos   {0};
     std::vector<scilex::token> reference;
     try {
-      reference = reference_tokenize_recover(rules, input, false, nullptr, token_lex.columns());
+      reference = reference_tokenize_recover(rules, input, false, nullptr, token_lex.columns(), insignificant_modes(token_lex));
     }
     catch (const scilex::lex_error& error) {
       reference_threw = true;
@@ -621,7 +672,7 @@ namespace scilex::fuzz {
     }
 
     // Total coverage: every byte consumed exactly once, contiguously (error runs and skips included).
-    const std::vector<scilex::token> all     {reference_tokenize_recover(rules, input, true, nullptr, token_lex.columns())};
+    const std::vector<scilex::token> all     {reference_tokenize_recover(rules, input, true, nullptr, token_lex.columns(), insignificant_modes(token_lex))};
     std::size_t                      covered {0};
     for (const scilex::token& tok : all) {
       if (tok.start.offset != covered) {

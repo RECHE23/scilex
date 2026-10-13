@@ -89,6 +89,32 @@ namespace scilex {
   };
 
   /*!
+   * \brief A rule's part in the indentation the lexer tracks, Layout Awareness Level B (see
+   *        \ref rule_indentation). The roles are those of a block language whose collections open at a column:
+   *        YAML's sequence entries, mapping keys and values, and document markers.
+   */
+  enum class indent_role : std::uint8_t
+  {
+    none,  //!< No part (the default): the token leaves the indentation as it is.
+    entry, //!< Opens a block at its own column (YAML's `-` and `?`).
+    key,   //!< May be a key: its column is kept if it is the line's first candidate since an entry or a value.
+    value, //!< Opens a block at the kept key's column (YAML's `:`).
+    reset, //!< Closes every block (YAML's `---` and `...`).
+  };
+
+  /*!
+   * \brief How a token extends over the lines below its own, bounded by the indentation the lexer tracks
+   *        (see \ref rule_indentation).
+   */
+  enum class extension : std::uint8_t
+  {
+    none,  //!< The token is its match (the default).
+    block, //!< A body indented past the enclosing block: YAML's `|` and `>` scalars.
+    lines, //!< Lines indented past the enclosing block, each read by \ref rule::continuation: YAML's plain
+           //!< scalar continued on the next line.
+  };
+
+  /*!
    * \brief A token rule: a kind, the pattern that recognizes it, whether matches
    *        are discarded (whitespace, comments), and — for contextual lexing — the
    *        modes it is active in and an optional mode transition it fires when it wins.
@@ -120,6 +146,25 @@ namespace scilex {
    * for every context. The lexer gives a mode one DFA per distinct set of active rules, so the choice
    * costs nothing per token.
    *
+   * ## Indentation {#rule_indentation}
+   *
+   * \ref indent and \ref extend (Layout Awareness Level B) let a token's extent depend on the indentation of
+   * the block it belongs to, which no pattern knows. The lexer keeps a stack of open blocks' columns, as
+   * YAML's scanner does, and updates it at each emitted token of a rule with a role or an extension, in a
+   * significant mode (a mode named insignificant, such as YAML's flow collections, takes no part): first the
+   * blocks deeper than the token's column close (all of them for \ref indent_role::reset), then an
+   * \ref indent_role::entry opens a block at its column, an \ref indent_role::key is kept as the line's key
+   * candidate, and an \ref indent_role::value opens a block at that candidate's column. The innermost open
+   * block is the reference an extension reads:
+   * - \ref extension::block takes the rest of its line, then every line that is blank or indented at least
+   *   as far as the body: the column a digit 1–9 in the match gives past the reference, else that of its first
+   *   line that is not blank (at least one past the reference). It ends where a line less indented begins.
+   * - \ref extension::lines, when only blanks follow the match on its line, takes the next line that is not
+   *   blank if it is indented past the reference and \ref continuation matches at its first non-blank, up to
+   *   that match's end, and so on; a document marker (`---`, `...`) at column 0 ends it.
+   * Columns are counted in the lexer's unit; an indentation counts spaces. A token so extended spans lines;
+   * the layout pass reads where it starts, so its body adds no structure.
+   *
    * If your identifiers are ASCII by specification (JSON, SQL, C), pin `(?a)` inline in the pattern
    * (or pass `real::flags::ascii`) to keep `\w \d \s \b` ASCII and small, DFA-representable, and fast —
    * this is what the `examples/` grammars do. If you want Unicode identifiers, write `\w+` and accept
@@ -128,15 +173,20 @@ namespace scilex {
    */
   struct rule
   {
-    int                        kind;              //!< Kind assigned to tokens this rule produces.
-    real::regex                pattern;           //!< The recognizer (a linear-time REAL regex; its flags are the author's — see above).
-    bool                       skip      {false}; //!< If true, matches are consumed but not emitted.
-    std::vector<std::string>   in_mode   {};      //!< Modes this rule is active in; empty ⇒ {"default"}.
-    std::optional<mode_action> action    {};      //!< Mode transition fired when this rule wins.
+    int                        kind;                          //!< Kind assigned to tokens this rule produces.
+    real::regex                pattern;                       //!< The recognizer (a linear-time REAL regex; its flags are the author's — see above).
+    bool                       skip      {false};             //!< If true, matches are consumed but not emitted.
+    indent_role                indent    {indent_role::none}; //!< Its part in the indentation (\ref rule_indentation).
+    extension                  extend    {extension::none};   //!< How it extends below its line (\ref rule_indentation).
+    std::vector<std::string>   in_mode   {};                  //!< Modes this rule is active in; empty ⇒ {"default"}.
+    std::optional<mode_action> action    {};                  //!< Mode transition fired when this rule wins.
     //! Active only right after a token of one of these kinds (see \ref rule_previous_token).
     std::vector<int>           after     {};
     //! Active except right after a token of one of these kinds (see \ref rule_previous_token).
     std::vector<int>           not_after {};
+    //! What each line an \ref extension::lines token continues on must hold at its first non-blank (matched
+    //! within the line); empty ⇒ \ref pattern.
+    std::optional<real::regex> continuation {};
   };
 
   /*!
@@ -252,6 +302,222 @@ namespace scilex {
     }
     else { // set: replace the active mode in place (depth unchanged)
       stack.back().mode_id = r.action->target_id;
+    }
+  }
+
+  //! \brief The open blocks of a scan (\ref rule_indentation), one per scan as its mode stack is.
+  struct indent_state
+  {
+    std::vector<std::ptrdiff_t> levels {-1};   //!< The open blocks' columns (0-based), innermost last, above a −1.
+    std::size_t                 line   {0};    //!< The line of the last token that took part.
+    std::ptrdiff_t              key    {-1};   //!< That line's key candidate's column, −1 for none.
+    bool                        open   {true}; //!< Whether that line's next key candidate is kept.
+  };
+
+  //! \brief Whether a token of \p r takes part in the indentation (a role or an extension).
+  [[nodiscard]] inline bool takes_part(const rule& r) noexcept
+  {
+    return r.indent != indent_role::none || r.extend != extension::none;
+  }
+
+  /*!
+   * \brief The innermost open block once the token of \p r at \p start has updated \p state (\ref apply_indent),
+   *        \p state itself left as it is: the reference the token's extension reads, decided before the
+   *        update is, as a stream waiting for more text must not have made it.
+   */
+  [[nodiscard]] inline std::ptrdiff_t indent_reference(const rule&         r,
+                                                       position            start,
+                                                       const indent_state& state) noexcept
+  {
+    const std::ptrdiff_t column {static_cast<std::ptrdiff_t>(start.column) - 1};
+    std::ptrdiff_t       top    {-1};
+    if (r.indent != indent_role::reset) { // the innermost not past the column: the −1 at the bottom always is
+      top = *std::ranges::find_if(std::views::reverse(state.levels), [column](std::ptrdiff_t level) { return level <= column; });
+    }
+    if (r.indent == indent_role::entry) {
+      return std::max(top, column);
+    }
+    if (r.indent == indent_role::value) {
+      return std::max(top, start.line == state.line ? state.key : std::ptrdiff_t {-1});
+    }
+    return top;
+  }
+
+  /*!
+   * \brief Updates \p state for the token of \p r at \p start (\ref rule_indentation): the blocks deeper than its
+   *        column close (every block for a reset), then an entry opens one at its column, a key is kept as the
+   *        line's candidate if it is the first since the line began or since an entry or a value, and a value
+   *        opens one at that candidate's column. Pure, so the lexer and the fuzz oracle share it.
+   */
+  inline void apply_indent(const rule&   r,
+                           position      start,
+                           indent_state& state)
+  {
+    const std::ptrdiff_t column {static_cast<std::ptrdiff_t>(start.column) - 1};
+    if (start.line != state.line) {
+      state.line = start.line;
+      state.key  = -1;
+      state.open = true;
+    }
+    if (r.indent == indent_role::reset) {
+      state.levels.assign(1, -1);
+    }
+    while (state.levels.back() > column) { // never the −1 below the first block
+      state.levels.pop_back();
+    }
+    if (r.indent == indent_role::entry) {
+      if (state.levels.back() < column) {
+        state.levels.push_back(column);
+      }
+      state.open = true;
+    }
+    else if (r.indent == indent_role::value) {
+      if (state.key >= 0 && state.levels.back() < state.key) {
+        state.levels.push_back(state.key);
+      }
+      state.key  = -1;
+      state.open = true;
+    }
+    else if (r.indent == indent_role::key && state.open) {
+      state.key  = column;
+      state.open = false;
+    }
+  }
+
+  //! \brief The spaces that begin the text at \p at of \p source.
+  [[nodiscard]] inline std::ptrdiff_t leading_spaces(std::string_view source,
+                                                     std::size_t      at) noexcept
+  {
+    std::size_t end {at};
+    while (end < source.size() && source[end] == ' ') {
+      ++end;
+    }
+    return static_cast<std::ptrdiff_t>(end - at);
+  }
+
+  //! \brief Whether \p source holds only bytes of \p blanks from \p first to \p last.
+  [[nodiscard]] inline bool blank_between(std::string_view source,
+                                          std::size_t      first,
+                                          std::size_t      last,
+                                          std::string_view blanks) noexcept
+  {
+    return source.substr(first, last - first).find_first_not_of(blanks) == std::string_view::npos;
+  }
+
+  /*!
+   * \brief Where an \ref extension::block token matched up to \p end of \p source (\p match its match) ends,
+   *        with \p reference the innermost open block (\ref rule_indentation); none while the text past
+   *        \p source may still change it (\p final false: a stream's buffer).
+   */
+  [[nodiscard]] inline std::optional<std::size_t> block_extent(std::string_view source,
+                                                               std::size_t      end,
+                                                               std::string_view match,
+                                                               std::ptrdiff_t   reference,
+                                                               bool             final)
+  {
+    constexpr std::string_view blanks {" \r"};
+    const std::size_t          header {source.find('\n', end)};
+    if (header == std::string_view::npos) {
+      return final ? std::optional<std::size_t> {source.size()} : std::nullopt;
+    }
+    const std::ptrdiff_t least   {std::max<std::ptrdiff_t>(reference + 1, 1)};
+    std::ptrdiff_t       content {least};
+    const auto           digit   {std::ranges::find_if(match, [](char c) { return c >= '1' && c <= '9'; })};
+    if (digit != match.end()) {
+      content = least + (*digit - '0') - 1;
+    }
+    else { // the widest of the blank lines that lead, and of the first that is not
+      std::ptrdiff_t widest {0};
+      for (std::size_t line {header + 1};;) {
+        if (line == source.size()) {
+          if (!final) {
+            return std::nullopt;
+          }
+          break;
+        }
+        const std::size_t eol {source.find('\n', line)};
+        if (eol == std::string_view::npos && !final) {
+          return std::nullopt;
+        }
+        const std::size_t last {eol == std::string_view::npos ? source.size() : eol};
+        widest = std::max(widest, leading_spaces(source, line));
+        if (!blank_between(source, line, last, blanks) || last == source.size()) {
+          break;
+        }
+        line = last + 1;
+      }
+      content = std::max(least, widest);
+    }
+    std::size_t line {header + 1};
+    while (true) {
+      if (line == source.size()) {
+        return final ? std::optional<std::size_t> {line} : std::nullopt;
+      }
+      const std::size_t eol {source.find('\n', line)};
+      if (eol == std::string_view::npos && !final) {
+        return std::nullopt;
+      }
+      const std::size_t last  {eol == std::string_view::npos ? source.size() : eol};
+      const bool        blank {blank_between(source, line, last, blanks)};
+      if (blank ? eol == std::string_view::npos : leading_spaces(source, line) < content) {
+        return line; // a line less indented, or blanks that end the text with no line break
+      }
+      line = eol == std::string_view::npos ? source.size() : eol + 1;
+    }
+  }
+
+  /*!
+   * \brief Where an \ref extension::lines token matched up to \p end of \p source ends, each continued line read
+   *        by \p continuation (\ref rule_indentation), with \p reference the innermost open block; none while
+   *        the text past \p source may still change it (\p final false).
+   */
+  [[nodiscard]] inline std::optional<std::size_t> lines_extent(std::string_view   source,
+                                                               std::size_t        end,
+                                                               const real::regex& continuation,
+                                                               std::ptrdiff_t     reference,
+                                                               bool               final)
+  {
+    constexpr std::string_view blanks {" \t\r"};
+    const auto                 wait   {[final](std::size_t at) {
+                                         return final ? std::optional<std::size_t> {at} : std::nullopt;
+                                       }};
+    for (std::size_t reached {end};;) {
+      const std::size_t after {source.find_first_not_of(blanks, reached)};
+      if (after == std::string_view::npos) {
+        return wait(reached);
+      }
+      if (source[after] != '\n') {
+        return reached; // more on the line: a comment or another token ends the continuation
+      }
+      std::size_t line {after + 1};
+      std::size_t last {0};
+      while (true) { // the blank lines between
+        if (line == source.size()) {
+          return wait(reached);
+        }
+        const std::size_t eol {source.find('\n', line)};
+        if (eol == std::string_view::npos && !final) {
+          return std::nullopt;
+        }
+        last = eol == std::string_view::npos ? source.size() : eol;
+        if (!blank_between(source, line, last, blanks)) {
+          break;
+        }
+        if (last == source.size()) {
+          return reached;
+        }
+        line = last + 1;
+      }
+      const std::string_view text {source.substr(line, last - line)};
+      if ((text.starts_with("---") || text.starts_with("...")) && (text.size() == 3 || blanks.find(text[3]) != std::string_view::npos)) {
+        return reached; // a document marker at column 0
+      }
+      const std::size_t first {source.find_first_not_of(" \t", line)};
+      const auto        found {continuation.match(source.substr(0, last), first)};
+      if (leading_spaces(source, line) <= reference || !found || found.end() == first) {
+        return reached;
+      }
+      reached = found.end();
     }
   }
 
@@ -402,7 +668,8 @@ namespace scilex {
       token              next     {};
       munch_memos        memos    {memos_for(source)};
       int                previous {end_of_input};                           // the kind of the token before, for after/not_after
-      while (scan_next(source, cursor, stack, next, memos, previous)) {
+      indent_state       indents  {};                                       // the open blocks, for Level B
+      while (scan_next(source, cursor, stack, next, memos, previous, indents)) {
         out.push_back(next);
       }
       if (policy == eof_policy::append) {
@@ -576,6 +843,8 @@ namespace scilex {
      * \param[out]    out    Receives the next non-skipped token on success.
      * \param[in,out] memos  What earlier munches over \p source proved, per mode (see
      *                \ref munch_memos); the same object for every call over one source.
+     * \param[in,out] previous The kind of the token before; set to the kind of the token produced.
+     * \param[in,out] indents The open blocks (\ref rule_indentation).
      * \return `true` if a token was produced, `false` at end of input.
      * \throws lex_error If a position matches no rule in the active mode (#1), a rule
      *         pops at the stack root or pushes past \ref max_mode_depth (#2), input ends inside a
@@ -587,9 +856,10 @@ namespace scilex {
                    std::vector<frame>& stack,
                    token&              out,
                    munch_memos&        memos,
-                   int&                previous) const
+                   int&                previous,
+                   indent_state&       indents) const
     {
-      return scan_step(source, cursor, stack, out, memos, previous, whole_text {}) == scan_status::token;
+      return scan_step(source, cursor, stack, out, memos, previous, indents, whole_text {}) == scan_status::token;
     }
 
     //! \brief What \ref scan_step did.
@@ -639,6 +909,7 @@ namespace scilex {
      * \param[in,out] memos  What earlier munches over \p source proved.
      * \param[in,out] previous The kind of the token before (\ref scilex::end_of_input before the first);
      *                         set to the kind of the token produced.
+     * \param[in,out] indents The open blocks (\ref rule_indentation); left as they were when the step waits.
      * \param[in]     gate   The gate.
      * \return What the step did.
      * \throws lex_error As \ref scan_next.
@@ -650,6 +921,7 @@ namespace scilex {
                           token&              out,
                           munch_memos&        memos,
                           int&                previous,
+                          indent_state&       indents,
                           const Gate&         gate) const
     {
       while (cursor.offset < source.size()) {
@@ -708,8 +980,28 @@ namespace scilex {
         }
 
         const std::size_t best_idx {m.idx};
-        const std::size_t best_len {m.len};
+        std::size_t       best_len {m.len};
         const position    start    {cursor};
+        const rule&       won      {rules_[best_idx]};
+        // Level B: a token with a role or an extension, in a significant mode, reads and updates the open
+        // blocks. Its extent is decided first, the state left as it is if the text may still change it.
+        const bool indented {!won.skip && takes_part(won) && (mode_significant_.empty() || mode_significant_[mode])};
+        if (indented) {
+          if (won.extend != extension::none) {
+            const std::ptrdiff_t             reference {indent_reference(won, start, indents)};
+            const std::optional<std::size_t> extent    {won.extend == extension::block
+                                                          ? block_extent(source, start.offset + best_len, source.substr(start.offset, best_len),
+                                                                         reference, gate.at_end())
+                                                          : lines_extent(source, start.offset + best_len,
+                                                                         won.continuation ? *won.continuation : won.pattern,
+                                                                         reference, gate.at_end())};
+            if (!extent) {
+              return scan_status::pending;
+            }
+            best_len = *extent - start.offset;
+          }
+          apply_indent(won, start, indents);
+        }
         advance(source, cursor, best_len);
 
         // Most tokens carry no action: testing it here keeps the out-of-line transition, and the
@@ -797,6 +1089,10 @@ namespace scilex {
         if (rules_[idx].kind <= scilex::error) {
           throw std::invalid_argument("rule " + std::to_string(idx) + ": kind " + std::to_string(rules_[idx].kind)
                                       + " is reserved (scilex::end_of_input to scilex::error)");
+        }
+        if (rules_[idx].skip && takes_part(rules_[idx])) {
+          throw std::invalid_argument("rule " + std::to_string(idx)
+                                      + ": a skip rule emits no token, so it takes no part in the indentation");
         }
       }
     }
@@ -1501,6 +1797,7 @@ namespace scilex {
     bool               done_     {true};                                                //!< True once exhausted (end sentinel).
     lexer::munch_memos memos_;                                                          //!< What this scan's munches proved.
     int                previous_ {end_of_input};                                        //!< The kind of the token before.
+    indent_state       indents_  {};                                                    //!< The open blocks (Level B).
 
     //! \brief Produces the next token, or marks the iterator exhausted.
     void advance()
@@ -1508,7 +1805,7 @@ namespace scilex {
       if (done_) {
         return;
       }
-      if (owner_->scan_next(source_, cursor_, stack_, current_, memos_, previous_)) {
+      if (owner_->scan_next(source_, cursor_, stack_, current_, memos_, previous_, indents_)) {
         return;
       }
       // Input exhausted: yield one end-of-input token if requested, else stop.
@@ -1728,7 +2025,7 @@ namespace scilex {
         lexer::scan_status status       {lexer::scan_status::end};
         undo_.clear();
         try {
-          status = owner_->scan_step(buffer_, cursor_, stack_, next, memos, previous_, g);
+          status = owner_->scan_step(buffer_, cursor_, stack_, next, memos, previous_, indents_, g);
         }
         catch (const lex_error& e) {
           finished_ = true;
@@ -1809,6 +2106,7 @@ namespace scilex {
     std::string             tail_;                    //!< Fed bytes held back: a code point not yet complete.
     bool                    finished_ {false};        //!< \ref finish was called, or a lex_error ended the text.
     int                     previous_ {end_of_input}; //!< The kind of the token before the cursor.
+    indent_state            indents_  {};             //!< The open blocks before the cursor (Level B).
   };
 
   inline token_stream lexer::stream() const&

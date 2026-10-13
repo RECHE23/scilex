@@ -344,6 +344,39 @@ namespace {
                                }
                                return kinds;
                              }};
+      // Level B: a role, an extension (its continuation the rule's own pattern or another drawn one), on an
+      // emitted rule only.
+      std::string indentation;
+      if (!rule.skip) {
+        switch (draw(rng, 8)) {
+          case 0:  rule.indent = scilex::indent_role::entry; indentation += " entry"; break;
+          case 1:  rule.indent = scilex::indent_role::key; indentation += " key"; break;
+          case 2:  rule.indent = scilex::indent_role::value; indentation += " value"; break;
+          case 3:  rule.indent = scilex::indent_role::reset; indentation += " reset"; break;
+          default: break;
+        }
+        switch (draw(rng, 6)) {
+          case 0: rule.extend = scilex::extension::block; indentation += " block"; break;
+          case 1: {
+              rule.extend = scilex::extension::lines;
+              const char* const other {pattern_pool[draw(rng, pattern_pool.size())]};
+              if (draw(rng, 2) == 0) {
+                try {
+                  rule.continuation.emplace(other);
+                  indentation += std::string {" lines continued by "} + preview(other);
+                }
+                catch (const real::regex_error&) {
+                  indentation += " lines";
+                }
+              }
+              else {
+                indentation += " lines";
+              }
+              break;
+            }
+          default: break;
+        }
+      }
       std::string predicate;
       switch (draw(rng, 6)) {
         case 0:  rule.after     = some_kinds(); predicate = " after"; break;
@@ -355,7 +388,7 @@ namespace {
       }
       out.description += "  " + std::to_string(i) + ": " + preview(pattern) + (raw ? " (bytes)" : "")
                          + (rule.skip ? " skip" : "") + (rule.in_mode.empty() ? "" : " in=" + rule.in_mode.back())
-                         + (rule.action ? " action" : "") + predicate + '\n';
+                         + (rule.action ? " action" : "") + indentation + predicate + '\n';
       out.rules.push_back(std::move(rule));
     }
     return out;
@@ -373,7 +406,9 @@ namespace {
       if (!gram) {
         continue;
       }
-      std::vector<std::string> texts;
+      // The second mode insignificant, or none: Level B tracks the significant modes only.
+      const std::vector<std::string> insignificant {draw(rng, 3) == 0 ? std::vector<std::string> {"m"} : std::vector<std::string> {}};
+      std::vector<std::string>       texts;
       for (std::size_t k {0}; k < 6; ++k) {
         std::string       text;
         const std::size_t length {draw(rng, 9)};
@@ -388,10 +423,10 @@ namespace {
           for (const scilex::dfa_policy dfa : {scilex::dfa_policy::automatic, scilex::dfa_policy::requested}) {
             std::optional<scilex::lexer> lex;
             try {
-              lex.emplace(gram->rules, std::vector<std::string> {}, std::vector<std::string> {}, policy, unit, dfa);
+              lex.emplace(gram->rules, insignificant, std::vector<std::string> {}, policy, unit, dfa);
             }
             catch (const std::invalid_argument&) {
-              continue; // a transition into a mode no drawn rule is active in
+              continue; // a transition into a mode no drawn rule is active in, or an insignificant one no rule uses
             }
             for (const std::string& text : texts) {
               cases += 2;
