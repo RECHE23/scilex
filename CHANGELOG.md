@@ -7,6 +7,8 @@ fuzz oracle.
 
 ## Unreleased
 
+## 2026.10.8 — 2026-10-13
+
 ### Added
 - **Layout Awareness Level B: tokens bounded by the indentation of their block.** A rule's `indent` role
   (`entry`, `key`, `value`, `reset`) lets the lexer keep the open blocks' columns as YAML's scanner does, and its
