@@ -310,10 +310,15 @@ def main(argv: list[str]) -> int:
         return 2
 
     install_interrupt_handlers()
-    src.write_text(text.replace(args.old, args.new, 1))
     verdict = 3
     child: subprocess.Popen[str] | None = None
+    artifact = None
+    written = False
     try:
+        # Inside the try: a signal during the write (the file already truncated) must still reach the
+        # revert below, or the tree keeps a partial file.
+        src.write_text(text.replace(args.old, args.new, 1))
+        written = True
         artifact = artifact_for(rel)
         if artifact is not None and not rebuild(*artifact):
             return 2
@@ -351,7 +356,12 @@ def main(argv: list[str]) -> int:
         verdict = 2
     finally:
         back = src.read_text()
-        if back.count(args.new) == 1:
+        if not written:
+            # Interrupted mid-write: the file holds a prefix of one text or the other, so neither anchor
+            # is trustworthy. The original is known whole; put it back.
+            if back != text:
+                src.write_text(text)
+        elif back.count(args.new) == 1:
             src.write_text(back.replace(args.new, args.old, 1))
         else:
             # No `return` here: a return inside finally swallows an exception in flight, and this
