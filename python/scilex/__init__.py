@@ -264,6 +264,18 @@ def _normalize_kinds(kinds, index, field):
         raise TypeError(f"rule {index}: {field} must be a sequence of int kinds") from None
 
 
+_INDENT_ROLES = (None, "entry", "key", "value", "reset")
+_EXTENSIONS = (None, "block", "lines")
+
+
+def _normalize_choice(value, index, field, choices):
+    """A rule's Level B `indent` or `extend` field, checked against its `choices` (None: none)."""
+    if value not in choices:
+        expected = ", ".join(repr(choice) for choice in choices[1:])
+        raise ValueError(f"rule {index}: {field} must be None or one of {expected}, not {value!r}")
+    return value
+
+
 def _normalize_action(action, index):
     """Validate a rule action into ``None`` | ``("push"|"set", mode)`` | ``("pop",)``."""
     if action is None:
@@ -293,11 +305,19 @@ class Lexer:
             default, means the default mode only); ``action`` drives the per-scan mode
             stack and is ``None`` or one of ``("push", mode)`` / ``("set", mode)`` /
             ``("pop",)``. These last two are SciLex's *modes* (contextual lexing); a
-            plain ``(kind, pattern, skip)`` rule needs neither.
+            plain ``(kind, pattern, skip)`` rule needs neither. ``after`` and ``not_after``
+            (sequences of kinds, or ``None``) make the rule depend on the token before.
+            Three more fields, each ``None`` by default, are Layout Awareness Level B: ``indent``,
+            the rule's part in the indentation the lexer tracks (``"entry"``, ``"key"``,
+            ``"value"`` or ``"reset"``: YAML's ``-``, keys, ``:`` and ``---``); ``extend``, how
+            its token extends over the lines below its own (``"block"``: a body indented past
+            the enclosing block, YAML's ``|``; ``"lines"``: lines indented past it, YAML's
+            continued plain scalar); and ``continuation``, the pattern each continued line
+            holds (default: the rule's own). A mode in ``insignificant_modes`` takes no part.
         insignificant_modes (iterable): Mode names whose tokens carry no layout
             structure (Layout Awareness Level A — see :meth:`layout`): code spanning
-            lines in such a mode is treated as continuation. Each must be a mode the
-            rules use.
+            lines in such a mode is treated as continuation, and it takes no part in
+            Level B's indentation. Each must be a mode the rules use.
         dfa_modes (iterable): Mode names to accelerate with a DFA fast path (one DFA
             pass replaces the per-rule dispatch) when ``dfa="requested"``; under the
             default ``dfa="auto"`` every mode is tried and this adds nothing. Best-effort and invisible: a mode
@@ -371,7 +391,18 @@ class Lexer:
             not_after = _normalize_kinds(entry[6] if len(entry) > 6 else None, len(normalized), "not_after")
             if after and not_after:
                 raise ValueError(f"rule {len(normalized)}: a rule has after or not_after, not both")
-            if after or not_after:
+            indent = _normalize_choice(entry[7] if len(entry) > 7 else None, len(normalized), "indent",
+                                       _INDENT_ROLES)
+            extend = _normalize_choice(entry[8] if len(entry) > 8 else None, len(normalized), "extend",
+                                       _EXTENSIONS)
+            continuation = entry[9] if len(entry) > 9 else None
+            if continuation is not None and not isinstance(continuation, str):
+                raise TypeError(f"rule {len(normalized)}: continuation must be None or a pattern str, "
+                                f"got {type(continuation).__name__}")
+            if indent is not None or extend is not None or continuation is not None:
+                normalized.append((kind, pattern, skip, modes, action, after, not_after, indent, extend,
+                                   continuation))
+            elif after or not_after:
                 normalized.append((kind, pattern, skip, modes, action, after, not_after))
             elif modes or action is not None:
                 normalized.append((kind, pattern, skip, modes, action))
@@ -383,7 +414,6 @@ class Lexer:
         self._columns = columns
         # The C++ ctor validates dfa_modes against the interned modes (raising error on
         # an unknown one) and builds the per-mode DFA fast path.
-        self._handle = _compile(normalized, self._dfa_modes, errors, columns, dfa)
         known = {"default"}
         for entry in normalized:
             if len(entry) > 3:
@@ -393,11 +423,14 @@ class Lexer:
             if mode not in known:
                 raise ValueError(f"insignificant_modes: unknown mode {mode!r}")
             self._insignificant.append(mode)
+        self._handle = _compile(normalized, self._dfa_modes, errors, columns, dfa, self._insignificant)
 
     @property
     def rules(self):
         """The normalized rules: ``(kind, pattern, skip)``, or
-        ``(kind, pattern, skip, in_mode, action)`` for rules that use modes."""
+        ``(kind, pattern, skip, in_mode, action)`` for rules that use modes, with ``after`` and
+        ``not_after`` for predicated ones, and ``indent``, ``extend`` and ``continuation`` for
+        Level B ones."""
         return list(self._rules)
 
     @property

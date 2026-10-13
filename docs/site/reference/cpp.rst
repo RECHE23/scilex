@@ -25,6 +25,10 @@ Rules and modes
 .. doxygenstruct:: scilex::mode_action
    :members:
 
+.. doxygenenum:: scilex::indent_role
+
+.. doxygenenum:: scilex::extension
+
 Tokens and positions
 --------------------
 

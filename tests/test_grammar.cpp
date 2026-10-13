@@ -107,7 +107,8 @@ namespace {
 
     const scilex::grammar_error unknown {refusal("A\ta\tskip  bogus\n")};
     EXPECT_EQ(unknown.column(), 11U);
-    EXPECT_EQ(unknown.cause(), "unknown option 'bogus' (expected skip, in=, push=, set=, pop, after= or not_after=)");
+    EXPECT_EQ(unknown.cause(), "unknown option 'bogus' (expected skip, in=, push=, set=, pop, after=, not_after=, indent=, "
+              "extend=, continue= or fragment)");
 
     const scilex::grammar_error two {refusal("A\ta\tpush=x pop\n")};
     EXPECT_EQ(two.column(), 12U);
@@ -120,6 +121,38 @@ namespace {
     const scilex::grammar_error none {refusal("# only a comment\n\n")};
     EXPECT_EQ(none.line(), 0U);
     EXPECT_EQ(std::string(none.what()), "g.lex: no rules (the grammar is empty)");
+  }
+
+  // Level B: the roles and extensions are read by name, continue= resolves to a fragment (else a rule) wherever
+  // it is written, and a fragment is a pattern only: no kind, not lexed, no other option.
+  TEST(grammar_reads_the_indentation_options)
+  {
+    const scilex::grammar parsed {scilex::parse_grammar("DASH\t-\tindent=entry\n"
+                                                        "COLON\t:\tindent=value\n"
+                                                        "DOC\t---\tindent=reset\n"
+                                                        "BLOCK\t[|>]\textend=block\n"
+                                                        "WORD\t[a-z]+\tindent=key extend=lines continue=MORE\n"
+                                                        "MORE\t[a-z-]+\tfragment\n"
+                                                        "NAME\t[A-Z]+\textend=lines continue=WORD\n")};
+    EXPECT_EQ(parsed.rules.size(), 6U);
+    EXPECT_EQ(parsed.names.back(), "NAME");
+    EXPECT(parsed.rules[0].indent == scilex::indent_role::entry);
+    EXPECT(parsed.rules[1].indent == scilex::indent_role::value);
+    EXPECT(parsed.rules[2].indent == scilex::indent_role::reset);
+    EXPECT(parsed.rules[3].extend == scilex::extension::block);
+    EXPECT(parsed.rules[4].indent == scilex::indent_role::key && parsed.rules[4].extend == scilex::extension::lines);
+    EXPECT(parsed.rules[4].continuation && parsed.rules[4].continuation->match("a-b", 0).end() == 3);
+    EXPECT(parsed.rules[5].continuation && parsed.rules[5].continuation->match("ab", 0).end() == 2);
+    EXPECT_EQ(refusal("A\ta\tindent=side\n").cause(), "unknown role 'indent=side' (expected entry, key, value or reset)");
+    EXPECT_EQ(refusal("A\ta\textend=far\n").cause(), "unknown extension 'extend=far' (expected block or lines)");
+    EXPECT_EQ(refusal("A\ta\textend=lines continue=\n").cause(), "empty name in continue=");
+    EXPECT_EQ(refusal("A\ta\textend=lines continue=B\n").cause(), "no fragment or rule is named 'B' (continue= names one)");
+    const scilex::grammar_error unextended {refusal("A\ta\tcontinue=A\n")};
+    EXPECT_EQ(unextended.column(), 5U);
+    EXPECT_EQ(unextended.cause(), "continue= reads the lines an extend=lines rule continues on");
+    const scilex::grammar_error busy {refusal("A\ta\nF\tb\tskip fragment\n")};
+    EXPECT_EQ(busy.line(), 2U);
+    EXPECT_EQ(busy.cause(), "a fragment takes no other option");
   }
 
   // A mode that push= or set= enters must have a rule active in it, or the lexer refuses the grammar with

@@ -17,14 +17,22 @@
  *   that `push=` or `set=` enters must have a rule active in it;
  * - `after=A,B` or `not_after=A,B` — the rule is active only right after (or except right after) a token
  *   of the rules named `A` or `B` (\ref scilex::rule::after): a name stands for every rule that bears
- *   it, earlier or later in the file, and `^` for the start of the input.
+ *   it, earlier or later in the file, and `^` for the start of the input;
+ * - `indent=entry`, `indent=key`, `indent=value` or `indent=reset` — the rule's part in the indentation the
+ *   lexer tracks, and `extend=block` or `extend=lines` — how its token extends below its line (Layout
+ *   Awareness Level B, \ref rule_indentation);
+ * - `continue=N` — with `extend=lines`, what each continued line must hold: the pattern of the fragment (or
+ *   else the first rule) named `N`, earlier or later in the file;
+ * - `fragment` — the line names a pattern for `continue=`, not a rule: it takes no other option, has no
+ *   kind, and is not lexed.
  *
  * A line whose first non-blank character is `%` is a directive, not a rule; the one directive is
  *
  * - `%insignificant m1,m2` — the modes whose tokens carry no layout structure (the lexer's
  *   `insignificant_modes`); each must have a rule active in it, and the directive may repeat.
  *
- * A rule's kind is its 0-based position among the rules; \ref scilex::grammar::names maps it back.
+ * A rule's kind is its 0-based position among the rules, fragments not counted; \ref scilex::grammar::names
+ * maps it back.
  *
  * \code
  * WS       \s+        skip
@@ -42,6 +50,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <fstream>
+#include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -279,6 +288,17 @@ namespace scilex {
       out.action = std::move(action);
     }
 
+    //! \brief The options of a line that name another line, or make it a fragment, resolved once every line
+    //!        is read.
+    struct line_extras
+    {
+      bool             fragment        {false}; //!< `fragment`: the line names a pattern, not a rule.
+      std::size_t      fragment_column {0};     //!< The 1-based column of `fragment`.
+      std::string_view continuation    {};      //!< The name `continue=` gives, or empty.
+      std::size_t      continue_column {0};     //!< The 1-based column of `continue=`.
+      std::size_t      options         {0};     //!< How many options the line gives.
+    };
+
     /*!
      * \brief Applies the space-separated \p options of one rule to \p out.
      * \param[in]     options The options field.
@@ -288,8 +308,9 @@ namespace scilex {
      * \param[in,out] out     The rule being built.
      * \param[in]     index   The rule's index (for its `after=` / `not_after=` entry).
      * \param[in,out] predicates Each `after=` / `not_after=` option, appended with its names unresolved.
+     * \param[out]    extras  Its `fragment` and `continue=` options.
      * \return The 1-based column of its `push=` or `set=` option, or 0 when it has none.
-     * \throws grammar_error On an unknown option, an empty mode name, or a second transition.
+     * \throws grammar_error On an unknown option or value, an empty mode name, or a second transition.
      */
     inline std::size_t apply_grammar_options(std::string_view             options,
                                              std::size_t                  column,
@@ -297,7 +318,8 @@ namespace scilex {
                                              std::size_t                  line,
                                              rule&                        out,
                                              std::size_t                  index,
-                                             std::vector<predicate_site>& predicates)
+                                             std::vector<predicate_site>& predicates,
+                                             line_extras&                 extras)
     {
       std::size_t transition_column {0};
       std::size_t at                {0};
@@ -309,6 +331,7 @@ namespace scilex {
         const std::size_t      end  {std::min(options.find(' ', at), options.size())};
         const std::string_view word {options.substr(at, end - at)};
         const std::size_t      col  {column + at};
+        ++extras.options;
         if (word == "skip") {
           out.skip = true;
         }
@@ -355,9 +378,51 @@ namespace scilex {
           }
           predicates.push_back(std::move(site));
         }
+        else if (word.starts_with("indent=")) {
+          const std::string_view role {word.substr(7)};
+          if (role == "entry") {
+            out.indent = indent_role::entry;
+          }
+          else if (role == "key") {
+            out.indent = indent_role::key;
+          }
+          else if (role == "value") {
+            out.indent = indent_role::value;
+          }
+          else if (role == "reset") {
+            out.indent = indent_role::reset;
+          }
+          else {
+            throw grammar_error(origin, line, col, quoting("unknown role ", word, " (expected entry, key, value or reset)"));
+          }
+        }
+        else if (word.starts_with("extend=")) {
+          const std::string_view how {word.substr(7)};
+          if (how == "block") {
+            out.extend = extension::block;
+          }
+          else if (how == "lines") {
+            out.extend = extension::lines;
+          }
+          else {
+            throw grammar_error(origin, line, col, quoting("unknown extension ", word, " (expected block or lines)"));
+          }
+        }
+        else if (word.starts_with("continue=")) {
+          if (word.size() == 9) {
+            throw grammar_error(origin, line, col, "empty name in continue=");
+          }
+          extras.continuation    = word.substr(9);
+          extras.continue_column = col;
+        }
+        else if (word == "fragment") {
+          extras.fragment        = true;
+          extras.fragment_column = col;
+        }
         else {
           throw grammar_error(origin, line, col,
-                              quoting("unknown option ", word, " (expected skip, in=, push=, set=, pop, after= or not_after=)"));
+                              quoting("unknown option ", word,
+                                      " (expected skip, in=, push=, set=, pop, after=, not_after=, indent=, extend=, continue= or fragment)"));
         }
         at = end;
       }
@@ -428,6 +493,51 @@ namespace scilex {
           }
         }
         (site.after ? parsed.rules[site.rule].after : parsed.rules[site.rule].not_after) = std::move(kinds);
+      }
+    }
+
+    //! \brief A `fragment` line: a named pattern for `continue=`.
+    struct fragment
+    {
+      std::string_view name;    //!< Its name (a view into the grammar text).
+      real::regex      pattern; //!< Its pattern.
+    };
+
+    //! \brief A `continue=` option, its name resolved once every line is read.
+    struct continue_site
+    {
+      std::size_t      rule;   //!< The rule's index.
+      std::string_view name;   //!< The name it gives.
+      std::size_t      line;   //!< Its 1-based line.
+      std::size_t      column; //!< The 1-based column of the option.
+    };
+
+    /*!
+     * \brief Gives each rule of \p sites the pattern its `continue=` names: the fragment of that name, else the
+     *        first rule of that name.
+     * \throws grammar_error At the option, for a rule without `extend=lines` or a name nothing bears.
+     */
+    inline void resolve_continuations(grammar&                          parsed,
+                                      const std::vector<fragment>&      fragments,
+                                      const std::vector<continue_site>& sites,
+                                      const std::string&                origin)
+    {
+      for (const continue_site& site : sites) {
+        rule& target {parsed.rules[site.rule]};
+        if (target.extend != extension::lines) {
+          throw grammar_error(origin, site.line, site.column, "continue= reads the lines an extend=lines rule continues on");
+        }
+        const auto named {std::ranges::find(fragments, site.name, &fragment::name)};
+        if (named != fragments.end()) {
+          target.continuation = named->pattern;
+          continue;
+        }
+        const auto ruled {std::ranges::find(parsed.names, site.name)};
+        if (ruled == parsed.names.end()) {
+          throw grammar_error(origin, site.line, site.column,
+                              quoting("no fragment or rule is named ", site.name, " (continue= names one)"));
+        }
+        target.continuation = parsed.rules[static_cast<std::size_t>(ruled - parsed.names.begin())].pattern;
       }
     }
 
@@ -523,6 +633,8 @@ namespace scilex {
     std::vector<detail::transition_site> transitions;
     std::vector<detail::directive_site>  directives;
     std::vector<detail::predicate_site>  predicates;
+    std::vector<detail::fragment>        fragments;
+    std::vector<detail::continue_site>   continuations;
     std::size_t                          line_no {0};
     std::size_t                          at      {text.starts_with(byte_order_mark) ? byte_order_mark.size() : 0};
     while (at <= text.size()) {
@@ -555,20 +667,35 @@ namespace scilex {
       if (fields.text[1].empty()) {
         throw grammar_error(origin, line_no, fields.column[1], "empty pattern");
       }
-      const int kind {static_cast<int>(parsed.rules.size())};
+      const int           kind {static_cast<int>(parsed.rules.size())};
+      std::optional<rule> read;
       try {
-        parsed.rules.push_back(rule {.kind = kind, .pattern = real::regex(fields.text[1])});
+        read.emplace(rule {.kind = kind, .pattern = real::regex(fields.text[1])});
       }
       catch (const real::regex_error& invalid) {
         throw grammar_error(origin, line_no, fields.column[1] + invalid.position(), "invalid regex: " + invalid.cause());
       }
+      detail::line_extras extras {};
+      std::size_t         column {0};
       if (fields.text.size() == 3) {
-        const std::size_t column {detail::apply_grammar_options(fields.text[2], fields.column[2], origin, line_no,
-                                                                parsed.rules.back(), parsed.rules.size() - 1, predicates)};
-        if (column != 0) {
-          transitions.push_back({.rule = parsed.rules.size() - 1, .line = line_no, .column = column});
-        }
+        column = detail::apply_grammar_options(fields.text[2], fields.column[2], origin, line_no, *read,
+                                               parsed.rules.size(), predicates, extras);
       }
+      if (extras.fragment) {
+        if (extras.options != 1) {
+          throw grammar_error(origin, line_no, extras.fragment_column, "a fragment takes no other option");
+        }
+        fragments.push_back({.name = fields.text[0], .pattern = std::move(read->pattern)});
+        continue;
+      }
+      if (column != 0) {
+        transitions.push_back({.rule = parsed.rules.size(), .line = line_no, .column = column});
+      }
+      if (!extras.continuation.empty()) {
+        continuations.push_back({.rule   = parsed.rules.size(), .name = extras.continuation, .line = line_no,
+                                 .column = extras.continue_column});
+      }
+      parsed.rules.push_back(std::move(*read));
       parsed.names.emplace_back(fields.text[0]);
     }
     if (parsed.rules.empty()) {
@@ -576,6 +703,7 @@ namespace scilex {
     }
     detail::check_transition_targets(parsed, transitions, origin);
     detail::resolve_predicates(parsed, predicates, origin);
+    detail::resolve_continuations(parsed, fragments, continuations, origin);
     detail::apply_directives(parsed, directives, origin);
     return parsed;
   }

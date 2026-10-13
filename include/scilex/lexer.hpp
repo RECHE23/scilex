@@ -110,8 +110,8 @@ namespace scilex {
   {
     none,  //!< The token is its match (the default).
     block, //!< A body indented past the enclosing block: YAML's `|` and `>` scalars.
-    lines, //!< Lines indented past the enclosing block, each read by \ref rule::continuation: YAML's plain
-           //!< scalar continued on the next line.
+    lines, //!< Lines indented past the enclosing block, each read by the rule's `continuation` (YAML's plain
+           //!< scalar continued on the next line).
   };
 
   /*!

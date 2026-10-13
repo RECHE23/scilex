@@ -32,6 +32,7 @@
 #include <sciforge/binding/module.hpp>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cstddef>
 #include <exception>
@@ -582,13 +583,65 @@ int parse_action(PyObject* obj, std::optional<scilex::mode_action>* out)
     return 0;
 }
 
-// _scilex.compile(rules, dfa_modes=()) -> capsule wrapping a scilex::lexer. Each rule
-// is (kind:int, pattern:str, skip:bool) and may carry two optional fields: in_mode (a
-// sequence of mode-name str) and action (a push/pop/set tuple). A bare 3-tuple stays
-// valid (a default-mode rule with no transition). dfa_modes is a sequence of mode names
-// to accelerate with a real::dfa fast path (best-effort: an un-DFA-able mode silently
-// stays on Pike — see dfa_modes_active). insignificant_modes is NOT passed here: layout
-// significance is applied Python-side in _scilex.layout, unchanged.
+// Parses a rule's optional Level B field: None/absent -> `fallback`; otherwise one of `names` (str), the
+// value at the same index of `values`. Returns 0 on success, -1 (error set) otherwise.
+template <typename Value, std::size_t Count>
+int parse_named(PyObject*                              obj,
+                const char*                            field,
+                const std::array<const char*, Count>&  names,
+                const std::array<Value, Count>&        values,
+                const char*                            expected,
+                Value*                                 out)
+{
+    if (obj == nullptr || obj == Py_None) {
+        return 0;
+    }
+    Py_ssize_t  length = 0;
+    const char* text   = PyUnicode_Check(obj) != 0 ? PyUnicode_AsUTF8AndSize(obj, &length) : nullptr;
+    for (std::size_t i = 0; text != nullptr && i < Count; ++i) {
+        if (std::string_view(text, static_cast<std::size_t>(length)) == names[i]) {
+            *out = values[i];
+            return 0;
+        }
+    }
+    PyErr_Clear();
+    PyErr_Format(sciforge_module_error(), "%s must be None or one of %s", field, expected);
+    return -1;
+}
+
+// The Level B fields' names, and the values they stand for.
+constexpr std::array<const char*, 4>         indent_names {"entry", "key", "value", "reset"};
+constexpr std::array<scilex::indent_role, 4> indent_values {scilex::indent_role::entry, scilex::indent_role::key,
+                                                            scilex::indent_role::value, scilex::indent_role::reset};
+constexpr std::array<const char*, 2>         extend_names {"block", "lines"};
+constexpr std::array<scilex::extension, 2>   extend_values {scilex::extension::block, scilex::extension::lines};
+
+// Parses a rule's optional continuation pattern: None/absent -> none; otherwise a str. Returns 0 on
+// success, -1 (error set) otherwise.
+int parse_continuation(PyObject* obj, std::optional<std::string>* out)
+{
+    if (obj == nullptr || obj == Py_None) {
+        return 0;
+    }
+    Py_ssize_t  length = 0;
+    const char* text   = PyUnicode_Check(obj) != 0 ? PyUnicode_AsUTF8AndSize(obj, &length) : nullptr;
+    if (text == nullptr) {
+        PyErr_Clear();
+        PyErr_SetString(sciforge_module_error(), "continuation must be None or a pattern str");
+        return -1;
+    }
+    *out = std::string(text, static_cast<std::size_t>(length));
+    return 0;
+}
+
+// _scilex.compile(rules, dfa_modes=(), errors, columns, dfa, insignificant_modes=()) -> capsule wrapping a
+// scilex::lexer. Each rule is (kind:int, pattern:str, skip:bool) and may carry optional fields: in_mode (a
+// sequence of mode-name str), action (a push/pop/set tuple), after and not_after (kinds), and Level B's
+// indent ("entry", "key", "value", "reset"), extend ("block", "lines") and continuation (a pattern str). A
+// bare 3-tuple stays valid (a default-mode rule with no transition). dfa_modes is a sequence of mode names
+// to accelerate with a real::dfa fast path (best-effort: an un-DFA-able mode silently stays on Pike — see
+// dfa_modes_active). insignificant_modes names the modes that take no part in Level B's indentation; the
+// layout pass's significance is applied Python-side in _scilex.layout, unchanged.
 PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
 {
     PyObject*   rules_obj     = nullptr;
@@ -596,7 +649,8 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
     const char* errors_str     = nullptr; // optional "raise" (default) or "token"
     const char* columns_str    = nullptr; // optional "bytes" (default) / "codepoints" / "utf16"
     const char* dfa_str        = nullptr; // optional "auto" (default) / "requested"
-    if (PyArg_ParseTuple(args, "O|Ozzz", &rules_obj, &dfa_modes_obj, &errors_str, &columns_str, &dfa_str) == 0) {
+    PyObject*   quiet_obj      = nullptr; // optional sequence of insignificant mode names (borrowed)
+    if (PyArg_ParseTuple(args, "O|OzzzO", &rules_obj, &dfa_modes_obj, &errors_str, &columns_str, &dfa_str, &quiet_obj) == 0) {
         return nullptr;
     }
     const std::string_view dfa_name {dfa_str == nullptr ? "auto" : dfa_str};
@@ -608,6 +662,10 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
     std::vector<std::string> dfa_modes;
     if (parse_in_mode(dfa_modes_obj, &dfa_modes, "dfa_modes") < 0) {
         return nullptr; // not a sequence of names (error set)
+    }
+    std::vector<std::string> insignificant;
+    if (parse_in_mode(quiet_obj, &insignificant, "insignificant_modes") < 0) {
+        return nullptr;
     }
     scilex::error_policy errors = scilex::error_policy::raise;
     if (errors_str != nullptr) {
@@ -654,8 +712,12 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
             PyObject*   action_obj  = nullptr; // optional 5th field (borrowed)
             PyObject*   after_obj   = nullptr; // optional 6th field (borrowed)
             PyObject*   not_obj     = nullptr; // optional 7th field (borrowed)
-            const int   parsed      = PyArg_ParseTuple(item, "isp|OOOO", &kind, &pattern, &skip,
-                                                       &in_mode_obj, &action_obj, &after_obj, &not_obj);
+            PyObject*   indent_obj  = nullptr; // optional 8th field (borrowed)
+            PyObject*   extend_obj  = nullptr; // optional 9th field (borrowed)
+            PyObject*   cont_obj    = nullptr; // optional 10th field (borrowed)
+            const int   parsed      = PyArg_ParseTuple(item, "isp|OOOOOOO", &kind, &pattern, &skip, &in_mode_obj,
+                                                       &action_obj, &after_obj, &not_obj, &indent_obj, &extend_obj,
+                                                       &cont_obj);
             // pattern, in_mode_obj and action_obj all borrow from `item` — read them
             // (copying through) before releasing it.
             std::string                        pattern_copy {parsed != 0 && pattern != nullptr ? pattern : ""};
@@ -663,11 +725,19 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
             std::optional<scilex::mode_action> action;
             std::vector<int>                   after;
             std::vector<int>                   not_after;
+            scilex::indent_role                indent {scilex::indent_role::none};
+            scilex::extension                  extend {scilex::extension::none};
+            std::optional<std::string>         continuation;
             const bool                         extras_ok = parsed != 0
                                                            && parse_in_mode(in_mode_obj, &in_mode, "in_mode") == 0
                                                            && parse_action(action_obj, &action) == 0
                                                            && parse_kinds(after_obj, &after, "after") == 0
-                                                           && parse_kinds(not_obj, &not_after, "not_after") == 0;
+                                                           && parse_kinds(not_obj, &not_after, "not_after") == 0
+                                                           && parse_named(indent_obj, "indent", indent_names, indent_values,
+                                                                          "'entry', 'key', 'value', 'reset'", &indent) == 0
+                                                           && parse_named(extend_obj, "extend", extend_names, extend_values,
+                                                                          "'block', 'lines'", &extend) == 0
+                                                           && parse_continuation(cont_obj, &continuation) == 0;
             Py_DECREF(item);
             if (parsed == 0 || !extras_ok) {
                 return nullptr; // PyArg / parse_in_mode / parse_action set the error
@@ -678,6 +748,11 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
                 built.action    = action;
                 built.after     = std::move(after);
                 built.not_after = std::move(not_after);
+                built.indent    = indent;
+                built.extend    = extend;
+                if (continuation) {
+                    built.continuation.emplace(*continuation);
+                }
                 rules.push_back(std::move(built));
             }
             catch (const real::regex_error& error) {
@@ -686,7 +761,7 @@ PyObject* scilex_compile(PyObject* /*self*/, PyObject* args)
                 return nullptr;
             }
         }
-        auto* lexer = new scilex::lexer(std::move(rules), {},
+        auto* lexer = new scilex::lexer(std::move(rules), std::move(insignificant),
                                         std::vector<std::string>(dfa_modes.begin(), dfa_modes.end()),
                                         errors, columns, dfa);
         PyObject* capsule = PyCapsule_New(lexer, CAPSULE_NAME, capsule_free);
@@ -790,7 +865,24 @@ PyObject* scilex_parse_grammar(PyObject* /*self*/, PyObject* args)
             }
             const std::string_view pattern {r.pattern.pattern()};
             PyObject*              tuple   = nullptr;
-            if (ok && r.after.empty() && r.not_after.empty()) {
+            const bool             indented {scilex::takes_part(r) || r.continuation.has_value()};
+            if (ok && indented) { // a Level B rule: the 10-tuple Lexer normalizes it to
+                PyObject*        after     = kinds_list(r.after);
+                PyObject*        not_after = kinds_list(r.not_after);
+                const char*      role      {r.indent == scilex::indent_role::none ? nullptr
+                                            : indent_names[static_cast<std::size_t>(r.indent) - 1]};
+                const char*      how       {r.extend == scilex::extension::none ? nullptr
+                                            : extend_names[static_cast<std::size_t>(r.extend) - 1]};
+                const std::string_view more {r.continuation ? r.continuation->pattern() : std::string_view {}};
+                tuple = after == nullptr || not_after == nullptr
+                        ? nullptr
+                        : Py_BuildValue("(is#OOOOOzzz#)", r.kind, pattern.data(), static_cast<Py_ssize_t>(pattern.size()),
+                                        r.skip ? Py_True : Py_False, in_mode, action, after, not_after, role, how,
+                                        r.continuation ? more.data() : nullptr, static_cast<Py_ssize_t>(more.size()));
+                Py_XDECREF(after);
+                Py_XDECREF(not_after);
+            }
+            else if (ok && r.after.empty() && r.not_after.empty()) {
                 tuple = Py_BuildValue("(is#OOO)", r.kind, pattern.data(), static_cast<Py_ssize_t>(pattern.size()),
                                       r.skip ? Py_True : Py_False, in_mode, action);
             }

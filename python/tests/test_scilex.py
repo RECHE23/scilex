@@ -972,7 +972,8 @@ class GrammarTests(unittest.TestCase):
         with self.assertRaises(scilex.GrammarError) as caught:
             scilex.parse_grammar("A\ta\tbogus\n")
         self.assertEqual(caught.exception.cause,
-                         "unknown option 'bogus' (expected skip, in=, push=, set=, pop, after= or not_after=)")
+                         "unknown option 'bogus' (expected skip, in=, push=, set=, pop, after=, not_after=, "
+                         "indent=, extend=, continue= or fragment)")
         with self.assertRaises(scilex.GrammarError) as caught:
             scilex.parse_grammar("# nothing\n")
         self.assertEqual(caught.exception.line, 0)
