@@ -370,3 +370,11 @@ TEST(value_roles_alone_and_repeated_kinds)
   rules.push_back({.kind = dash, .pattern = real::regex("[+]"), .skip = false, .indent = scilex::indent_role::entry});
   EXPECT(scilex::lexer(std::move(rules)).layout_roles().entries == std::vector<int> {dash});
 }
+
+// The first token indented opens its block as any deeper line does (its index, 0, is a node like another's); a value
+// opening its line, an explicit key's `: v`, arms the node past it as an entry does.
+TEST(an_indented_first_line_and_a_line_leading_value_open_blocks)
+{
+  EXPECT(role_kinds("  a: b\n") == (std::vector<int> {r_in, id, colon, id, r_nl, r_de, r_end}));
+  EXPECT(role_kinds("a\n: b: c\n") == (std::vector<int> {id, r_nl, colon, r_in, id, colon, id, r_nl, r_de, r_end}));
+}

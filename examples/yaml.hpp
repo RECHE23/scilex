@@ -159,12 +159,15 @@ namespace scilex::examples::yaml {
     // before a character neither blank nor `-`, so that `---` followed by a blank is a document marker and not
     // the start of a longer scalar (`--- |` is a marker, then a block scalar); `--x` stays a scalar. Spelled
     // out branch by branch (`-[^\s-]|--[^\s-]|---[^\s]`), the same set took the general engine 16 times as long.
-    const std::string block_more  {R"re(([^\s:]|:[^\s]|[ \t]+([^\s:#]|:[^\s]))*)re"};
-    const std::string block_first {R"re([^\s\-?:,\[\]{}#&*!|>'"%]|[?:][^\s]|-+[^\s-])re"};
+    const std::string block_more   {R"re(([^\s:]|:[^\s]|[ \t]+([^\s:#]|:[^\s]))*)re"};
+    const std::string block_first  {R"re([^\s\-?:,\[\]{}#&*!|>'"%]|[?:][^\s]|-+[^\s-])re"};
+    // Past the start of a line no document marker can begin: a `-` before anything but a blank starts a scalar.
+    const std::string inside_first {R"re([^\s\-?:,\[\]{}#&*!|>'"%]|[?:][^\s]|-[^\s])re"};
     // A continued line, from its first non-blank: any character but a blank, and `#` or `: ` that would end it.
-    const std::string continued   {R"re(([^\s:#]|:[^\s]))re" + block_more};
-    const std::string flow_first  {R"re([^\s\-?:,\[\]{}#&*!|>'"%@`]|[-?:][^\s,\[\]{}])re"};
-    const std::string flow_more   {R"re(([^\s:,\[\]{}]|:[^\s,\[\]{}]|[ \t]+([^\s:#,\[\]{}]|:[^\s,\[\]{}]))*)re"};
+    const std::string continued    {R"re(([^\s:#]|:[^\s]))re" + block_more};
+    const std::string flow_first   {R"re([^\s\-?:,\[\]{}#&*!|>'"%@`]|[-?:][^\s,\[\]{}])re"};
+    // Inside a flow a plain scalar goes on over line breaks too (PyYAML folds `[x\n  y]` into one scalar, `x y`).
+    const std::string flow_more    {R"re(([^\s:,\[\]{}]|:[^\s,\[\]{}]|\s+([^\s:#,\[\]{}]|:[^\s,\[\]{}]))*)re"};
 
     std::vector<scilex::rule> rules;
     // --- shared by block and flow --------------------------------------------
@@ -183,17 +186,23 @@ namespace scilex::examples::yaml {
     // `!`, `!local`, `!!str`, `!e!tag` and the verbatim `!<tag:…>`.
     rules.push_back(indented(rule(tag, R"re(!<[^>\s]*>|!([A-Za-z0-9-]*!)?[A-Za-z0-9_\-/.;:%#@&=+$~()]*)re", both), role::key));
     // --- block only (the root mode) ------------------------------------------
-    // Before the scalar: `---` and `...` are document markers, not a three-character plain scalar.
-    rules.push_back(indented(rule(document, R"re(---|\.\.\.)re", root), role::reset));
-    rules.push_back(rule(directive, R"re(%.*)re", root));
+    // Before the scalar: at the start of a line `---` and `...` are document markers, not a three-character plain
+    // scalar. Past it they begin one (`a: --- x` is the scalar `--- x`, as in PyYAML).
+    scilex::rule marker {indented(rule(document, R"re(---|\.\.\.)re", root), role::reset)};
+    marker.at_line_start = true;
+    rules.push_back(std::move(marker));
+    rules.push_back(rule(directive, R"re(%[^\r\n]*)re", root));           // a CRLF line's `\r` is not the directive's
     rules.push_back(indented(rule(block, R"re([|>]([1-9][+-]?|[+-][1-9]?)?)re", root), role::none, scilex::extension::block));
     rules.push_back(indented(rule(dash, R"re(-)re", root), role::entry)); // before the scalar (see the dash note)
     // ascii \s: DFA-eligible. Continued on the lines indented past its block.
-    scilex::rule plain {indented(rule(scalar, "(" + block_first + ")" + block_more, root, false, std::nullopt,
-                                      real::flags::ascii),
-                                 role::key, scilex::extension::lines)};
-    plain.continuation.emplace(continued, real::flags::ascii);
-    rules.push_back(std::move(plain));
+    for (const bool line_start : {true, false}) {
+      scilex::rule plain {indented(rule(scalar, "(" + (line_start ? block_first : inside_first) + ")" + block_more, root, false,
+                                        std::nullopt, real::flags::ascii),
+                                   role::key, scilex::extension::lines)};
+      plain.continuation.emplace(continued, real::flags::ascii);
+      plain.at_line_start = line_start;
+      rules.push_back(std::move(plain));
+    }
     // --- flow only -----------------------------------------------------------
     rules.push_back(rule(flow_close, R"re([}\]])re", flow, false, go(op_t::pop)));
     rules.push_back(rule(comma, R"re(,)re", both)); // in a block too, where YAML's scanner reads it as one
@@ -331,6 +340,18 @@ nested:
       const std::vector<scilex::token> toks {lex.tokenize("- run: |\n    make\n  name: a\n    b\n--- |\n x\n")};
       if (!kinds_are(toks, {dash, scalar, colon, block, scalar, colon, scalar, document, block})
           || toks[3].lexeme != "|\n    make\n" || toks[6].lexeme != "a\n    b" || toks[8].lexeme != "|\n x\n") {
+        return false;
+      }
+    }
+    // (6d) a document marker opens its line only: past the start of a line `---` begins a scalar; a flow's plain
+    //      scalar goes on over a line break; a CRLF directive ends before its `\r`.
+    {
+      const std::vector<scilex::token> marker  {lex.tokenize("a: --- x\n--- b\n")};
+      const std::vector<scilex::token> flowing {lex.tokenize("[p\n  q]\n")};
+      const std::vector<scilex::token> crlf    {lex.tokenize("%YAML 1.2\r\n---\r\n")};
+      if (!kinds_are(marker, {scalar, colon, scalar, document, scalar}) || marker[2].lexeme != "--- x"
+          || !kinds_are(flowing, {flow_open, scalar, flow_close}) || flowing[1].lexeme != "p\n  q"
+          || !kinds_are(crlf, {directive, document}) || crlf[0].lexeme != "%YAML 1.2") {
         return false;
       }
     }

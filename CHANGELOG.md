@@ -16,6 +16,17 @@ fuzz oracle.
   token, as before. In a `.lex` grammar the options `line_start` and `not_line_start`; from Python an eleventh
   rule field, `line_start` (`None`, `True` or `False`).
 
+### Fixed
+- **YAML: `---` and `...` are document markers only at the start of a line.** Past it they begin a plain scalar,
+  as in PyYAML: `a: --- x` is the key `a` and the scalar `--- x`, and an indented `--- y` is a scalar, where both
+  lexed as a marker. A directive on a CRLF line ends before its `\r`.
+- **YAML: a plain scalar inside a flow collection goes on over a line break** (`[p\n  q]` is one scalar, which
+  PyYAML folds into `p q`); it ended at the line's end.
+- **Layout: the first token of a text, when indented, opens its block, and a value that opens its line (an
+  explicit key's `: v`) arms the node past it as an entry does.** The pass took the first token's index, 0, for
+  "no node pending", so `  a: b` at the top of a file opened no INDENT; and `a\n: b: c` laid out the nested
+  mapping flat, where PyYAML opens a block collection.
+
 ## 2026.10.9 — 2026-10-13
 
 ### Added

@@ -217,7 +217,8 @@ namespace scilex {
     std::vector<detail::indent_measure> measured      {{0, 0}}; // python_tabs only: one per level
     bool                                started       {false};
     bool                                opens         {false};  // the last significant token is an entry's
-    std::size_t                         pending       {0};      // with roles: out's index of a node that may open, or 0
+    constexpr std::size_t               none          {std::numeric_limits<std::size_t>::max()};
+    std::size_t                         pending       {none};   // with roles: out's index of a node that may open
     detail::indent_measure              pending_at    {0, 0};   // that node's column
     std::size_t                         previous_line {0};      // last line a token reached
     position                            end_position  {0, 1, 1};
@@ -290,19 +291,21 @@ namespace scilex {
         if ((past || deeper) && !entry) {
           pending = out.size(); // its index once pushed
         }
-        else if ((past || deeper) || (pending != 0 && value && !line_start)) {
+        else if ((past || deeper) || (pending != none && value && !line_start)) {
           // Deeper than the block it is in: a deeper line by its test above, a node past an entry by its column,
           // and a node left pending was the last to open on its line, so it lies right of any block opened there.
           const std::size_t node {past || deeper ? out.size() : pending};
           levels.push_back(pending_at.tab8);
           measured.push_back(pending_at);
           out.insert(out.begin() + static_cast<std::ptrdiff_t>(node), token {indent, {}, node < out.size() ? out[node].start : current.start});
-          pending = 0;
+          pending = none;
         }
         else if (line_start) {
-          pending = 0;
+          pending = none;
         }
-        opens = entry;
+        // An entry, or a value opening its line (an explicit key's `: v`), arms the node past it, as PyYAML's
+        // indentation stack opens a block after each.
+        opens = entry || (value && line_start);
       }
       // Every token advances this, to the line of its LAST byte: a token spanning lines (a triple-quoted
       // string) leaves the scan on its closing line, so what follows there continues that line rather
