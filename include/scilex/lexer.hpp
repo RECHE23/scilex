@@ -2135,8 +2135,8 @@ namespace scilex {
       void left_open(std::size_t mode,
                      std::size_t offset) const noexcept
       {
-        const auto* const hybrid {stream->owner_->per_mode_dfa_[mode].get()};
-        if (hybrid != nullptr && !hybrid->any_on_pike && !resumes(mode, offset)) {
+        // Only a DFA leaves a munch open, so the mode has one.
+        if (!stream->owner_->per_mode_dfa_[mode]->any_on_pike && !resumes(mode, offset)) {
           open->progress.reset();
           open->unit = mode;
           open->at   = stream->base_ + offset;
