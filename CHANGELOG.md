@@ -35,6 +35,9 @@ fuzz oracle.
   and two fragments could share a name, the first winning: both are refused at the repeated option or name.
 - **From Python, a kind past a C long** (`after=[2**70]`) raised Python's own overflow message: it gets the
   binding's, as a kind past an int does.
+- **Laying out with `tabs="python"` took time quadratic in a line's length** once the lexer had indentation roles:
+  each node past an entry measured its column from the line's start. The pass reads each byte once: 40 000 `- `
+  on one line, 2.5 s → 32 ms.
 
 ## 2026.10.9 — 2026-10-13
 

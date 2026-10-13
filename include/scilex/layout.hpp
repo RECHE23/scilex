@@ -123,32 +123,52 @@ namespace scilex {
       std::size_t tab1; //!< Tabs count as one column.
     };
 
-    //! \brief Measures the bytes of \p source between the start of the line holding \p offset and it.
-    [[nodiscard]] inline indent_measure measure_indent(std::string_view source,
-                                                       std::size_t      offset)
+    //! \brief Measures the bytes of a source between the start of the line holding an offset and it, over offsets
+    //!        that mostly increase: each byte is read once from the last offset measured, so a pass over a long line
+    //!        stays linear (measured from its line's start at every token, 40 000 entries on one line took 2.5 s).
+    class indent_meter
     {
-      if (offset > source.size()) {
-        throw std::invalid_argument("scilex::layout: a token's offset lies beyond the source it was given");
+    public:
+
+      //! \brief A meter over \p source, at its start.
+      explicit indent_meter(std::string_view source) noexcept
+        : source_ {source}
+      {}
+
+      //! \brief The indentation of the bytes before \p offset on its line.
+      //! \throws std::invalid_argument When \p offset lies beyond the source.
+      [[nodiscard]] indent_measure operator()(std::size_t offset)
+      {
+        if (offset > source_.size()) {
+          throw std::invalid_argument("scilex::layout: a token's offset lies beyond the source it was given");
+        }
+        if (offset < at_) { // a token before the last one measured: from the start again
+          at_    = 0;
+          width_ = {0, 0};
+        }
+        for (; at_ < offset; ++at_) {
+          const char c {source_[at_]};
+          if (c == '\n' || c == '\f') {
+            width_ = {0, 0};
+          }
+          else if (c == '\t') {
+            width_.tab8 = ((width_.tab8 / 8) + 1) * 8;
+            ++width_.tab1;
+          }
+          else {
+            ++width_.tab8;
+            ++width_.tab1;
+          }
+        }
+        return width_;
       }
-      const std::size_t newline_before {source.rfind('\n', offset == 0 ? std::string_view::npos : offset - 1)};
-      const std::size_t line_start     {(offset == 0 || newline_before == std::string_view::npos) ? 0
-                                                                                                   : newline_before + 1};
-      indent_measure width             {0, 0};
-      for (const char c : source.substr(line_start, offset - line_start)) {
-        if (c == '\t') {
-          width.tab8 = ((width.tab8 / 8) + 1) * 8;
-          ++width.tab1;
-        }
-        else if (c == '\f') {
-          width = {0, 0};
-        }
-        else {
-          ++width.tab8;
-          ++width.tab1;
-        }
-      }
-      return width;
-    }
+
+    private:
+
+      std::string_view source_;          //!< The source measured.
+      std::size_t      at_    {0};       //!< The offset measured last.
+      indent_measure   width_ {0, 0};    //!< Its measure.
+    };
 
     [[nodiscard]] inline std::vector<token> layout_pass(std::span<const token>   tokens,
                                                         const std::vector<bool>& mode_significant,
@@ -222,6 +242,7 @@ namespace scilex {
     detail::indent_measure              pending_at    {0, 0};   // that node's column
     std::size_t                         previous_line {0};      // last line a token reached
     position                            end_position  {0, 1, 1};
+    detail::indent_meter                measure       {python_tabs ? *source : std::string_view {}};
 
     for (const token& current : tokens) {
       if (current.kind == end_of_input) {
@@ -239,7 +260,7 @@ namespace scilex {
         if (started) {
           out.push_back(token {newline, {}, current.start});
         }
-        const detail::indent_measure here  {python_tabs ? detail::measure_indent(*source, current.start.offset)
+        const detail::indent_measure here  {python_tabs ? measure(current.start.offset)
                                                         : detail::indent_measure {current.start.column - 1, 0}};
         const std::size_t            width {here.tab8};
         // Under python_tabs the second measure (tabs as 1) must agree with the first at every
@@ -285,7 +306,7 @@ namespace scilex {
         const bool value {std::ranges::find(roles.values, current.kind) != roles.values.end()};
         const bool past  {opens && !line_start};
         if (past) {
-          pending_at = python_tabs ? detail::measure_indent(*source, current.start.offset)
+          pending_at = python_tabs ? measure(current.start.offset)
                                    : detail::indent_measure {current.start.column - 1, 0};
         }
         if ((past || deeper) && !entry) {

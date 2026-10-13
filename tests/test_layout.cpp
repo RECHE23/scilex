@@ -378,3 +378,33 @@ TEST(an_indented_first_line_and_a_line_leading_value_open_blocks)
   EXPECT(role_kinds("  a: b\n") == (std::vector<int> {r_in, id, colon, id, r_nl, r_de, r_end}));
   EXPECT(role_kinds("a\n: b: c\n") == (std::vector<int> {id, r_nl, colon, r_in, id, colon, id, r_nl, r_de, r_end}));
 }
+
+// The meter reads each byte once over increasing offsets, and measures as from the line's start at any offset: here
+// against a measure written apart, offset by offset forward, then backward (each step back starts it over).
+TEST(the_indent_meter_measures_every_offset_from_its_line_start)
+{
+  const std::string_view source {"a\n \tb \t\f c\n  d\n"};
+  const auto             apart  {[&](std::size_t offset) {
+                                   std::size_t start {offset};
+                                   while (start > 0 && source[start - 1] != '\n' && source[start - 1] != '\f') {
+                                     --start;
+                                   }
+                                   scilex::detail::indent_measure width {0, 0};
+                                   for (std::size_t i {start}; i < offset; ++i) {
+                                     width.tab8 = source[i] == '\t' ? ((width.tab8 / 8) + 1) * 8 : width.tab8 + 1;
+                                     ++width.tab1;
+                                   }
+                                   return width;
+                                 }};
+  scilex::detail::indent_meter forward {source};
+  for (std::size_t offset {0}; offset <= source.size(); ++offset) {
+    const scilex::detail::indent_measure got {forward(offset)};
+    EXPECT(got.tab8 == apart(offset).tab8 && got.tab1 == apart(offset).tab1);
+  }
+  scilex::detail::indent_meter backward {source};
+  for (std::size_t offset {source.size() + 1}; offset-- > 0;) {
+    const scilex::detail::indent_measure got {backward(offset)};
+    EXPECT(got.tab8 == apart(offset).tab8 && got.tab1 == apart(offset).tab1);
+  }
+  EXPECT_THROWS((void)backward(source.size() + 1), std::invalid_argument);
+}
