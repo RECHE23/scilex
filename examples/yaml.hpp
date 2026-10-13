@@ -343,13 +343,14 @@ nested:
         return false;
       }
     }
-    // (6d) a document marker opens its line only: past the start of a line `---` begins a scalar; a flow's plain
+    // (6d) a document marker opens its line only: past the start of a line `---` or `...` begins a scalar; a flow's plain
     //      scalar goes on over a line break; a CRLF directive ends before its `\r`.
     {
-      const std::vector<scilex::token> marker  {lex.tokenize("a: --- x\n--- b\n")};
+      const std::vector<scilex::token> marker  {lex.tokenize("a: --- x\nb: ...\n--- c\n")};
       const std::vector<scilex::token> flowing {lex.tokenize("[p\n  q]\n")};
       const std::vector<scilex::token> crlf    {lex.tokenize("%YAML 1.2\r\n---\r\n")};
-      if (!kinds_are(marker, {scalar, colon, scalar, document, scalar}) || marker[2].lexeme != "--- x"
+      if (!kinds_are(marker, {scalar, colon, scalar, scalar, colon, scalar, document, scalar}) || marker[2].lexeme != "--- x"
+          || marker[5].lexeme != "..."
           || !kinds_are(flowing, {flow_open, scalar, flow_close}) || flowing[1].lexeme != "p\n  q"
           || !kinds_are(crlf, {directive, document}) || crlf[0].lexeme != "%YAML 1.2") {
         return false;

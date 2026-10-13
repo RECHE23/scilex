@@ -99,7 +99,7 @@ TEST(a_stream_reads_the_byte_before_a_token_it_has_dropped_the_text_of)
 {
   // `#b` follows the word `a` with no blank: a stream that dropped `a` must still see that `#b` is past the start.
   const scilex::lexer lex {{plain(newline, R"(\n)"), placed(plain(heading, R"(#[a-z]*)"), true),
-                            placed(plain(marker, R"(#[a-z]*)"), false), plain(word, R"([a-z]+)")}};
+    placed(plain(marker, R"(#[a-z]*)"), false), plain(word, R"([a-z]+)")}};
   EXPECT(pairs(lex.tokenize("a#b\n#c")) == (expected {{word, "a"}, {marker, "#b"}, {newline, "\n"}, {heading, "#c"}}));
   EXPECT(every_scan_agrees(lex, "a#b\n#c"));
 }
