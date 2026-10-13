@@ -119,6 +119,12 @@ TEST(a_block_body_runs_to_the_first_line_indented_less)
   EXPECT(lexes("a: |\r\n  x\r\nb: 1", {"a", "|\r\n  x\r\n", "b", "1"}));
   EXPECT(lexes("a: |\n  x", {"a", "|\n  x"}));
   EXPECT(lexes("a: |", {"a", "|"}));
+  // Blanks that end the text with no line break: content past the body's indentation, indentation up to it.
+  EXPECT(lexes("a: |\n  x\n   ", {"a", "|\n  x\n   "}));
+  EXPECT(lexes("a: |\n  x\n\n     ", {"a", "|\n  x\n\n     "}));
+  EXPECT(lexes("a: |\n  x\n  ", {"a", "|\n  x\n"}));
+  EXPECT(lexes("a: |\n  x\n ", {"a", "|\n  x\n"}));
+  EXPECT(lexes("a: |\n  x\n\t  ", {"a", "|\n  x\n"}));
 }
 
 // The reference is the innermost open block, not the line's indentation: a value inside a sequence entry

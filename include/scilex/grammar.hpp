@@ -26,7 +26,9 @@
  * - `continue=N` — with `extend=lines`, what each continued line must hold: the pattern of the fragment (or
  *   else the first rule) named `N`, earlier or later in the file;
  * - `fragment` — the line names a pattern for `continue=`, not a rule: it takes no other option, has no
- *   kind, and is not lexed.
+ *   kind, is not lexed, and shares its name with no other fragment.
+ *
+ * A line gives each option once.
  *
  * A line whose first non-blank character is `%` is a directive, not a rule; the one directive is
  *
@@ -312,7 +314,8 @@ namespace scilex {
      * \param[in,out] predicates Each `after=` / `not_after=` option, appended with its names unresolved.
      * \param[out]    extras  Its `fragment` and `continue=` options.
      * \return The 1-based column of its `push=` or `set=` option, or 0 when it has none.
-     * \throws grammar_error On an unknown option or value, an empty mode name, or a second transition.
+     * \throws grammar_error On an unknown option or value, an empty mode name, a second transition, or an option the
+     *         line gives twice.
      */
     inline std::size_t apply_grammar_options(std::string_view             options,
                                              std::size_t                  column,
@@ -323,16 +326,22 @@ namespace scilex {
                                              std::vector<predicate_site>& predicates,
                                              line_extras&                 extras)
     {
-      std::size_t transition_column {0};
-      std::size_t at                {0};
+      std::size_t                   transition_column {0};
+      std::size_t                   at                {0};
+      std::vector<std::string_view> given; // each option's name, `=` included: a second one would silently win
       while (at < options.size()) {
         if (options[at] == ' ') {
           ++at;
           continue;
         }
-        const std::size_t      end  {std::min(options.find(' ', at), options.size())};
-        const std::string_view word {options.substr(at, end - at)};
-        const std::size_t      col  {column + at};
+        const std::size_t      end    {std::min(options.find(' ', at), options.size())};
+        const std::string_view word   {options.substr(at, end - at)};
+        const std::size_t      col    {column + at};
+        const std::string_view option {word.substr(0, std::min(word.find('='), word.size() - 1) + 1)};
+        if (std::ranges::find(given, option) != given.end()) {
+          throw grammar_error(origin, line, col, quoting("option ", word, " repeats one the line already gives"));
+        }
+        given.push_back(option);
         ++extras.options;
         if (word == "skip") {
           out.skip = true;
@@ -693,6 +702,9 @@ namespace scilex {
       if (extras.fragment) {
         if (extras.options != 1) {
           throw grammar_error(origin, line_no, extras.fragment_column, "a fragment takes no other option");
+        }
+        if (std::ranges::find(fragments, fields.text[0], &detail::fragment::name) != fragments.end()) {
+          throw grammar_error(origin, line_no, fields.column[0], detail::quoting("a fragment is already named ", fields.text[0], ""));
         }
         fragments.push_back({.name = fields.text[0], .pattern = std::move(read->pattern)});
         continue;

@@ -481,8 +481,13 @@ namespace scilex {
       }
       const std::size_t last  {eol == std::string_view::npos ? source.size() : eol};
       const bool        blank {blank_between(source, line, last, blanks)};
-      if (blank ? eol == std::string_view::npos : leading_spaces(source, line) < content) {
-        return line; // a line less indented, or blanks that end the text with no line break
+      if (blank && eol == std::string_view::npos) {
+        // Blanks that end the text with no line break: past the body's indentation they are its content, as
+        // PyYAML reads them; up to it they are indentation only.
+        return leading_spaces(source, line) >= content && static_cast<std::ptrdiff_t>(last - line) > content ? last : line;
+      }
+      if (!blank && leading_spaces(source, line) < content) {
+        return line; // a line less indented
       }
       line = eol == std::string_view::npos ? source.size() : eol + 1;
     }

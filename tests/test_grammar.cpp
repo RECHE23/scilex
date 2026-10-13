@@ -288,4 +288,19 @@ namespace {
     EXPECT_EQ(twice.column(), 16U);
     EXPECT_EQ(twice.cause(), "a rule takes one of line_start and not_line_start, once");
   }
+
+  // A line gives each option once (a second `indent=` or `skip` would silently win), and each fragment its own name.
+  TEST(grammar_repeats_are_refused)
+  {
+    const scilex::grammar_error skip {refusal("A\ta\tskip skip\n")};
+    EXPECT_EQ(skip.column(), 10U);
+    EXPECT_EQ(skip.cause(), "option 'skip' repeats one the line already gives");
+    const scilex::grammar_error role {refusal("A\ta\tindent=key extend=lines indent=entry\n")};
+    EXPECT_EQ(role.column(), 29U);
+    EXPECT_EQ(role.cause(), "option 'indent=entry' repeats one the line already gives");
+    const scilex::grammar_error fragment {refusal("F\ta\tfragment\nF\tb\tfragment\nA\tx\n")};
+    EXPECT_EQ(fragment.line(), 2U);
+    EXPECT_EQ(fragment.column(), 1U);
+    EXPECT_EQ(fragment.cause(), "a fragment is already named 'F'");
+  }
 } // namespace

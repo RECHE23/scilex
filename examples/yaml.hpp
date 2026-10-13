@@ -181,8 +181,9 @@ namespace scilex::examples::yaml {
     rules.push_back(indented(rule(sq, R"re('([^']|'')*')re", both), role::key));
     rules.push_back(indented(rule(colon, R"re(:)re", both), role::value));
     rules.push_back(indented(rule(question, R"re(\?)re", both), role::entry));
-    rules.push_back(indented(rule(anchor, R"re(&[^\s,\[\]{}]+)re", both, false, std::nullopt, real::flags::ascii), role::key));
-    rules.push_back(indented(rule(alias, R"re(\*[^\s,\[\]{}]+)re", both, false, std::nullopt, real::flags::ascii), role::key));
+    // A `:` ends an anchor's or an alias's name (`&a: x` is the anchor `a`, a key's), as PyYAML's scanner reads it.
+    rules.push_back(indented(rule(anchor, R"re(&[^\s,\[\]{}:]+)re", both, false, std::nullopt, real::flags::ascii), role::key));
+    rules.push_back(indented(rule(alias, R"re(\*[^\s,\[\]{}:]+)re", both, false, std::nullopt, real::flags::ascii), role::key));
     // `!`, `!local`, `!!str`, `!e!tag` and the verbatim `!<tag:…>`.
     rules.push_back(indented(rule(tag, R"re(!<[^>\s]*>|!([A-Za-z0-9-]*!)?[A-Za-z0-9_\-/.;:%#@&=+$~()]*)re", both), role::key));
     // --- block only (the root mode) ------------------------------------------
@@ -344,12 +345,14 @@ nested:
       }
     }
     // (6d) a document marker opens its line only: past the start of a line `---` or `...` begins a scalar; a flow's plain
-    //      scalar goes on over a line break; a CRLF directive ends before its `\r`.
+    //      scalar goes on over a line break; a CRLF directive ends before its `\r`; a `:` ends an anchor's name.
     {
       const std::vector<scilex::token> marker  {lex.tokenize("a: --- x\nb: ...\n--- c\n")};
       const std::vector<scilex::token> flowing {lex.tokenize("[p\n  q]\n")};
       const std::vector<scilex::token> crlf    {lex.tokenize("%YAML 1.2\r\n---\r\n")};
-      if (!kinds_are(marker, {scalar, colon, scalar, scalar, colon, scalar, document, scalar}) || marker[2].lexeme != "--- x"
+      const std::vector<scilex::token> named   {lex.tokenize("&a: x\n*b: y\n")};
+      if (!kinds_are(named, {anchor, colon, scalar, alias, colon, scalar}) || named[0].lexeme != "&a"
+          || !kinds_are(marker, {scalar, colon, scalar, scalar, colon, scalar, document, scalar}) || marker[2].lexeme != "--- x"
           || marker[5].lexeme != "..."
           || !kinds_are(flowing, {flow_open, scalar, flow_close}) || flowing[1].lexeme != "p\n  q"
           || !kinds_are(crlf, {directive, document}) || crlf[0].lexeme != "%YAML 1.2") {

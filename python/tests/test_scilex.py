@@ -685,6 +685,13 @@ class BindingErrorMessageTests(unittest.TestCase):
             self._scilex.compile([(0, "a", False)], "default")  # dfa_modes as a bare str
         self.assertIn("dfa_modes must be a sequence", str(caught.exception))
 
+    def test_a_kind_past_an_int_names_itself(self):  # parse_kinds, past an int and past a C long alike
+        for kind in (2**40, 2**70, -2**70):
+            with self.subTest(kind=kind):
+                with self.assertRaises(OverflowError) as caught:
+                    self._scilex.compile([(0, "a", False, [], None, [kind])])
+                self.assertEqual(str(caught.exception), f"after: kind {kind} does not fit an int")
+
     def test_line_start_must_be_a_bool(self):  # parse_line_start
         with self.assertRaises(self._scilex.error) as caught:
             self._scilex.compile([(0, "a", False, [], None, None, None, None, None, None, 1)])

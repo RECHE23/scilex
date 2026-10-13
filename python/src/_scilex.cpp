@@ -489,15 +489,18 @@ int parse_kinds(PyObject* obj, std::vector<int>* out, const char* field)
         if (item == nullptr) {
             return -1;
         }
-        const long kind = PyLong_AsLong(item);
-        Py_DECREF(item);
+        int        overflow = 0; // past a C long too: the same message as past an int
+        const long kind     = PyLong_AsLongAndOverflow(item, &overflow);
         if (kind == -1 && PyErr_Occurred() != nullptr) {
+            Py_DECREF(item);
             return -1;
         }
-        if (kind < std::numeric_limits<int>::min() || kind > std::numeric_limits<int>::max()) {
-            PyErr_Format(PyExc_OverflowError, "%s: kind %ld does not fit an int", field, kind);
+        if (overflow != 0 || kind < std::numeric_limits<int>::min() || kind > std::numeric_limits<int>::max()) {
+            PyErr_Format(PyExc_OverflowError, "%s: kind %R does not fit an int", field, item);
+            Py_DECREF(item);
             return -1;
         }
+        Py_DECREF(item);
         out->push_back(static_cast<int>(kind));
     }
     return 0;

@@ -26,6 +26,15 @@ fuzz oracle.
   explicit key's `: v`) arms the node past it as an entry does.** The pass took the first token's index, 0, for
   "no node pending", so `  a: b` at the top of a file opened no INDENT; and `a\n: b: c` laid out the nested
   mapping flat, where PyYAML opens a block collection.
+- **YAML: a `:` ends an anchor's or an alias's name**, as PyYAML's scanner reads it: `&a: x` is the anchor `a`, then
+  the key's `:`, where it lexed as the anchor `a:`.
+- **A block scalar that ends the text with a blank line and no line break kept only the lines before it**: the
+  blanks past the body's indentation are its content, as PyYAML reads them (`k: |\n  a\n   ` ends after the three
+  spaces); up to the indentation they are not.
+- **A `.lex` line that gave an option twice kept the last one silently** (`skip skip`, `indent=key indent=entry`),
+  and two fragments could share a name, the first winning: both are refused at the repeated option or name.
+- **From Python, a kind past a C long** (`after=[2**70]`) raised Python's own overflow message: it gets the
+  binding's, as a kind past an int does.
 
 ## 2026.10.9 — 2026-10-13
 
