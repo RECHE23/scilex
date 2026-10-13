@@ -51,10 +51,11 @@ Positions stay in the whole text, in bytes, as `tokenize` gives them.
 
 ## Time
 
-Each `feed` reads again, from its first byte, the token it could not return last time: no engine state
-carries over between pieces. A token that is still open across many pieces is therefore read once per
-piece. A token of `n` bytes fed in pieces of `c` bytes is read on the order of `n²/c` bytes' worth, so
-feed pieces of a few kilobytes — what a socket or a file read returns — rather than a byte at a time.
+A token still open at the end of a piece goes on, at the next one, from where the DFA's walk stood, in a mode
+whose rules are all on the DFA: a token of `n` bytes costs `n` steps however it is cut. In a mode with a rule
+on the general engine (see {doc}`performance`), each `feed` reads such a token again from its first byte, on the
+order of `n²/c` bytes' worth in pieces of `c` bytes; feed pieces of a few kilobytes — what a socket or a file
+read returns — rather than a byte at a time.
 
 ## Errors
 

@@ -35,6 +35,10 @@ fuzz oracle.
   and two fragments could share a name, the first winning: both are refused at the repeated option or name.
 - **From Python, a kind past a C long** (`after=[2**70]`) raised Python's own overflow message: it gets the
   binding's, as a kind past an int does.
+- **A token still open at the end of a piece is read once in a stream**, in a mode wholly on the DFA: the next piece
+  goes on from where the walk stood (REAL's `dfa_munch_progress`), where each `feed` read it again from its start.
+  A 200 KB string in pieces of 64 bytes: 1.8 s → 1.7 ms. A mode with a rule on the general engine still reads it
+  again (documented in the streaming guide).
 - **Laying out with `tabs="python"` took time quadratic in a line's length** once the lexer had indentation roles:
   each node past an entry measured its column from the line's start. The pass reads each byte once: 40 000 `- `
   on one line, 2.5 s → 32 ms.
