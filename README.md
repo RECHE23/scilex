@@ -34,7 +34,7 @@ measured optimality.
 - Ordered token rules: `(kind, real::regex, skip)`
 - Maximal-munch matching (longest match wins, rule order for ties)
 - **Contextual lexing (modes)** — per-rule `in_mode` + a push / pop / set mode stack
-- **DFA fast path (automatic)** — every mode whose DFA reproduces the per-rule munch is accelerated with one `real::dfa` pass (3.2–17.5× on the nine example grammars wholly on it, 1.6–3.9× on the four that keep a lookaround or a Unicode class on Pike); the decision is exact (Pike is the floor), the token stream identical; `dfa_policy::requested` restricts it to `dfa_modes`
+- **DFA fast path (automatic)** — every mode whose DFA reproduces the per-rule munch is accelerated with one `real::dfa` pass (3.3–36.8× on the nine example grammars wholly on it, 1.6–4.5× on the four that keep a lookaround or a Unicode class on Pike); the decision is exact (Pike is the floor), the token stream identical; `dfa_policy::requested` restricts it to `dfa_modes`
 - **Layout Awareness** — mode-aware indentation (NEWLINE / INDENT / DEDENT)
 - Source positions (byte offset, line, column counted in bytes, code points or UTF-16 units); each token
   carries its start and its mode, and `lexer::end_of(source, token)` gives where it ends
@@ -89,7 +89,7 @@ lx = scilex.Lexer([
     (1, r"[0-9]+", False),             # number
     (2, r"[A-Za-z_][A-Za-z0-9_]*", False),
 ])
-# Every mode whose DFA is exact is accelerated (up to 17.5×): lx.dfa_modes_active names them;
+# Every mode whose DFA is exact is accelerated (up to 36.8×): lx.dfa_modes_active names them;
 # scilex.Lexer([...], dfa="requested") keeps the per-rule path.
 
 # Eager
@@ -174,7 +174,7 @@ policy, so an input made only of openers cannot grow it without end.
 Every mode is accelerated by a `real::dfa` where that is exact: instead of trying each candidate rule at
 every position, one DFA pass recognizes the winning rule — the same maximal munch,
 with the order tie-break baked into the automaton. On a mode where many rules share
-leading bytes that is **3.2–17.5× the regular path** on the full token path of the example grammars
+leading bytes that is **3.3–36.8× the regular path** on the full token path of the example grammars
 that run wholly on it.
 
 ```cpp
@@ -208,9 +208,9 @@ behaviour for a language like Python 3. But a Unicode `\w` expands into more UTF
 transitions than a DFA is built from, and `\b` is a zero-width assertion no DFA represents, so a
 rule holding either **stays on the general engine** beside its mode's DFA (same tokens, visible via
 `pike_rules(mode)`). The narrower Unicode `\d` and `\s` expand and stay on the DFA. Concretely the
-general engine runs at **~8–43 MB/s** while the nine shipped grammars wholly on the DFA run at **3.2–17.5×
+general engine runs at **~3.6–43 MB/s** while the nine shipped grammars wholly on the DFA run at **3.3–36.8×
 that** on arm64 (4.5–25× on x86-64, where Pike reads lower); the `python-unicode` grammar, whose
-identifier rule stays on Pike, runs at 36.6 MB/s against 9.5 MB/s for Pike alone (3.9×; 2026-10-11,
+identifier rule stays on Pike, runs at 36.4 MB/s against 9.4 MB/s for Pike alone (3.8×; 2026-10-14,
 arm64, `-O2`, 256 KiB, BENCHMARKS.md) — the Unicode identifier costs part of the DFA, as Julia's
 Unicode identifiers cost it more (1.6×).
 
