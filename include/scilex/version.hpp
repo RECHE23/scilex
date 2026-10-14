@@ -17,7 +17,7 @@
 /*! \brief Minor version (the calendar month). */
 #define SCILEX_VERSION_MINOR 10
 /*! \brief Patch version (the release count within the month). */
-#define SCILEX_VERSION_PATCH 9
+#define SCILEX_VERSION_PATCH 10
 /*! \brief Inner half of the two-level stringize: turns its argument into a string literal. */
 #define SCILEX_STRINGIZE_IMPL(x) #x
 /*! \brief Stringizes the *expansion* of \p x — what the second level buys. */

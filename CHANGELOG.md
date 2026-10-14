@@ -7,6 +7,8 @@ fuzz oracle.
 
 ## Unreleased
 
+## 2026.10.10 — 2026-10-14
+
 - **Requires real-regex 2026.10.12** (was 2026.10.11): its `dfa_munch_progress`, through which a stream reads a long
   token once.
 
