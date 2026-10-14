@@ -7,6 +7,9 @@ fuzz oracle.
 
 ## Unreleased
 
+- **Requires real-regex 2026.10.12** (was 2026.10.11): its `dfa_munch_progress`, through which a stream reads a long
+  token once.
+
 ### Added
 - **A rule can keep to the start of a line, or to past it** (`rule::at_line_start`): active only where its
   token begins a line (the start of the text, or right after a `\n`), or only where it does not. It says what a
