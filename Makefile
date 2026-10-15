@@ -423,7 +423,7 @@ FUZZ_CLANG   ?= clang++
 fuzz:
 	@mkdir -p $(BUILD)/fuzz/corpus
 	@cp examples/*.hpp tests/*.cpp $(BUILD)/fuzz/corpus/ 2>/dev/null || true
-	$(FUZZ_CLANG) $(CXXSTD) -O1 -g -fsanitize=fuzzer,address,undefined $(INCLUDES) -Iexamples -Ifuzz fuzz/fuzz_lexer.cpp $(FUZZ_LDFLAGS) -o $(BUILD)/fuzz/fuzz_lexer
+	$(FUZZ_CLANG) $(CXXSTD) -O1 -g -fsanitize=fuzzer,address,undefined -fno-sanitize-recover=undefined $(INCLUDES) -Iexamples -Ifuzz fuzz/fuzz_lexer.cpp $(FUZZ_LDFLAGS) -o $(BUILD)/fuzz/fuzz_lexer
 	$(BUILD)/fuzz/fuzz_lexer -max_total_time=$(FUZZ_TIME) -timeout=10 -max_len=$(FUZZ_MAX_LEN) \
 	    -artifact_prefix=$(BUILD)/fuzz/ $(BUILD)/fuzz/corpus
 
