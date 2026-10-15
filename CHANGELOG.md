@@ -7,6 +7,10 @@ fuzz oracle.
 
 ## Unreleased
 
+- **Requires real-regex 2026.10.16** (was 2026.10.12): the fixes its releases since carry (a wrong match on an inner
+  literal past 16 bytes or after a byte class in bytes mode, a read one byte past the subject, a signed overflow in
+  `\U`). SciLex's lexing, by anchored matches at each position, met none of the wrong matches.
+
 ## 2026.10.10 — 2026-10-14
 
 - **Requires real-regex 2026.10.12** (was 2026.10.11): its `dfa_munch_progress`, through which a stream reads a long
