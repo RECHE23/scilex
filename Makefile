@@ -53,8 +53,8 @@ SCIFORGE_TOOLS ?= ../sciforge/tools
 FORMAT_FILES := $(shell find include tests examples fuzz benchmarks cli -name '*.hpp' -o -name '*.cpp')
 
 .PHONY: all build test python-oracle cpp-oracle xml-oracle css-oracle yaml-oracle julia-oracle oracle-venv sanitize coverage coverage-build coverage-html python-stubtest \
-        lint misra doc doc-no-coverage doc-check format format-check full-local-gate \
-        python python-test bench bench-lex cli example coverage-gate doc-xml docs-venv docs-site docs-site-gate sabotage-help check-sabotage fuzz-check tsan exhaustive-lex check-pins fuzz version-check install install-smoke uninstall install-cli uninstall-cli release clean help
+        lint misra doc doc-no-coverage doc-check format format-check full-local-gate lint-gate stubtest-gate test-gcc release-bump bench-stamp-check \
+        python python-test bench bench-lex cli example doc-xml docs-venv docs-site docs-site-gate sabotage-help check-sabotage fuzz-check tsan exhaustive-lex check-pins fuzz version-check install install-smoke uninstall install-cli uninstall-cli release clean help
 
 .DEFAULT_GOAL := help
 
@@ -80,7 +80,10 @@ help:
 	@echo "  make fuzz-check Deterministic lexer-oracle gate (property invariants)"
 	@echo "  make fuzz       libFuzzer robustness fuzzing of the lexer (Clang; FUZZ_TIME=secs)"
 	@echo "  make version-check  Assert pyproject = __init__ = CMake-derived version"
-	@echo "  make full-local-gate  Every gate in one command (the macOS gate of record)"
+	@echo "  make check-commit  Before each commit: format, versions, pins, symbols, the suite under coverage at 100 %"
+	@echo "  make check-push    Before each push: the above, docs, MISRA, examples, every oracle, fuzz, Python, lint, g++, sanitizers"
+	@echo "  make check-release Before each release: the push tier"
+	@echo "  make full-local-gate  The push tier, by its former name"
 	@echo "  make install    Install the Python package (pip)"
 	@echo "  make install-cli  Install the scilex CLI to PREFIX/bin (opt-in; DESTDIR-aware)"
 	@echo "  make uninstall  Uninstall the Python package (pip)"
@@ -147,13 +150,6 @@ check-sabotage:
 	@python3 tools/sabotage.py --self-test
 
 # The coverage bar the local gate and CI share: every dimension of the TOTAL row at 100%.
-coverage-gate:
-	@mkdir -p $(BUILD); \
-	  $(MAKE) coverage > $(BUILD)/coverage.log 2>&1; rc=$$?; cat $(BUILD)/coverage.log; \
-	  test $$rc -eq 0 || { echo "coverage-gate: make coverage failed"; exit 1; }; \
-	  awk '/^TOTAL/{seen=1; if (gsub(/100\.00%/, "&") != 4) bad=1} END{exit (seen && !bad) ? 0 : 1}' $(BUILD)/coverage.log \
-	    || { echo "coverage-gate: coverage is below 100% on some dimension — see above"; exit 1; }
-
 coverage-html:
 	@mkdir -p $(COV_DIR)
 	@$(MAKE) --silent coverage-build > $(COV_DIR)/build.log 2>&1 || (cat $(COV_DIR)/build.log; exit 1)
@@ -454,40 +450,21 @@ check-pins:
 	 else echo "check-pins: WARN — $(SCIFORGE_TOOLS)/check-pins.sh absent, skipped (CI covers it)"; fi
 
 # Fail-fast: cheap/fast first (format, version, pins, doc), expensive last (sanitize, coverage).
+# The steps of the verification tiers (make/quality.mk, below) that take arguments or wrap a tool, as targets of their own.
+lint-gate:
+	@mkdir -p $(BUILD); $(MAKE) --no-print-directory lint 2>&1 | tee $(BUILD)/lint.log; \
+	  ! grep -qE 'warning:|error:' $(BUILD)/lint.log || { echo "lint-gate: FAIL (see $(BUILD)/lint.log)"; exit 1; }
+
+stubtest-gate:
+	@if $(MYPY_PYTHON) -c 'import mypy' >/dev/null 2>&1; then $(MAKE) --no-print-directory python-stubtest; \
+	 else echo "stubtest-gate: WARN — mypy absent from MYPY_PYTHON, python-stubtest skipped (CI runs it)"; fi
+
+test-gcc:
+	@if command -v g++-14 >/dev/null 2>&1; then $(MAKE) --no-print-directory test CXX=g++-14 BUILD=$(BUILD)/gcc; \
+	 else echo "test-gcc: WARN — g++-14 absent, GCC leg skipped"; fi
+
 full-local-gate:
-	@echo "full-local-gate: start (fail-fast — cheap first)"
-	@$(MAKE) format-check
-	@$(MAKE) version-check
-	@$(MAKE) check-pins
-	@$(MAKE) symbol-hygiene
-	@$(MAKE) doc-no-coverage
-	@$(MAKE) doc-check
-	@$(MAKE) docs-site-gate
-	@$(MAKE) misra
-	@$(MAKE) test
-	@$(MAKE) example
-	@$(MAKE) python-oracle
-	@$(MAKE) cpp-oracle
-	@$(MAKE) xml-oracle
-	@$(MAKE) css-oracle
-	@$(MAKE) yaml-oracle
-	@$(MAKE) julia-oracle
-	@$(MAKE) fuzz-check
-	@$(MAKE) exhaustive-lex
-	@$(MAKE) python-test
-	@$(MAKE) check-sabotage
-	@if $(MYPY_PYTHON) -c 'import mypy' >/dev/null 2>&1; then $(MAKE) python-stubtest; else echo "full-local-gate: WARN — mypy absent from MYPY_PYTHON, python-stubtest skipped (CI runs it)"; fi
-	@set -euo pipefail; \
-	  mkdir -p $(BUILD); \
-	  $(MAKE) lint 2>&1 | tee $(BUILD)/lint.log; \
-	  if grep -qE 'warning:|error:' $(BUILD)/lint.log; then \
-	    echo "full-local-gate: FAIL at lint (see $(BUILD)/lint.log)"; exit 1; \
-	  fi
-	@if command -v g++-14 >/dev/null 2>&1; then $(MAKE) test CXX=g++-14 BUILD=$(BUILD)/gcc; else echo "full-local-gate: WARN — g++-14 absent, GCC leg skipped"; fi
-	@$(MAKE) sanitize
-	@$(MAKE) tsan
-	@$(MAKE) coverage-gate
-	@echo "full-local-gate: ALL gates green (cheap→doc→tests→lint→sanitize→tsan→coverage; first red stops the train)"
+	@$(MAKE) --no-print-directory check-push
 
 # doc-check builds the docs under the EXACT CI Doxygen (1.9.8, in Docker) via the shared SciForge tool,
 # so a warning the developer's newer local Doxygen tolerates cannot slip past to CI or a release (the
@@ -552,42 +529,35 @@ uninstall-cli:
 # as comments, and the tag becomes the GitHub release notes), and pushes. DRY_RUN=1 runs the whole computation and the two
 # guards (empty-Unreleased FAIL, stale-bench WARN) with no commit/tag/push — the only way to audit a
 # one-shot that publishes. Portable awk/sed (BSD + GNU); never runs itself from a test (that would push).
-release:
-	@test "$$(git symbolic-ref --short HEAD)" = main || { echo "release from main only"; exit 1; }
-	@test -z "$$(git status --porcelain)" || { echo "working tree not clean"; exit 1; }
-	@git fetch --tags --quiet origin
-	@year=$$(date -u +%Y); month=$$(date -u +%m | sed 's/^0//'); today=$$(date -u +%Y-%m-%d); \
-	 patch=$$(git tag -l "v$$year.$$month.*" | wc -l | tr -d ' '); \
-	 version="$$year.$$month.$$patch"; \
-	 echo "Releasing v$$version ($$today)$${DRY_RUN:+  [DRY_RUN — no commit/tag/push]}"; \
-	 awk '/^## Unreleased$$/{f=1;next} f&&/^## /{exit 1} f&&NF{found=1;exit 0} END{if(!found)exit 1}' CHANGELOG.md \
-	   || { echo "release: '## Unreleased' is empty — add a CHANGELOG line (even 'maintenance release') first"; exit 1; }; \
-	 stamped=$$(grep -oE 'real-regex [0-9]+\.[0-9]+\.[0-9]+' BENCHMARKS.md | head -1 | awk '{print $$2}'); \
-	 pinned=$$(sed -nE 's/.*real-regex>=([0-9.]+).*/\1/p' pyproject.toml | head -1); \
-	 if [ -n "$$stamped" ] && [ "$$stamped" != "$$pinned" ]; then \
-	   echo "release: WARN — BENCHMARKS.md stamped against real-regex $$stamped, pyproject pins >= $$pinned; benchmarks may be stale (re-run 'make bench-lex', or proceed knowingly)"; fi; \
-	 tb=$$(mktemp); \
-	 awk -v v="$$version" -v d="$$today" '/^## Unreleased$$/{print; print ""; print "## " v " — " d; next} {print}' CHANGELOG.md > CHANGELOG.md.tmp && mv CHANGELOG.md.tmp CHANGELOG.md; \
-	 awk -v h="## $$version " 'index($$0,h)==1{f=1;print;next} f&&/^## /{exit} f{print}' CHANGELOG.md > $$tb; \
-	 sed -i.bak -E "s/^version = \".*\"/version = \"$$version\"/" pyproject.toml && rm -f pyproject.toml.bak; \
-	 sed -i.bak -E "s/^__version__ = \".*\"/__version__ = \"$$version\"/" python/scilex/__init__.py && rm -f python/scilex/__init__.py.bak; \
-	 maj=$${version%%.*}; rest=$${version#*.}; min=$${rest%%.*}; pat=$${rest#*.}; \
+# The version `make release` (SciForge's make/release.mk, below) writes: pyproject.toml, __init__.py, version.hpp.
+release-bump:
+	@test -n "$(VERSION)" || { echo "release-bump: VERSION= is required"; exit 1; }
+	@sed -i.bak -E "s/^version = \".*\"/version = \"$(VERSION)\"/" pyproject.toml && rm -f pyproject.toml.bak
+	@sed -i.bak -E "s/^__version__ = \".*\"/__version__ = \"$(VERSION)\"/" python/scilex/__init__.py && rm -f python/scilex/__init__.py.bak
+	@version="$(VERSION)"; maj=$${version%%.*}; rest=$${version#*.}; min=$${rest%%.*}; pat=$${rest#*.}; \
 	 sed -i.bak -E -e "s/^#define SCILEX_VERSION_MAJOR [0-9]+$$/#define SCILEX_VERSION_MAJOR $$maj/" \
 	   -e "s/^#define SCILEX_VERSION_MINOR [0-9]+$$/#define SCILEX_VERSION_MINOR $$min/" \
 	   -e "s/^#define SCILEX_VERSION_PATCH [0-9]+$$/#define SCILEX_VERSION_PATCH $$pat/" include/scilex/version.hpp \
-	   && rm -f include/scilex/version.hpp.bak; \
-	 if [ -n "$$DRY_RUN" ]; then \
-	   echo "would commit 'release: v$$version' (pyproject, __init__, version.hpp, CHANGELOG); annotated tag v$$version, body:"; \
-	   sed 's/^/    | /' $$tb; \
-	   echo "would run: git push origin HEAD v$$version"; \
-	   git checkout -- pyproject.toml python/scilex/__init__.py include/scilex/version.hpp CHANGELOG.md; \
-	 else \
-	   git add pyproject.toml python/scilex/__init__.py include/scilex/version.hpp CHANGELOG.md; \
-	   git commit -m "release: v$$version"; \
-	   git tag -a --cleanup=verbatim "v$$version" -F $$tb; \
-	   git push origin HEAD "v$$version"; \
-	 fi; \
-	 rm -f $$tb
+	   && rm -f include/scilex/version.hpp.bak
+
+# Advisory at release (it warns, never blocks): BENCHMARKS.md stamped against the real-regex the floor pins.
+bench-stamp-check:
+	@stamped=$$(grep -oE 'real-regex [0-9]+\.[0-9]+\.[0-9]+' BENCHMARKS.md | head -1 | awk '{print $$2}'); \
+	 pinned=$$(sed -nE 's/.*real-regex>=([0-9.]+).*/\1/p' pyproject.toml | head -1); \
+	 if [ -n "$$stamped" ] && [ "$$stamped" != "$$pinned" ]; then \
+	   echo "bench-stamp-check: BENCHMARKS.md stamped against real-regex $$stamped, pyproject pins >= $$pinned; benchmarks may be stale (re-run 'make bench-lex', or proceed knowingly)"; exit 1; fi
 
 clean:
 	rm -rf $(BUILD)
+
+# The verification tiers and the calendar release every SciForge project shares (the sibling checkout's make/).
+# Optional, so a checkout without the sibling (CI pins its own SciForge) still runs every other target.
+SCIFORGE_MAKE    ?= ../sciforge/make
+QUALITY_COMMIT   := format-check version-check check-pins symbol-hygiene coverage-gate
+QUALITY_PUSH     := doc-no-coverage doc-check docs-site-gate misra test example python-oracle cpp-oracle xml-oracle \
+                    css-oracle yaml-oracle julia-oracle fuzz-check exhaustive-lex python-test check-sabotage stubtest-gate \
+                    lint-gate test-gcc sanitize tsan
+RELEASE_FILES    := pyproject.toml python/scilex/__init__.py include/scilex/version.hpp
+RELEASE_ADVISORY := bench-stamp-check
+-include $(SCIFORGE_MAKE)/quality.mk
+-include $(SCIFORGE_MAKE)/release.mk
