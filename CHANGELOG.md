@@ -11,6 +11,11 @@ fuzz oracle.
   literal past 16 bytes or after a byte class in bytes mode, a read one byte past the subject, a signed overflow in
   `\U`). SciLex's lexing, by anchored matches at each position, met none of the wrong matches.
 
+### Development
+- The verification runs in SciForge's tiers: `make check-commit` (format, versions, pins, symbols, 100 % coverage),
+  `make check-push` (the rest of the former local gate, in its order); `make release` is SciForge's calendar release.
+- Undefined behaviour stops the sanitized suite, where the sanitizer printed a line and the suite passed.
+
 ## 2026.10.10 — 2026-10-14
 
 - **Requires real-regex 2026.10.12** (was 2026.10.11): its `dfa_munch_progress`, through which a stream reads a long
