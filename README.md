@@ -333,6 +333,21 @@ Python reaches the same parser: `scilex.parse_grammar(text)` and
 `.names` name each kind and `.lexer(...)` builds one; a malformed grammar raises
 `scilex.GrammarError` with `.line`, `.column` and `.cause`.
 
+## Supported toolchains
+
+A C++20 compiler is required. These are the toolchains each push is built and tested with; an older one may work,
+and is not tested:
+
+| Toolchain | Where |
+| --- | --- |
+| GCC 14 | Linux x86-64: the test suite, under ASan and UBSan too |
+| Clang 18 | Linux x86-64: the test suite, under ASan and UBSan too |
+| GCC 13 (Ubuntu 24.04's) | Linux arm64: the CMake build, tests and install |
+| MSVC (Visual Studio 2022) | Windows x64: the CMake build, tests and install |
+| Apple Clang 16 | macOS arm64: the local gate (`make check-push`), not CI |
+
+CMake 3.16 or newer; Python 3.11 or newer for the binding.
+
 ## Dependencies
 
 SciLex is header-only and depends only on REAL's headers (the package
