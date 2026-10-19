@@ -7,6 +7,11 @@ fuzz oracle.
 
 ## Unreleased
 
+### Development
+- The benchmarks re-stamped on 2026-10-19 against real-regex 2026.10.16 (`BENCHMARKS.md`): with the lexer and
+  grammars unchanged, the engine's rows moved −0.6 to +3 % on Pike and −1.7 to +4.7 % on the DFA, the token counts
+  the same; the binding 2.08× `re` on the benign case.
+
 ## 2026.10.11 — 2026-10-19
 
 - **Requires real-regex 2026.10.16** (was 2026.10.12): the fixes its releases since carry (a wrong match on an inner
