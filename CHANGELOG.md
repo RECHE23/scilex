@@ -8,6 +8,8 @@ fuzz oracle.
 ## Unreleased
 
 ### Development
+- The `.lex` format has a page of its own (`docs/grammar.dox`): how lines are read, a grammar of the syntax, each
+  option's and the directive's meaning, the errors' form, and an example the reader accepts.
 - `RELEASING.md`: which changes are breaking and wait for a month's first release, the stable surface (the lexer,
   its rules and modes, Layout Level A, in C++ and Python), what is still experimental (streams, the `.lex` format and
   CLI, Layout Level B, the context predicates), and the correctness record whose six quiet weeks make the library

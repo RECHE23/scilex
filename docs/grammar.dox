@@ -1,0 +1,96 @@
+/*!
+\page grammar_format The .lex grammar format
+
+A `.lex` file is a lexer written as text: the input of the `scilex` CLI, of `scilex::parse_grammar` and
+`scilex::load_grammar` (`<scilex/grammar.hpp>`, which `<scilex/scilex.hpp>` does not include), and of Python's
+`scilex.parse_grammar` and `scilex.load_grammar`. It describes the same \ref scilex::rule lists a C++ program builds
+in code, one rule per line. The format is **experimental** (`RELEASING.md`): a release may change it, and its notes
+say how.
+
+\tableofcontents
+
+\section grammar_lines Lines
+
+The text is UTF-8. A byte order mark that starts it is dropped. Lines end at `\n`; a `\r` before it is dropped
+too. On each line:
+
+- a line that is empty, all spaces and tabs, or whose first non-blank character is `#`, is ignored;
+- the spaces and tabs that end a line are dropped, so no field ends in one (write a final space as `[ ]` or
+  `\x20`);
+- a line whose first non-blank character is `%` is a \ref grammar_directives "directive";
+- any other line is a rule, its fields separated by **tabs**: a name, a tab, a pattern, and optionally a tab and
+  the options. A line with one field, or with more than three, is refused.
+
+\section grammar_syntax Syntax
+
+\verbatim
+grammar   = { line } ;
+line      = blank | comment | directive | rule ;
+blank     = { " " | TAB } ;
+comment   = { " " | TAB } "#" { any-but-newline } ;
+directive = { " " | TAB } "%insignificant" { " " | TAB }+ mode { "," mode } ;
+rule      = { " " | TAB } name TAB pattern [ TAB options ] ;
+name      = { any-but-tab-or-newline }+ ;
+pattern   = { any-but-tab-or-newline }+ ;        (* REAL's syntax: real::regex(pattern) *)
+options   = option { " "+ option } ;             (* spaces between options; none twice on a line *)
+option    = "skip" | "pop" | "fragment" | "line_start" | "not_line_start"
+          | "in=" mode { "," mode }
+          | "push=" mode | "set=" mode
+          | "after=" ref { "," ref } | "not_after=" ref { "," ref }
+          | "indent=" ( "entry" | "key" | "value" | "reset" )
+          | "extend=" ( "block" | "lines" )
+          | "continue=" name ;
+mode      = { any-but-comma-space-tab }+ ;
+ref       = name | "^" ;
+\endverbatim
+
+\section grammar_meaning Meaning
+
+- **Kinds.** A rule's kind is its 0-based position among the rules, fragments not counted;
+  \ref scilex::grammar::names maps a kind back to its name. Names need not be unique among rules.
+- **The pattern** is compiled as `real::regex(pattern)`, REAL's default flags: inline flags such as `(?i)` or
+  `(?a)` (ASCII-pinned `\w`, `\d`, `\s`) set others. An invalid pattern is refused at its column.
+- `skip`: the rule's matches are consumed and not emitted.
+- `in=m1,m2`: the modes the rule is active in; without it, `default` alone.
+- `push=m`, `set=m`, `pop`: the mode transition fired when the rule wins, at most one. A mode that `push=` or
+  `set=` enters must have a rule active in it.
+- `after=A,B` and `not_after=A,B`: the rule is active only right after (or except right after) a token of a rule
+  named `A` or `B`, every rule of that name, earlier or later in the file; `^` stands for the start of the input
+  (\ref scilex::rule::after). A line takes one of the two, once.
+- `line_start` and `not_line_start`: the rule is active only at the start of a line, or only past it
+  (\ref scilex::rule::at_line_start).
+- `indent=` and `extend=`: the rule's part in the indentation the lexer tracks, and how its token extends below
+  its line (Layout Awareness Level B, \ref rule_indentation).
+- `continue=N`, with `extend=lines`: the pattern each continued line must match, the fragment named `N`, else the
+  first rule of that name.
+- `fragment`: the line names a pattern for `continue=` and is not a rule. It takes no other option, has no kind,
+  is never lexed, and no other fragment shares its name.
+
+\section grammar_directives Directives
+
+The one directive is `%insignificant m1,m2`: the modes whose tokens carry no layout structure (the lexer's
+`insignificant_modes`). Each mode named must have a rule active in it; the directive may repeat. Any other word
+after `%` is refused.
+
+\section grammar_errors Errors
+
+The first malformed line stops the reading: no half-built grammar is returned. The error,
+\ref scilex::grammar_error (Python: `scilex.GrammarError`), reads `origin:line:column: cause`, the form compilers
+and editors recognize, with the 1-based line and byte column of the fault, or `origin: cause` for a fault with
+no line (an unreadable file, a grammar with no rules). Its `line()`, `column()` and `cause()` give the parts.
+
+\section grammar_example An example
+
+A string with escapes, lexed in a mode of its own, beside numbers and skipped whitespace (the fields separated by
+tabs):
+
+\verbatim
+WS	\s+	skip
+%insignificant str
+STRING	"	push=str
+TEXT	[^"\\]+	in=str
+ESCAPE	\\.	in=str
+END	"	in=str pop
+NUMBER	[0-9]+
+\endverbatim
+*/

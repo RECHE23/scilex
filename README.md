@@ -283,8 +283,9 @@ $ scilex --example json file.json     # lex a file …
 $ scilex --example python --layout    # … or its bundled sample, with INDENT/DEDENT
 ```
 
-**Your own grammar** — the universal mode: bring a `.lex` file and lex anything.
-A grammar is one rule per line — `name`, a tab, `regex`, then an optional tab and
+**Your own grammar** — the universal mode: bring a `.lex` file and lex anything. The format is specified on
+[its own page](https://reche23.github.io/scilex/grammar_format.html) (`docs/grammar.dox`): its lines, a grammar of
+its syntax, each option's meaning and the errors. A grammar is one rule per line — `name`, a tab, `regex`, then an optional tab and
 space-separated options: `skip`, `in=m1,m2` (the modes the rule is active in), and
 one of `push=m`, `set=m`, `pop`, and `after=A,B` or `not_after=A,B` (active only right after,
 or except right after, a token of the rules named `A` or `B`: a `/` that divides after an operand
