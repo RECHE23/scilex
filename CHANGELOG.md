@@ -8,6 +8,10 @@ fuzz oracle.
 ## Unreleased
 
 ### Development
+- `RELEASING.md`: which changes are breaking and wait for a month's first release, the stable surface (the lexer,
+  its rules and modes, Layout Level A, in C++ and Python), what is still experimental (streams, the `.lex` format and
+  CLI, Layout Level B, the context predicates), and the correctness record whose six quiet weeks make the library
+  mature.
 - The benchmarks re-stamped on 2026-10-19 against real-regex 2026.10.16 (`BENCHMARKS.md`): with the lexer and
   grammars unchanged, the engine's rows moved −0.6 to +3 % on Pike and −1.7 to +4.7 % on the DFA, the token counts
   the same; the binding 2.08× `re` on the benign case.

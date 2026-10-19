@@ -394,7 +394,9 @@ target_link_libraries(app PRIVATE scilex::scilex)
 `make release` computes the next calendar version `YYYY.M.PATCH` (the patch resets
 each month; PEP 440 drops leading zeros). The pushed tag drives the release workflow
 — wheels + sdist + the API-reference tarball + a GitHub Release, published via Trusted
-Publishing — while `docs.yml` deploys the reference to GitHub Pages.
+Publishing — while `docs.yml` deploys the reference to GitHub Pages. [`RELEASING.md`](RELEASING.md) says which
+changes count as breaking and wait for a month's first release, which part of the API is stable and which is still
+experimental, and keeps the correctness record.
 
 ## Design
 
