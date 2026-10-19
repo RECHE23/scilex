@@ -14,6 +14,13 @@ otherwise — is listed under a **Breaking** heading of its release's CHANGELOG 
 of a month (`YYYY.M.0`), so that the patch releases within a month only add and fix. Raising the floor of REAL
 (`real-regex>=`) is not breaking by itself; it is noted under **Changed** with what the newer REAL fixes.
 
+## Release cadence
+
+One planned release a month, its first (`YYYY.M.0`), carrying what the month brought, breaking changes included
+under their heading. Between two, a release goes out for a correctness fix — a wrong answer, a crash, a broken
+guarantee — the day it is ready, carrying `main` as it is; additions and speed-ups wait for the next planned one.
+Dependents then follow one version a month, and a fix never waits.
+
 ## Stable surface
 
 What the policy above protects, and what it does not yet:
