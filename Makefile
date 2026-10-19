@@ -558,6 +558,8 @@ QUALITY_PUSH     := doc-no-coverage doc-check docs-site-gate misra test example 
                     css-oracle yaml-oracle julia-oracle fuzz-check exhaustive-lex python-test check-sabotage stubtest-gate \
                     lint-gate test-gcc sanitize tsan
 RELEASE_FILES    := pyproject.toml python/scilex/__init__.py include/scilex/version.hpp
+# ci.yml's paths-ignore: a HEAD changed in those paths alone is judged by ci.yml's run before it.
+RELEASE_CI_IGNORED := *.md docs/*
 RELEASE_ADVISORY := bench-stamp-check
 -include $(SCIFORGE_MAKE)/quality.mk
 -include $(SCIFORGE_MAKE)/release.mk
