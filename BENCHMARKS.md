@@ -298,13 +298,14 @@ tokens, 64 bytes to 64 KiB on a log scale. `re` gets the master pattern a user w
 (keywords first, ending at a word's end; floats and hexadecimals before integers; longer operators
 first). Answers first: SciLex's stream must be the longest match's, a tie to the earlier rule, or the
 run fails; a case where `re`'s first match is not the longest is not timed. Each case is timed in
-turn, the sides' batches alternating, the best batch kept. Seed 20261021, 300 cases, M1 Pro, Python
-3.14.6, SciLex 2026.10.11:
+turn, the sides' batches alternating, the best batch kept. Seed 20261021, 300 cases, SciLex 2026.10.11:
 
-| | cases | `re` / SciLex, geometric mean [95 % CI] | SciLex faster | worst |
-| --- | ---: | --- | ---: | ---: |
-| SciLex (its DFA, the default) | 298 | **4.58×** [4.39–4.77] | 100 % | 1.34× |
-| SciLex without its DFA (`dfa="requested"`) | 298 | **1.60×** [1.51–1.68] | 82 % | 0.41× |
+| | machine | cases | `re` / SciLex, geometric mean [95 % CI] | SciLex faster | worst |
+| --- | --- | ---: | --- | ---: | ---: |
+| SciLex (its DFA, the default) | M1 Pro, Python 3.14.6 | 298 | **4.58×** [4.39–4.77] | 100 % | 1.34× |
+| | six AVX2 cores, GCC 13, Python 3.12.3 | 298 | **4.34×** [4.17–4.50] | 100 % | 1.59× |
+| SciLex without its DFA (`dfa="requested"`) | M1 Pro | 298 | **1.60×** [1.51–1.68] | 82 % | 0.41× |
+| | six AVX2 cores | 298 | **1.45×** [1.37–1.53] | 75 % | 0.31× |
 
 One drawn input was not lexable whole and one master pattern still answered otherwise; neither was
 timed. Every drawn rule set kept its DFA. By rule count the DFA reads 3.3× at 8–15 rules and 7.4× at
