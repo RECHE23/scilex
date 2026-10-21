@@ -36,7 +36,9 @@ SciLex was **not** built to beat `re` on raw throughput, and on the benign case 
 does: **2.08× faster** (0.673 ms against 1.413 ms, the median of 3 runs; the three read 2.10×, 2.08×
 and 2.08×). Since DFA acceleration became automatic, the ordinary rule set of that case runs on a
 DFA without the caller asking. Read that narrowly: it is one case, 4000 tokens over ~10 KB of
-identifier-operator soup.
+identifier-operator soup. Drawn cases say more, and more favourably: over 298 drawn lexers and inputs
+(`make bench-fuzz`, below) SciLex reads **4.58×** `re` [4.39–4.77], faster in every case, the worst 1.34×;
+without its DFA, 1.60×, the worst 0.41×.
 
 What SciLex guarantees is **ReDoS-safety by construction**: no rule can make the scanner backtrack,
 so no input is exponential. It is not a linear bound on every input — the worst case is quadratic,
@@ -50,6 +52,7 @@ machine-generated input.
 | input | winner | why |
 | --- | --- | --- |
 | benign token soup | **SciLex** (2.1×) | the rule set runs on a DFA by default, one table step per byte |
+| drawn rule sets and inputs | **SciLex** (4.6×, every case) | the same DFA; without it 1.6×, `re` ahead on few rules with long comments and strings |
 | adversarial / ReDoS | **SciLex** (linear vs exponential) | REAL is linear-time and ReDoS-safe; `re` backtracks catastrophically |
 | untrusted / machine-generated | **SciLex** | no rule backtracks, so no input is exponential; the worst case is quadratic, only through a rule left on Pike, not a cliff |
 | a fixed grammar compiled ahead of time | **flex** (~6× the binding) | a code-generated scanner; SciLex keeps the grammar as runtime data |
@@ -286,6 +289,30 @@ case, and ReDoS-safety remains the reason to choose SciLex. For multi-threaded t
 releases the GIL around the scan of inputs ≥ 4 KB; the lazy `scan` holds the GIL per one-token step
 (the parser-friendly path, not the throughput path).
 
+### Drawn lexers (`make bench-fuzz`)
+
+One case is one case. `make bench-fuzz` draws them: a rule set of 3 to 42 rules (whitespace, then a
+draw of identifiers, keywords, integers, floats, hexadecimals, strings, characters, line and block
+comments, operators and Unicode identifiers, in a drawn order, keywords first) and an input of its
+tokens, 64 bytes to 64 KiB on a log scale. `re` gets the master pattern a user writes, ordered by hand
+(keywords first, ending at a word's end; floats and hexadecimals before integers; longer operators
+first). Answers first: SciLex's stream must be the longest match's, a tie to the earlier rule, or the
+run fails; a case where `re`'s first match is not the longest is not timed. Each case is timed in
+turn, the sides' batches alternating, the best batch kept. Seed 20261021, 300 cases, M1 Pro, Python
+3.14.6, SciLex 2026.10.11:
+
+| | cases | `re` / SciLex, geometric mean [95 % CI] | SciLex faster | worst |
+| --- | ---: | --- | ---: | ---: |
+| SciLex (its DFA, the default) | 298 | **4.58×** [4.39–4.77] | 100 % | 1.34× |
+| SciLex without its DFA (`dfa="requested"`) | 298 | **1.60×** [1.51–1.68] | 82 % | 0.41× |
+
+One drawn input was not lexable whole and one master pattern still answered otherwise; neither was
+timed. Every drawn rule set kept its DFA. By rule count the DFA reads 3.3× at 8–15 rules and 7.4× at
+32 and more (`re` tries its alternatives in turn; the DFA steps once per byte whatever the count). The
+per-rule engine, which a mode falls back on where no DFA reproduces its rules, loses to `re` on few
+rules and long tokens: the worst cases mostly hold line and block comments and strings, which one
+`re` scan crosses at once, and few operators (1.0× without any operator rule, 1.65× with them).
+
 ### Pathological input (ReDoS — SciLex wins decisively)
 
 The classic ReDoS trigger `(a+)+b` over a run of `n` `a`s with no terminating `b`. A
@@ -408,7 +435,9 @@ comparison confirms the positioning in the [axes page](@ref comparison), it does
 - **Reproduce:** `make bench-lex` compiles and runs the C++ per-grammar table (no
   Python needed); `make bench` runs that and then builds the extension in place and runs
   `benchmarks/bench.py`. The pathological sweep stops `re` once a single match passes one
-  second (its curve is already established); SciLex is measured well past that.
+  second (its curve is already established); SciLex is measured well past that. `make bench-fuzz`
+  draws lexers and inputs (`CASES`, `SEED`, `LARGEST`), checks every answer against the longest match,
+  and prints the distribution with the worst cases, each reproducible with `--only N`.
 - **Not gated.** `make bench` is excluded from `full-local-gate` on purpose — a noisy
   wall-time measurement must never turn a clean build red.
 - **Grows in:** a compile-time `static_lexer` (REAL's `static_regex`) is a known lever, grown in

@@ -54,7 +54,7 @@ FORMAT_FILES := $(shell find include tests examples fuzz benchmarks cli -name '*
 
 .PHONY: all build test python-oracle cpp-oracle xml-oracle css-oracle yaml-oracle julia-oracle oracle-venv sanitize coverage coverage-build coverage-html python-stubtest \
         lint misra doc doc-no-coverage doc-check format format-check full-local-gate lint-gate stubtest-gate test-gcc release-bump bench-stamp-check \
-        python python-test bench bench-lex cli example doc-xml docs-venv docs-site docs-site-gate sabotage-help check-sabotage fuzz-check tsan exhaustive-lex check-pins fuzz version-check install install-smoke uninstall install-cli uninstall-cli release clean help
+        python python-test bench bench-lex bench-fuzz cli example doc-xml docs-venv docs-site docs-site-gate sabotage-help check-sabotage fuzz-check tsan exhaustive-lex check-pins fuzz version-check install install-smoke uninstall install-cli uninstall-cli release clean help
 
 .DEFAULT_GOAL := help
 
@@ -75,6 +75,7 @@ help:
 	@echo "  make python-test  Run the Python binding test suite"
 	@echo "  make bench      C++ per-grammar throughput + Python re comparison (informational)"
 	@echo "  make bench-lex  C++ per-grammar engine throughput only, MB/s (informational)"
+	@echo "  make bench-fuzz Drawn rule sets and inputs vs re, answers checked first (informational)"
 	@echo "  make cli        Build the scilex command-line lexer (cli/scilex.cpp)"
 	@echo "  make example    Build the CLI and run every example self-check (gate)"
 	@echo "  make fuzz-check Deterministic lexer-oracle gate (property invariants)"
@@ -262,6 +263,12 @@ bench-lex:
 	@mkdir -p $(BUILD)/benchmarks
 	c++ $(CXXSTD) -O2 -Wall -Wextra -Wpedantic -Werror $(INCLUDES) -I$(SCIFORGE_INCLUDE) -Iexamples benchmarks/bench_lex.cpp -o $(BUILD)/benchmarks/bench_lex
 	$(PYRUN) benchmarks/bench_lex.py $(BUILD)/benchmarks/bench_lex
+
+# Drawn lexers against re: random rule sets and inputs, answers checked against the longest match first, the
+# distribution of the ratios (CASES, SEED, LARGEST). Informational only — never part of full-local-gate.
+bench-fuzz: python
+	$(PYRUN) benchmarks/bench_fuzz.py --cases $(or $(CASES),300) --seed $(or $(SEED),20261021) \
+	    --largest $(or $(LARGEST),65536) --json $(BUILD)/bench-fuzz.json
 
 # The full benchmark picture: the C++ engine throughput first, then the Python
 # binding versus re. Informational only — never part of full-local-gate.
