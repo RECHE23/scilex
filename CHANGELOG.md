@@ -7,6 +7,8 @@ fuzz oracle.
 
 ## Unreleased
 
+## 2026.10.12 — 2026-10-23
+
 - **Requires real-regex 2026.10.18** (was 2026.10.16): an anchored match of a pattern without groups, 512 bytes or
   more ahead, takes its forward lazy DFA where it ran the Pike VM. SciLex lexes by anchored matches at each position:
   over 298 drawn lexers (`make bench-fuzz`) it reads 5.01× `re` with its DFA, where 4.58×, and 1.77× without it, where
