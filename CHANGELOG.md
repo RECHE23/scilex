@@ -7,6 +7,13 @@ fuzz oracle.
 
 ## Unreleased
 
+- **Requires real-regex 2026.10.18** (was 2026.10.16): an anchored match of a pattern without groups, 512 bytes or
+  more ahead, takes its forward lazy DFA where it ran the Pike VM. SciLex lexes by anchored matches at each position:
+  over 298 drawn lexers (`make bench-fuzz`) it reads 5.01× `re` with its DFA, where 4.58×, and 1.77× without it, where
+  1.60× (M1 Pro; six AVX2 cores 4.34 → 4.78× and 1.45 → 1.60×), the tokens the same. The same build against 2026.10.16
+  and 2026.10.18 headers, alternated twice: 4.62 and 4.56× against 5.02 and 5.00×, 1.61 and 1.60× against 1.77 and
+  1.77×. The FetchContent tag, CI's checkouts and the build requirement move with it.
+
 ### Development
 - The `.lex` format has a page of its own (`docs/grammar.dox`): how lines are read, a grammar of the syntax, each
   option's and the directive's meaning, the errors' form, and an example the reader accepts.

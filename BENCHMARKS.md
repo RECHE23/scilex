@@ -37,8 +37,8 @@ does: **2.08× faster** (0.673 ms against 1.413 ms, the median of 3 runs; the th
 and 2.08×). Since DFA acceleration became automatic, the ordinary rule set of that case runs on a
 DFA without the caller asking. Read that narrowly: it is one case, 4000 tokens over ~10 KB of
 identifier-operator soup. Drawn cases say more, and more favourably: over 298 drawn lexers and inputs
-(`make bench-fuzz`, below) SciLex reads **4.58×** `re` [4.39–4.77], faster in every case, the worst 1.34×;
-without its DFA, 1.60×, the worst 0.41×.
+(`make bench-fuzz`, below) SciLex reads **5.01×** `re` [4.84–5.19], faster in every case, the worst 1.90×;
+without its DFA, 1.77×, the worst 0.50×.
 
 What SciLex guarantees is **ReDoS-safety by construction**: no rule can make the scanner backtrack,
 so no input is exponential. It is not a linear bound on every input — the worst case is quadratic,
@@ -298,21 +298,22 @@ tokens, 64 bytes to 64 KiB on a log scale. `re` gets the master pattern a user w
 (keywords first, ending at a word's end; floats and hexadecimals before integers; longer operators
 first). Answers first: SciLex's stream must be the longest match's, a tie to the earlier rule, or the
 run fails; a case where `re`'s first match is not the longest is not timed. Each case is timed in
-turn, the sides' batches alternating, the best batch kept. Seed 20261021, 300 cases, SciLex 2026.10.11:
+turn, the sides' batches alternating, the best batch kept. Seed 20261021, 300 cases, SciLex 2026.10.11 on
+real-regex 2026.10.18:
 
 | | machine | cases | `re` / SciLex, geometric mean [95 % CI] | SciLex faster | worst |
 | --- | --- | ---: | --- | ---: | ---: |
-| SciLex (its DFA, the default) | M1 Pro, Python 3.14.6 | 298 | **4.58×** [4.39–4.77] | 100 % | 1.34× |
-| | six AVX2 cores, GCC 13, Python 3.12.3 | 298 | **4.34×** [4.17–4.50] | 100 % | 1.59× |
-| SciLex without its DFA (`dfa="requested"`) | M1 Pro | 298 | **1.60×** [1.51–1.68] | 82 % | 0.41× |
-| | six AVX2 cores | 298 | **1.45×** [1.37–1.53] | 75 % | 0.31× |
+| SciLex (its DFA, the default) | M1 Pro, Python 3.14.6 | 298 | **5.01×** [4.84–5.19] | 100 % | 1.90× |
+| | six AVX2 cores, GCC 13, Python 3.12.3 | 298 | **4.78×** [4.62–4.94] | 100 % | 2.32× |
+| SciLex without its DFA (`dfa="requested"`) | M1 Pro | 298 | **1.77×** [1.68–1.87] | 88 % | 0.50× |
+| | six AVX2 cores | 298 | **1.60×** [1.52–1.69] | 84 % | 0.36× |
 
 One drawn input was not lexable whole and one master pattern still answered otherwise; neither was
-timed. Every drawn rule set kept its DFA. By rule count the DFA reads 3.3× at 8–15 rules and 7.4× at
+timed. Every drawn rule set kept its DFA. By rule count the DFA reads 3.45× at 8–15 rules and 8.0× at
 32 and more (`re` tries its alternatives in turn; the DFA steps once per byte whatever the count). The
 per-rule engine, which a mode falls back on where no DFA reproduces its rules, loses to `re` on few
 rules and long tokens: the worst cases mostly hold line and block comments and strings, which one
-`re` scan crosses at once, and few operators (1.0× without any operator rule, 1.65× with them).
+`re` scan crosses at once, and few operators (1.03× without any operator rule, 1.84× with them).
 
 ### Pathological input (ReDoS — SciLex wins decisively)
 
