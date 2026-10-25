@@ -14,6 +14,14 @@ fuzz oracle.
   14.07 and 22.93 → 25.49, every other grammar within 2 %, the tokens the same. The FetchContent tag, CI's
   checkouts and the build requirement move with it.
 
+### Development
+- The benchmarks re-stamped on 2026-10-25 against real-regex 2026.10.19 (`BENCHMARKS.md`): with the lexer and
+  grammars unchanged, the engine's rows moved −1.1 to +125 % on Pike (`sql` 10.62 → 23.20 MB/s, `python` 9.78 →
+  18.58, `json` and `css` level), an anchored match 512 bytes or more ahead running on REAL's lazy DFA since
+  2026.10.18, and +0.1 to +98 % on the DFA (+0.1 to +4.2 % for the nine grammars wholly on it, `python-unicode`
+  36.06 → 71.41); the speed-ups now 1.4–37.4×, the non-fail-fast resync ~477 000 → ~13 300 ns per position, the
+  token counts the same.
+
 ## 2026.10.12 — 2026-10-23
 
 - **Requires real-regex 2026.10.18** (was 2026.10.16): an anchored match of a pattern without groups, 512 bytes or
