@@ -7,6 +7,13 @@ fuzz oracle.
 
 ## Unreleased
 
+- **Requires real-regex 2026.10.19** (was 2026.10.18): 2026.10.18's anchored-match route leased the search DFAs for
+  a pattern with a lookaround at each call only to give the match back to the VM, and SciLex lexes by anchored
+  matches at each position. The same build against the 2026.10.18 and 2026.10.19 headers, alternated three times on
+  an M1 Pro: `julia` 8.30 → 9.10 MB/s eager on its per-rule path and 11.50 → 12.46 on its DFA, `matlab` 13.41 →
+  14.07 and 22.93 → 25.49, every other grammar within 2 %, the tokens the same. The FetchContent tag, CI's
+  checkouts and the build requirement move with it.
+
 ## 2026.10.12 — 2026-10-23
 
 - **Requires real-regex 2026.10.18** (was 2026.10.16): an anchored match of a pattern without groups, 512 bytes or
