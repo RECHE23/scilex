@@ -71,7 +71,7 @@ jobs:
           path: dist
           pattern: "{wheels-*,sdist}"   # only the distributions — never the docs artifact
           merge-multiple: true
-      - uses: pypa/gh-action-pypi-publish@v1.14.0
+      - uses: pypa/gh-action-pypi-publish@v1.14.3
 
   # Populate the GitHub /releases page for the tag: auto-generated notes plus the
   # built wheels + sdist + the API-reference tarball (scilex-doc.tar.gz) attached as
